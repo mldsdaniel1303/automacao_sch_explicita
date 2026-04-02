@@ -1,0 +1,876 @@
+{
+  "requerimento": {
+    "row_index": 1,
+    "requerimento": "",
+    "homologacao": "02706/26",
+    "certificado": "02795-26-13889",
+    "tipo_produto": "MODERNA-10380/26",
+    "modelo": "Transceptor de Radiação Restrita",
+    "solicitante": "K-tag\nK300823",
+    "fabricante": "NOVA AVANT IMPORTACAO E EXPORTACAO LTDA",
+    "data_conclusao": "Huizhou Shengdongshi Electronics Co., Ltd."
+  },
+  "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome",
+  "anexos_baixados": [
+    {
+      "categoria": "Outros",
+      "linha": 1,
+      "id": "1",
+      "tipo_documento": "Carta de Representação Comercial",
+      "detalhamento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT",
+      "data_hora": "02/04/2026 10:46",
+      "nome_anexo": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X",
+      "entidade": "NOVA AVANT IMPORTACAO E EXPORTACAO LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 2,
+      "id": "6",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "10380-26_ORIGEM_AMOSTRA_2",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_ORIGEM_AMOSTRA_2 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\10380-26_ORIGEM_AMOSTRA_2 X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 3,
+      "id": "12",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "10380-26_SIMILARIDADE",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_SIMILARIDADE X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\10380-26_SIMILARIDADE X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 4,
+      "id": "13",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "10380-26_USO_RELATORIO",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_USO_RELATORIO X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\10380-26_USO_RELATORIO X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 5,
+      "id": "14",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\ISO_HUIZHOU SHENGDONGSHI_07-03-27 X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 6,
+      "id": "15",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 7,
+      "id": "16",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "10380-26_EXP_MARCA_MODELO",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_EXP_MARCA_MODELO X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\10380-26_EXP_MARCA_MODELO X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 8,
+      "id": "17",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "0380-26_NOME_MODELO",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_NOME_MODELO X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\10380-26_NOME_MODELO X_3.pdf"
+    },
+    {
+      "categoria": "Outros",
+      "linha": 9,
+      "id": "18",
+      "tipo_documento": "Outros (OCD)",
+      "detalhamento": "10380-26_ORIGEM_AMOSTRA_1",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_ORIGEM_AMOSTRA_1 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros\\10380-26_ORIGEM_AMOSTRA_1 X_3.pdf"
+    },
+    {
+      "categoria": "Selo ANATEL",
+      "linha": 1,
+      "id": "5",
+      "tipo_documento": "Selo ANATEL",
+      "detalhamento": "10380-26_SELO_ANATEL",
+      "data_hora": "02/04/2026 10:46",
+      "nome_anexo": "10380-26_SELO_ANATEL.docx X",
+      "entidade": "NOVA AVANT IMPORTACAO E EXPORTACAO LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Selo ANATEL\\10380-26_SELO_ANATEL.docx X_3.pdf"
+    },
+    {
+      "categoria": "ART",
+      "linha": 1,
+      "id": "1",
+      "tipo_documento": "ART",
+      "detalhamento": "10380-26_ART_ANTONIO_NETO",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_ART_ANTONIO_NETO X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\ART\\10380-26_ART_ANTONIO_NETO X_3.pdf"
+    },
+    {
+      "categoria": "Relatório de Avaliação da Conformidade - RACT",
+      "linha": 1,
+      "id": "7",
+      "tipo_documento": "Relatório de Avaliação da Conformidade - RACT",
+      "detalhamento": "10380-26_RACT",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_RACT X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Avaliação da Conformidade - RACT\\10380-26_RACT X_3.pdf"
+    },
+    {
+      "categoria": "Manual do Produto",
+      "linha": 1,
+      "id": "5",
+      "tipo_documento": "Manual do Produto",
+      "detalhamento": "10380-26_MANUAL",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_MANUAL X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Manual do Produto\\10380-26_MANUAL X_3.pdf"
+    },
+    {
+      "categoria": "Certificado de Conformidade Técnica - CCT",
+      "linha": 1,
+      "id": "2",
+      "tipo_documento": "Certificado de Conformidade Técnica - CCT",
+      "detalhamento": "10380-26_CERT_CONFORMIDADE",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_CERT_CONFORMIDADE X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Certificado de Conformidade Técnica - CCT\\10380-26_CERT_CONFORMIDADE X_3.pdf"
+    },
+    {
+      "categoria": "Contrato Social",
+      "linha": 1,
+      "id": "3",
+      "tipo_documento": "Contrato Social",
+      "detalhamento": "C_SOCIAL_NOVA AVANT",
+      "data_hora": "02/04/2026 10:46",
+      "nome_anexo": "C_SOCIAL_NOVA AVANT X",
+      "entidade": "NOVA AVANT IMPORTACAO E EXPORTACAO LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Contrato Social\\C_SOCIAL_NOVA AVANT X_3.pdf"
+    },
+    {
+      "categoria": "Fotos internas",
+      "linha": 1,
+      "id": "4",
+      "tipo_documento": "Fotos internas",
+      "detalhamento": "10380-26_FOTOS_INT",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_FOTOS_INT X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Fotos internas\\10380-26_FOTOS_INT X_3.pdf"
+    },
+    {
+      "categoria": "Relatório de Ensaio",
+      "linha": 1,
+      "id": "8",
+      "tipo_documento": "Relatório de Ensaio",
+      "detalhamento": "10380-26_REL_ID-24043353",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_REL_ID-24043353 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Ensaio\\10380-26_REL_ID-24043353 X_3.pdf"
+    },
+    {
+      "categoria": "Relatório de Ensaio",
+      "linha": 2,
+      "id": "9",
+      "tipo_documento": "Relatório de Ensaio",
+      "detalhamento": "10380-26_REL_ID-24118848",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_REL_ID-24118848 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Ensaio\\10380-26_REL_ID-24118848 X_3.pdf"
+    },
+    {
+      "categoria": "Relatório de Ensaio",
+      "linha": 3,
+      "id": "10",
+      "tipo_documento": "Relatório de Ensaio",
+      "detalhamento": "10380-26_REL_EMC1646-2024",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_REL_EMC1646-2024 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Ensaio\\10380-26_REL_EMC1646-2024 X_3.pdf"
+    },
+    {
+      "categoria": "Relatório de Ensaio",
+      "linha": 4,
+      "id": "11",
+      "tipo_documento": "Relatório de Ensaio",
+      "detalhamento": "10380-26_REL_FUNC_TEL0894-2024",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_REL_FUNC_TEL0894-2024 X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Ensaio\\10380-26_REL_FUNC_TEL0894-2024 X_3.pdf"
+    },
+    {
+      "categoria": "Fotos do produto",
+      "linha": 1,
+      "id": "3",
+      "tipo_documento": "Fotos do produto",
+      "detalhamento": "10380-26_FOTOS_EXT",
+      "data_hora": "02/04/2026 10:37",
+      "nome_anexo": "10380-26_FOTOS_EXT X",
+      "entidade": "Moderna Tecnologia LTDA",
+      "contato": "Antonio de Almeida e Silva Neto",
+      "status": "baixado",
+      "arquivo": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Fotos do produto\\10380-26_FOTOS_EXT X_3.pdf"
+    }
+  ],
+  "dados_pdf": {
+    "numero_certificado": "02795-26-13889",
+    "homologacao": "02795-26-13889",
+    "modelo": "",
+    "fabricante": "",
+    "observacao_classificacao": "radiacao_restrita_padrao",
+    "observacao_texto": "Na instalação do produto devem ser observadas as condições de uso conforme estabelecido no Regulamento sobre Equipamentos de Radiocomunicação de Radiação Restrita.",
+    "observacao_motivos": [
+      "radiocomunicação de radiação restrita",
+      "regulamento sobre equipamentos de radiocomunicação de radiação restrita"
+    ]
+  },
+  "pdf_cct": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Certificado de Conformidade Técnica - CCT\\10380-26_CERT_CONFORMIDADE X_3.pdf",
+  "downloads_realizados": 107,
+  "status": "sucesso",
+  "inicio": "2026-04-02T17:11:56.093852",
+  "versao_script": "0.5.1",
+  "escopo_processamento": "radiacao_restrita",
+  "escopo_normativo": {
+    "tipo_produto_alvo": "Transceptor de Radiação Restrita",
+    "familia_produto_alvo": "Equipamentos de RF (exceto radiodifusão)",
+    "categoria_requisitos": "Categoria II",
+    "modalidade_avaliacao": "Certificação",
+    "modelo_avaliacao": "Certificação baseada em Ensaio de Tipo com Avaliação Periódica do Produto e do Sistema de Gestão Fabril a cada 2 anos",
+    "observacoes": [
+      "Compatibilidade eletromagnética obrigatória",
+      "Segurança elétrica obrigatória quando aplicável",
+      "IPv6 não obrigatório como regra geral para radiação restrita",
+      "SAR obrigatório quando aplicável",
+      "Segurança cibernética apenas para tipos específicos"
+    ]
+  },
+  "analise_rapida": {
+    "classificacao": "radiacao_restrita_padrao",
+    "texto": "Na instalação do produto devem ser observadas as condições de uso conforme estabelecido no Regulamento sobre Equipamentos de Radiocomunicação de Radiação Restrita.",
+    "motivos": [
+      "radiocomunicação de radiação restrita",
+      "regulamento sobre equipamentos de radiocomunicação de radiação restrita"
+    ],
+    "origem": "cct"
+  },
+  "observacao_caracteristicas": "Na instalação do produto devem ser observadas as condições de uso conforme estabelecido no Regulamento sobre Equipamentos de Radiocomunicação de Radiação Restrita.",
+  "informacoes_adicionais": {
+    "texto": "Análise preliminar automatizada do requerimento . Classificação inicial: radiacao_restrita_padrao. Documentos baixados: 21. Número do certificado identificado: 02795-26-13889. Indícios encontrados: radiocomunicação de radiação restrita, regulamento sobre equipamentos de radiocomunicação de radiação restrita.",
+    "classificacao": "radiacao_restrita_padrao",
+    "motivos": [
+      "radiocomunicação de radiação restrita",
+      "regulamento sobre equipamentos de radiocomunicação de radiação restrita"
+    ],
+    "preenchido_automaticamente": false
+  },
+  "analise_documental": {
+    "requerimento": "",
+    "tempo_analise_segundos": 59.244774,
+    "qtd_pdfs": 107,
+    "ocd": "Moderna Tecnologia para projetos de certificação com a",
+    "equipamentos": [
+      "Equipamentos de Radiocomunicação de Radiação Restrita",
+      "Transceptor de Radiação Restrita"
+    ],
+    "palavras_chave": {
+      "encontradas": {
+        "bateria": 286,
+        "bluetooth": 129,
+        "radiação restrita": 60,
+        "antena": 48,
+        "bateria_litio": 32,
+        "transceptor": 12
+      },
+      "ausentes": [
+        "wifi",
+        "nfc",
+        "lte",
+        "5g",
+        "gsm",
+        "modulo",
+        "uso interno",
+        "oem",
+        "produto não acabado"
+      ]
+    },
+    "normas_aplicaveis": [
+      {
+        "status": "ok",
+        "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+        "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+      },
+      {
+        "status": "ok",
+        "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+        "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+      },
+      {
+        "status": "ok",
+        "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+        "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+      },
+      {
+        "status": "ok",
+        "norma": "Ato nº 77, de 05 de janeiro de 2021",
+        "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+      },
+      {
+        "status": "ok",
+        "norma": "Resolução nº 680, de 27 de junho de 2017",
+        "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+      }
+    ],
+    "documentos_processados": {
+      "relatorios_ensaio": [
+        {
+          "documento": "10380-26_REL_EMC1646-2024 X",
+          "lab": true,
+          "sol": false,
+          "fab": false,
+          "mod": false
+        },
+        {
+          "documento": "10380-26_REL_EMC1646-2024 X_2",
+          "lab": true,
+          "sol": false,
+          "fab": false,
+          "mod": false
+        },
+        {
+          "documento": "10380-26_REL_EMC1646-2024 X_3",
+          "lab": true,
+          "sol": false,
+          "fab": false,
+          "mod": false
+        },
+        {
+          "documento": "10380-26_REL_FUNC_TEL0894-2024 X",
+          "lab": true,
+          "sol": true,
+          "fab": false,
+          "mod": false
+        },
+        {
+          "documento": "10380-26_REL_FUNC_TEL0894-2024 X_2",
+          "lab": true,
+          "sol": true,
+          "fab": false,
+          "mod": false
+        },
+        {
+          "documento": "10380-26_REL_FUNC_TEL0894-2024 X_3",
+          "lab": true,
+          "sol": true,
+          "fab": false,
+          "mod": false
+        },
+        {
+          "documento": "10380-26_REL_ID-24043353 X",
+          "lab": false,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "10380-26_REL_ID-24043353 X_2",
+          "lab": false,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "10380-26_REL_ID-24043353 X_3",
+          "lab": false,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "10380-26_REL_ID-24118848 X",
+          "lab": false,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "10380-26_REL_ID-24118848 X_2",
+          "lab": false,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "10380-26_REL_ID-24118848 X_3",
+          "lab": false,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "9731-26_REL_SEG_TEL1466_2026 X",
+          "lab": true,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        },
+        {
+          "documento": "9731-26_REL_SEG_TEL1466_2026 X_2",
+          "lab": true,
+          "sol": false,
+          "fab": true,
+          "mod": true
+        }
+      ],
+      "outros_documentos": [
+        {
+          "documento": "10380-26_ART_ANTONIO_NETO X",
+          "categoria": "ART"
+        },
+        {
+          "documento": "10380-26_ART_ANTONIO_NETO X_2",
+          "categoria": "ART"
+        },
+        {
+          "documento": "10380-26_ART_ANTONIO_NETO X_3",
+          "categoria": "ART"
+        },
+        {
+          "documento": "9731-26_ART_ANTONIO_NETO X",
+          "categoria": "ART"
+        },
+        {
+          "documento": "9731-26_ART_ANTONIO_NETO X_2",
+          "categoria": "ART"
+        },
+        {
+          "documento": "10380-26_CERT_CONFORMIDADE X",
+          "categoria": "Certificado de Conformidade Técnica - CCT"
+        },
+        {
+          "documento": "10380-26_CERT_CONFORMIDADE X_2",
+          "categoria": "Certificado de Conformidade Técnica - CCT"
+        },
+        {
+          "documento": "10380-26_CERT_CONFORMIDADE X_3",
+          "categoria": "Certificado de Conformidade Técnica - CCT"
+        },
+        {
+          "documento": "9731-26_CERT_CONFORMIDADE X",
+          "categoria": "Certificado de Conformidade Técnica - CCT"
+        },
+        {
+          "documento": "9731-26_CERT_CONFORMIDADE X_2",
+          "categoria": "Certificado de Conformidade Técnica - CCT"
+        },
+        {
+          "documento": "C_SOCIAL_NOVA AVANT X",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_NOVA AVANT X_2",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_NOVA AVANT X_3",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_XUEJIE WU_18-08-2020",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_2",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_3",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_4",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_5",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_6",
+          "categoria": "Contrato Social"
+        },
+        {
+          "documento": "10380-26_FOTOS_EXT X",
+          "categoria": "Fotos do produto"
+        },
+        {
+          "documento": "10380-26_FOTOS_EXT X_2",
+          "categoria": "Fotos do produto"
+        },
+        {
+          "documento": "10380-26_FOTOS_EXT X_3",
+          "categoria": "Fotos do produto"
+        },
+        {
+          "documento": "9731-26_FOTOS_EXT X",
+          "categoria": "Fotos do produto"
+        },
+        {
+          "documento": "9731-26_FOTOS_EXT X_2",
+          "categoria": "Fotos do produto"
+        },
+        {
+          "documento": "10380-26_FOTOS_INT X",
+          "categoria": "Fotos internas"
+        },
+        {
+          "documento": "10380-26_FOTOS_INT X_2",
+          "categoria": "Fotos internas"
+        },
+        {
+          "documento": "10380-26_FOTOS_INT X_3",
+          "categoria": "Fotos internas"
+        },
+        {
+          "documento": "9731-26_FOTOS_INT X",
+          "categoria": "Fotos internas"
+        },
+        {
+          "documento": "9731-26_FOTOS_INT X_2",
+          "categoria": "Fotos internas"
+        },
+        {
+          "documento": "10380-26_MANUAL X",
+          "categoria": "Manual do Produto"
+        },
+        {
+          "documento": "10380-26_MANUAL X_2",
+          "categoria": "Manual do Produto"
+        },
+        {
+          "documento": "10380-26_MANUAL X_3",
+          "categoria": "Manual do Produto"
+        },
+        {
+          "documento": "9731-26_ESPEC_TEC X",
+          "categoria": "Manual do Produto"
+        },
+        {
+          "documento": "9731-26_ESPEC_TEC X_2",
+          "categoria": "Manual do Produto"
+        },
+        {
+          "documento": "10380-26_EXP_MARCA_MODELO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_EXP_MARCA_MODELO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_EXP_MARCA_MODELO X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_NOME_MODELO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_NOME_MODELO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_NOME_MODELO X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_ORIGEM_AMOSTRA_1 X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_ORIGEM_AMOSTRA_1 X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_ORIGEM_AMOSTRA_1 X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_ORIGEM_AMOSTRA_2 X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_ORIGEM_AMOSTRA_2 X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_ORIGEM_AMOSTRA_2 X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_SIMILARIDADE X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_SIMILARIDADE X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_SIMILARIDADE X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_USO_RELATORIO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_USO_RELATORIO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_USO_RELATORIO X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_DEC_COMPROMISSO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_DEC_COMPROMISSO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_DEC_FABRICAÇÃO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_DEC_FABRICAÇÃO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_DEC_ID_INCORRETA X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_DEC_ID_INCORRETA X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_NOME_MODELO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_NOME_MODELO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_ORIGEM_AMOSTRA X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_ORIGEM_AMOSTRA X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_USO_RELATORIO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "9731-26_USO_RELATORIO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_4",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_5",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_6",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_GUANGZHOU BELIEF_20-01-28 X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_GUANGZHOU BELIEF_20-01-28 X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_GUANGZHOU BELIEF_20-01-28_TRADUZIDO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_GUANGZHOU BELIEF_20-01-28_TRADUZIDO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X_2",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X_3",
+          "categoria": "Outros"
+        },
+        {
+          "documento": "10380-26_RACT X",
+          "categoria": "Relatório de Avaliação da Conformidade - RACT"
+        },
+        {
+          "documento": "10380-26_RACT X_2",
+          "categoria": "Relatório de Avaliação da Conformidade - RACT"
+        },
+        {
+          "documento": "10380-26_RACT X_3",
+          "categoria": "Relatório de Avaliação da Conformidade - RACT"
+        },
+        {
+          "documento": "9731-26_RACT X",
+          "categoria": "Relatório de Avaliação da Conformidade - RACT"
+        },
+        {
+          "documento": "9731-26_RACT X_2",
+          "categoria": "Relatório de Avaliação da Conformidade - RACT"
+        },
+        {
+          "documento": "10380-26_SELO_ANATEL.docx X",
+          "categoria": "Selo ANATEL"
+        },
+        {
+          "documento": "10380-26_SELO_ANATEL.docx X_2",
+          "categoria": "Selo ANATEL"
+        },
+        {
+          "documento": "10380-26_SELO_ANATEL.docx X_3",
+          "categoria": "Selo ANATEL"
+        },
+        {
+          "documento": "9731-26_SELO_ANATEL X",
+          "categoria": "Selo ANATEL"
+        },
+        {
+          "documento": "9731-26_SELO_ANATEL X_2",
+          "categoria": "Selo ANATEL"
+        }
+      ]
+    },
+    "alertas": []
+  },
+  "fim": "2026-04-02T17:22:59.682167"
+}

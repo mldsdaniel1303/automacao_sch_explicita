@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "fonte_principal": "CCT",
+    "descricao": "Base inicial de regras técnicas extraída dos PDFs de requisitos das categorias I, II e III.",
+    "versao": "0.1.0"
+  },
+  "regras": [
+    {
+      "produto": "Equipamento de Radiação Restrita",
+      "categoria": "II",
+      "atos_principais": ["Resolução nº 680", "Ato nº 14448", "Ato nº 237"],
+      "secoes_relevantes": [
+        "Anexo I ao Ato 14448/2017: itens 4, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20 e 21",
+        "Anexo I ao Ato 237/2022"
+      ],
+      "palavras_chave": ["radiacao restrita", "bluetooth", "wifi", "nfc", "rfid", "telemedicao"],
+      "observacao_padrao": "Na instalação do produto devem ser observadas as condições de uso conforme estabelecido no Regulamento sobre Equipamentos de Radiocomunicação de Radiação Restrita.",
+      "observacao_produto_nao_acabado": "Produto não acabado, de uso interno, cuja integração em outros equipamentos passíveis de homologação pode requerer nova avaliação."
+    },
+    {
+      "produto": "Transceptor de Radiação Restrita",
+      "categoria": "II",
+      "atos_principais": ["Resolução nº 680", "Ato nº 14448", "Ato nº 237"],
+      "secoes_relevantes": [
+        "Anexo I ao Ato 14448/2017: itens 4, 5, 10 e 21",
+        "Anexo I ao Ato 237/2022"
+      ],
+      "palavras_chave": ["transceptor", "bluetooth", "modulacao digital", "espalhamento espectral"],
+      "observacao_padrao": "Na instalação do produto devem ser observadas as condições de uso conforme estabelecido no Regulamento sobre Equipamentos de Radiocomunicação de Radiação Restrita.",
+      "observacao_produto_nao_acabado": "Produto não acabado, de uso interno, cuja integração em outros equipamentos passíveis de homologação pode requerer nova avaliação."
+    },
+    {
+      "produto": "Telefone móvel celular",
+      "categoria": "I",
+      "atos_principais": ["Ato nº 3152"],
+      "palavras_chave": ["telefone movel celular", "smartphone", "celular"]
+    },
+    {
+      "produto": "Carregador para Telefone Celular / Carregador Indutivo para Telefone Celular",
+      "categoria": "I",
+      "atos_principais": ["Ato nº 5155"],
+      "palavras_chave": ["carregador telefone celular", "carregador indutivo", "charger"]
+    },
+    {
+      "produto": "Acessório para Telefone Móvel Celular do tipo Bateria Auxiliar",
+      "categoria": "I",
+      "atos_principais": ["Ato nº 1120", "Ato nº 17087", "Ato nº 3484"],
+      "palavras_chave": ["bateria auxiliar", "power bank"]
+    },
+    {
+      "produto": "Telefone IP / Telefone Ethernet (com fio e sem fio)",
+      "categoria": "I",
+      "atos_principais": ["Ato nº 17087"],
+      "palavras_chave": ["telefone ip", "telefone ethernet", "sip", "h323", "voip", "ata"],
+      "notas": [
+        "Para enquadramento como Telefone IP/Ethernet sem fio, deve implementar pelo menos SIP ou H.323."
+      ]
+    },
+    {
+      "produto": "OLT – Terminação de Linha Óptica / ONU – Unidade de Rede Óptica",
+      "categoria": "III",
+      "atos_principais": ["Ato nº 7869"],
+      "palavras_chave": ["olt", "ont", "onu", "gpon", "xgpon", "xgspon", "rede optica passiva"],
+      "interfaces_relevantes": ["GPON", "XGPON", "XGSPON"]
+    },
+    {
+      "produto": "Categoria III - produtos dependentes de interface",
+      "categoria": "III",
+      "atos_principais": [],
+      "palavras_chave": ["dslam", "sdh", "e1", "e3", "stm1", "stm4", "stm16", "stm64", "multiplex"],
+      "interfaces_relevantes": ["E1", "E3", "STM-1", "STM-4", "STM-16", "STM-64"]
+    }
+  ]
+}

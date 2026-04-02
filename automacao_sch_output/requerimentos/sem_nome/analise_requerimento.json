@@ -1,0 +1,535 @@
+{
+  "requerimento": "",
+  "tempo_analise_segundos": 59.244774,
+  "qtd_pdfs": 107,
+  "ocd": "Moderna Tecnologia para projetos de certificação com a",
+  "equipamentos": [
+    "Equipamentos de Radiocomunicação de Radiação Restrita",
+    "Transceptor de Radiação Restrita"
+  ],
+  "palavras_chave": {
+    "encontradas": {
+      "bateria": 286,
+      "bluetooth": 129,
+      "radiação restrita": 60,
+      "antena": 48,
+      "bateria_litio": 32,
+      "transceptor": 12
+    },
+    "ausentes": [
+      "wifi",
+      "nfc",
+      "lte",
+      "5g",
+      "gsm",
+      "modulo",
+      "uso interno",
+      "oem",
+      "produto não acabado"
+    ]
+  },
+  "normas_aplicaveis": [
+    {
+      "status": "ok",
+      "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 77, de 05 de janeiro de 2021",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Resolução nº 680, de 27 de junho de 2017",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    }
+  ],
+  "documentos_processados": {
+    "relatorios_ensaio": [
+      {
+        "documento": "10380-26_REL_EMC1646-2024 X",
+        "lab": true,
+        "sol": false,
+        "fab": false,
+        "mod": false
+      },
+      {
+        "documento": "10380-26_REL_EMC1646-2024 X_2",
+        "lab": true,
+        "sol": false,
+        "fab": false,
+        "mod": false
+      },
+      {
+        "documento": "10380-26_REL_EMC1646-2024 X_3",
+        "lab": true,
+        "sol": false,
+        "fab": false,
+        "mod": false
+      },
+      {
+        "documento": "10380-26_REL_FUNC_TEL0894-2024 X",
+        "lab": true,
+        "sol": true,
+        "fab": false,
+        "mod": false
+      },
+      {
+        "documento": "10380-26_REL_FUNC_TEL0894-2024 X_2",
+        "lab": true,
+        "sol": true,
+        "fab": false,
+        "mod": false
+      },
+      {
+        "documento": "10380-26_REL_FUNC_TEL0894-2024 X_3",
+        "lab": true,
+        "sol": true,
+        "fab": false,
+        "mod": false
+      },
+      {
+        "documento": "10380-26_REL_ID-24043353 X",
+        "lab": false,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "10380-26_REL_ID-24043353 X_2",
+        "lab": false,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "10380-26_REL_ID-24043353 X_3",
+        "lab": false,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "10380-26_REL_ID-24118848 X",
+        "lab": false,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "10380-26_REL_ID-24118848 X_2",
+        "lab": false,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "10380-26_REL_ID-24118848 X_3",
+        "lab": false,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "9731-26_REL_SEG_TEL1466_2026 X",
+        "lab": true,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      },
+      {
+        "documento": "9731-26_REL_SEG_TEL1466_2026 X_2",
+        "lab": true,
+        "sol": false,
+        "fab": true,
+        "mod": true
+      }
+    ],
+    "outros_documentos": [
+      {
+        "documento": "10380-26_ART_ANTONIO_NETO X",
+        "categoria": "ART"
+      },
+      {
+        "documento": "10380-26_ART_ANTONIO_NETO X_2",
+        "categoria": "ART"
+      },
+      {
+        "documento": "10380-26_ART_ANTONIO_NETO X_3",
+        "categoria": "ART"
+      },
+      {
+        "documento": "9731-26_ART_ANTONIO_NETO X",
+        "categoria": "ART"
+      },
+      {
+        "documento": "9731-26_ART_ANTONIO_NETO X_2",
+        "categoria": "ART"
+      },
+      {
+        "documento": "10380-26_CERT_CONFORMIDADE X",
+        "categoria": "Certificado de Conformidade Técnica - CCT"
+      },
+      {
+        "documento": "10380-26_CERT_CONFORMIDADE X_2",
+        "categoria": "Certificado de Conformidade Técnica - CCT"
+      },
+      {
+        "documento": "10380-26_CERT_CONFORMIDADE X_3",
+        "categoria": "Certificado de Conformidade Técnica - CCT"
+      },
+      {
+        "documento": "9731-26_CERT_CONFORMIDADE X",
+        "categoria": "Certificado de Conformidade Técnica - CCT"
+      },
+      {
+        "documento": "9731-26_CERT_CONFORMIDADE X_2",
+        "categoria": "Certificado de Conformidade Técnica - CCT"
+      },
+      {
+        "documento": "C_SOCIAL_NOVA AVANT X",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_NOVA AVANT X_2",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_NOVA AVANT X_3",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_XUEJIE WU_18-08-2020",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_2",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_3",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_4",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_5",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "C_SOCIAL_XUEJIE WU_18-08-2020_6",
+        "categoria": "Contrato Social"
+      },
+      {
+        "documento": "10380-26_FOTOS_EXT X",
+        "categoria": "Fotos do produto"
+      },
+      {
+        "documento": "10380-26_FOTOS_EXT X_2",
+        "categoria": "Fotos do produto"
+      },
+      {
+        "documento": "10380-26_FOTOS_EXT X_3",
+        "categoria": "Fotos do produto"
+      },
+      {
+        "documento": "9731-26_FOTOS_EXT X",
+        "categoria": "Fotos do produto"
+      },
+      {
+        "documento": "9731-26_FOTOS_EXT X_2",
+        "categoria": "Fotos do produto"
+      },
+      {
+        "documento": "10380-26_FOTOS_INT X",
+        "categoria": "Fotos internas"
+      },
+      {
+        "documento": "10380-26_FOTOS_INT X_2",
+        "categoria": "Fotos internas"
+      },
+      {
+        "documento": "10380-26_FOTOS_INT X_3",
+        "categoria": "Fotos internas"
+      },
+      {
+        "documento": "9731-26_FOTOS_INT X",
+        "categoria": "Fotos internas"
+      },
+      {
+        "documento": "9731-26_FOTOS_INT X_2",
+        "categoria": "Fotos internas"
+      },
+      {
+        "documento": "10380-26_MANUAL X",
+        "categoria": "Manual do Produto"
+      },
+      {
+        "documento": "10380-26_MANUAL X_2",
+        "categoria": "Manual do Produto"
+      },
+      {
+        "documento": "10380-26_MANUAL X_3",
+        "categoria": "Manual do Produto"
+      },
+      {
+        "documento": "9731-26_ESPEC_TEC X",
+        "categoria": "Manual do Produto"
+      },
+      {
+        "documento": "9731-26_ESPEC_TEC X_2",
+        "categoria": "Manual do Produto"
+      },
+      {
+        "documento": "10380-26_EXP_MARCA_MODELO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_EXP_MARCA_MODELO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_EXP_MARCA_MODELO X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_NOME_MODELO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_NOME_MODELO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_NOME_MODELO X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_ORIGEM_AMOSTRA_1 X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_ORIGEM_AMOSTRA_1 X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_ORIGEM_AMOSTRA_1 X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_ORIGEM_AMOSTRA_2 X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_ORIGEM_AMOSTRA_2 X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_ORIGEM_AMOSTRA_2 X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_SIMILARIDADE X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_SIMILARIDADE X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_SIMILARIDADE X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_USO_RELATORIO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_USO_RELATORIO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_USO_RELATORIO X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_DEC_COMPROMISSO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_DEC_COMPROMISSO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_DEC_FABRICAÇÃO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_DEC_FABRICAÇÃO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_DEC_ID_INCORRETA X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_DEC_ID_INCORRETA X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_NOME_MODELO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_NOME_MODELO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_ORIGEM_AMOSTRA X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_ORIGEM_AMOSTRA X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_USO_RELATORIO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "9731-26_USO_RELATORIO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA REPRE_HUIZHOU SHENGDONGSHI_NOVA AVANT.docx X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_4",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_5",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "CARTA_REPRE_GUANGZHOU BELIEF_XUEJIE WU_6",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_GUANGZHOU BELIEF_20-01-28 X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_GUANGZHOU BELIEF_20-01-28 X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_GUANGZHOU BELIEF_20-01-28_TRADUZIDO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_GUANGZHOU BELIEF_20-01-28_TRADUZIDO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27 X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X_2",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "ISO_HUIZHOU SHENGDONGSHI_07-03-27_TRADUZIDO X_3",
+        "categoria": "Outros"
+      },
+      {
+        "documento": "10380-26_RACT X",
+        "categoria": "Relatório de Avaliação da Conformidade - RACT"
+      },
+      {
+        "documento": "10380-26_RACT X_2",
+        "categoria": "Relatório de Avaliação da Conformidade - RACT"
+      },
+      {
+        "documento": "10380-26_RACT X_3",
+        "categoria": "Relatório de Avaliação da Conformidade - RACT"
+      },
+      {
+        "documento": "9731-26_RACT X",
+        "categoria": "Relatório de Avaliação da Conformidade - RACT"
+      },
+      {
+        "documento": "9731-26_RACT X_2",
+        "categoria": "Relatório de Avaliação da Conformidade - RACT"
+      },
+      {
+        "documento": "10380-26_SELO_ANATEL.docx X",
+        "categoria": "Selo ANATEL"
+      },
+      {
+        "documento": "10380-26_SELO_ANATEL.docx X_2",
+        "categoria": "Selo ANATEL"
+      },
+      {
+        "documento": "10380-26_SELO_ANATEL.docx X_3",
+        "categoria": "Selo ANATEL"
+      },
+      {
+        "documento": "9731-26_SELO_ANATEL X",
+        "categoria": "Selo ANATEL"
+      },
+      {
+        "documento": "9731-26_SELO_ANATEL X_2",
+        "categoria": "Selo ANATEL"
+      }
+    ]
+  },
+  "alertas": []
+}
