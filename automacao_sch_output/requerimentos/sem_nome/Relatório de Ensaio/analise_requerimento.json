@@ -1,0 +1,86 @@
+{
+  "requerimento": "Relatório de Ensaio",
+  "tempo_analise_segundos": 14.218017,
+  "qtd_pdfs": 4,
+  "ocd": "):",
+  "equipamentos": [
+    "Equipamentos de Radiocomunicação de Radiação Restrita",
+    "Transceptor de Radiação Restrita"
+  ],
+  "palavras_chave": {
+    "modo_busca": "somente_cct",
+    "documentos_analisados": [],
+    "encontradas": {},
+    "ausentes": [
+      "bluetooth",
+      "bateria",
+      "wifi",
+      "nfc",
+      "lte",
+      "5g",
+      "gsm",
+      "antena",
+      "modulo",
+      "uso interno",
+      "oem",
+      "transceptor",
+      "radiação restrita",
+      "bateria_litio",
+      "produto não acabado"
+    ],
+    "detalhes": [],
+    "erro": "CCT não encontrado para análise de palavras-chave."
+  },
+  "normas_aplicaveis": [
+    {
+      "status": "ok",
+      "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 77, de 05 de janeiro de 2021",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Resolução nº 680, de 27 de junho de 2017",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+    }
+  ],
+  "documentos_processados": {
+    "relatorios_ensaio": [],
+    "outros_documentos": [
+      {
+        "documento": "EMC0385a_2026_26020903_8134_WiFi AP-24_Ato 1120 X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "ID-26020903_Rev._00 X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "TEL1306_2026_26020903_WiFi AP-24_2.4GHz_ATO 14448 X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "TEL1345_2026_26020903_WiFi AP-24_5.8GHz_ATO 14448 X",
+        "categoria": "Sem categoria"
+      }
+    ]
+  },
+  "alertas": [
+    "Número do certificado não identificado no CCT.",
+    "Nenhum Relatório de Ensaio encontrado."
+  ]
+}

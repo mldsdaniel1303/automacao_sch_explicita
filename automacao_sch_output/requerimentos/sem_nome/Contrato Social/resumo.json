@@ -1,0 +1,59 @@
+{
+  "requerimento": {
+    "requerimento": "Contrato Social"
+  },
+  "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Contrato Social",
+  "inicio": "2026-04-09T14:49:19.577607",
+  "versao_script": "0.6.0",
+  "modo_execucao": "analise_local",
+  "pdf_cct": "",
+  "dados_pdf": {},
+  "downloads_realizados": 1,
+  "analise_documental": {
+    "requerimento": "Contrato Social",
+    "tempo_analise_segundos": 1.511882,
+    "qtd_pdfs": 1,
+    "ocd": "",
+    "equipamentos": [],
+    "palavras_chave": {
+      "modo_busca": "somente_cct",
+      "documentos_analisados": [],
+      "encontradas": {},
+      "ausentes": [
+        "bluetooth",
+        "bateria",
+        "wifi",
+        "nfc",
+        "lte",
+        "5g",
+        "gsm",
+        "antena",
+        "modulo",
+        "uso interno",
+        "oem",
+        "transceptor",
+        "radiação restrita",
+        "bateria_litio",
+        "produto não acabado"
+      ],
+      "detalhes": [],
+      "erro": "CCT não encontrado para análise de palavras-chave."
+    },
+    "normas_aplicaveis": [],
+    "documentos_processados": {
+      "relatorios_ensaio": [],
+      "outros_documentos": [
+        {
+          "documento": "Contrato Social",
+          "categoria": "Sem categoria"
+        }
+      ]
+    },
+    "alertas": [
+      "Número do certificado não identificado no CCT.",
+      "Nenhum Relatório de Ensaio encontrado."
+    ]
+  },
+  "status": "analise_local_sucesso",
+  "fim": "2026-04-09T14:49:21.100805"
+}

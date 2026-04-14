@@ -1,0 +1,97 @@
+{
+  "requerimento": "Outros",
+  "tempo_analise_segundos": 1.651428,
+  "qtd_pdfs": 7,
+  "ocd": "",
+  "equipamentos": [
+    "Equipamentos de Radiocomunicação de Radiação Restrita"
+  ],
+  "palavras_chave": {
+    "modo_busca": "somente_cct",
+    "documentos_analisados": [],
+    "encontradas": {},
+    "ausentes": [
+      "bluetooth",
+      "bateria",
+      "wifi",
+      "nfc",
+      "lte",
+      "5g",
+      "gsm",
+      "antena",
+      "modulo",
+      "uso interno",
+      "oem",
+      "transceptor",
+      "radiação restrita",
+      "bateria_litio",
+      "produto não acabado"
+    ],
+    "detalhes": [],
+    "erro": "CCT não encontrado para análise de palavras-chave."
+  },
+  "normas_aplicaveis": [
+    {
+      "status": "ok",
+      "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Ato nº 77, de 05 de janeiro de 2021",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+    },
+    {
+      "status": "ok",
+      "norma": "Resolução nº 680, de 27 de junho de 2017",
+      "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+    }
+  ],
+  "documentos_processados": {
+    "relatorios_ensaio": [],
+    "outros_documentos": [
+      {
+        "documento": "Carta de Representacao Comercial X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "Declaracao Ato 77 X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "Declaracao de Bloqueio de Tecnoloiga X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "Declaracao vinculo e garantia X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "Formulario de Amostra X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "ISO ORIGINAL TRADUZIDA X",
+        "categoria": "Sem categoria"
+      },
+      {
+        "documento": "ISO ORIGINAL X",
+        "categoria": "Sem categoria"
+      }
+    ]
+  },
+  "alertas": [
+    "Número do certificado não identificado no CCT.",
+    "Nenhum Relatório de Ensaio encontrado."
+  ]
+}

@@ -1,0 +1,897 @@
+{
+  "modo_execucao": "analise_local",
+  "inicio_execucao": "2026-04-09T14:49:14.642513",
+  "fim_execucao": "2026-04-09T14:49:47.477930",
+  "tempo_total_segundos": 32.84,
+  "total_processados": 10,
+  "sucessos": 10,
+  "erros": 0,
+  "itens": [
+    {
+      "requerimento": {
+        "requerimento": "ART"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\ART",
+      "inicio": "2026-04-09T14:49:14.645020",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "ART",
+        "tempo_analise_segundos": 2.998534,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "ART X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:17.655771"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Certificado de Conformidade Técnica - CCT"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Certificado de Conformidade Técnica - CCT",
+      "inicio": "2026-04-09T14:49:17.667615",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Certificado de Conformidade Técnica - CCT",
+        "tempo_analise_segundos": 1.882737,
+        "qtd_pdfs": 1,
+        "ocd": "PCN",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita",
+          "Transceptor de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "PCN20260006800 X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:19.564937"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Contrato Social"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Contrato Social",
+      "inicio": "2026-04-09T14:49:19.577607",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Contrato Social",
+        "tempo_analise_segundos": 1.511882,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "Contrato Social",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:21.100805"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Fotos do produto"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Fotos do produto",
+      "inicio": "2026-04-09T14:49:21.110534",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Fotos do produto",
+        "tempo_analise_segundos": 0.643523,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita",
+          "Transceptor de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "Fotos Externas X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:21.773326"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Fotos internas"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Fotos internas",
+      "inicio": "2026-04-09T14:49:21.789404",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Fotos internas",
+        "tempo_analise_segundos": 0.890924,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita",
+          "Transceptor de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "Fotos Internas X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:22.693703"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Manual do Produto"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Manual do Produto",
+      "inicio": "2026-04-09T14:49:22.705613",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Manual do Produto",
+        "tempo_analise_segundos": 3.154143,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "Manual X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:25.872695"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Outros"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Outros",
+      "inicio": "2026-04-09T14:49:25.883323",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 7,
+      "analise_documental": {
+        "requerimento": "Outros",
+        "tempo_analise_segundos": 1.651428,
+        "qtd_pdfs": 7,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "Carta de Representacao Comercial X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "Declaracao Ato 77 X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "Declaracao de Bloqueio de Tecnoloiga X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "Declaracao vinculo e garantia X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "Formulario de Amostra X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "ISO ORIGINAL TRADUZIDA X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "ISO ORIGINAL X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:27.546682"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Relatório de Avaliação da Conformidade - RACT"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Avaliação da Conformidade - RACT",
+      "inicio": "2026-04-09T14:49:27.555622",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Relatório de Avaliação da Conformidade - RACT",
+        "tempo_analise_segundos": 5.319563,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita",
+          "Transceptor de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "RACT20260006800 X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:32.887132"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Relatório de Ensaio"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Relatório de Ensaio",
+      "inicio": "2026-04-09T14:49:32.905978",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 4,
+      "analise_documental": {
+        "requerimento": "Relatório de Ensaio",
+        "tempo_analise_segundos": 14.218017,
+        "qtd_pdfs": 4,
+        "ocd": "):",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita",
+          "Transceptor de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "EMC0385a_2026_26020903_8134_WiFi AP-24_Ato 1120 X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "ID-26020903_Rev._00 X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "TEL1306_2026_26020903_WiFi AP-24_2.4GHz_ATO 14448 X",
+              "categoria": "Sem categoria"
+            },
+            {
+              "documento": "TEL1345_2026_26020903_WiFi AP-24_5.8GHz_ATO 14448 X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:47.136363"
+    },
+    {
+      "requerimento": {
+        "requerimento": "Selo ANATEL"
+      },
+      "pasta_requerimento": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos\\sem_nome\\Selo ANATEL",
+      "inicio": "2026-04-09T14:49:47.149068",
+      "versao_script": "0.6.0",
+      "modo_execucao": "analise_local",
+      "pdf_cct": "",
+      "dados_pdf": {},
+      "downloads_realizados": 1,
+      "analise_documental": {
+        "requerimento": "Selo ANATEL",
+        "tempo_analise_segundos": 0.307416,
+        "qtd_pdfs": 1,
+        "ocd": "",
+        "equipamentos": [
+          "Equipamentos de Radiocomunicação de Radiação Restrita",
+          "Transceptor de Radiação Restrita"
+        ],
+        "palavras_chave": {
+          "modo_busca": "somente_cct",
+          "documentos_analisados": [],
+          "encontradas": {},
+          "ausentes": [
+            "bluetooth",
+            "bateria",
+            "wifi",
+            "nfc",
+            "lte",
+            "5g",
+            "gsm",
+            "antena",
+            "modulo",
+            "uso interno",
+            "oem",
+            "transceptor",
+            "radiação restrita",
+            "bateria_litio",
+            "produto não acabado"
+          ],
+          "detalhes": [],
+          "erro": "CCT não encontrado para análise de palavras-chave."
+        },
+        "normas_aplicaveis": [
+          {
+            "status": "ok",
+            "norma": "Ato nº 1120, de 19 de fevereiro de 2018",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 14448, de 04 de dezembro de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 17087, de 19 de dezembro de 2022",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Ato nº 77, de 05 de janeiro de 2021",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          },
+          {
+            "status": "ok",
+            "norma": "Resolução nº 680, de 27 de junho de 2017",
+            "motivadores": "Equipamentos de Radiocomunicação de Radiação Restrita; Transceptor de Radiação Restrita"
+          }
+        ],
+        "documentos_processados": {
+          "relatorios_ensaio": [],
+          "outros_documentos": [
+            {
+              "documento": "Selo Anatel X",
+              "categoria": "Sem categoria"
+            }
+          ]
+        },
+        "alertas": [
+          "Número do certificado não identificado no CCT.",
+          "Nenhum Relatório de Ensaio encontrado."
+        ]
+      },
+      "status": "analise_local_sucesso",
+      "fim": "2026-04-09T14:49:47.468597"
+    }
+  ],
+  "versao_script": "0.6.0",
+  "pasta_base": "C:\\Users\\raimualdo.estagio\\Desktop\\automacao_sch_explicita\\automacao_sch_output\\requerimentos"
+}

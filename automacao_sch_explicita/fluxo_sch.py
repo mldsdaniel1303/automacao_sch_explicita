@@ -22,7 +22,7 @@ from funcoes_sch import (
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 
-VERSAO_SCRIPT = "0.5.1"
+VERSAO_SCRIPT = "0.6.0"
 
 
 def _normalizar_texto(valor):
@@ -86,9 +86,7 @@ def _dados_normativos_radiacao_restrita():
     }
 
 
-def separar_requerimentos_por_escopo(requerimentos, regras):
-    processar_apenas_rr = regras.get("processar_apenas_radiacao_restrita", True)
-
+def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
     if not processar_apenas_rr:
         return requerimentos, []
 
@@ -104,13 +102,17 @@ def separar_requerimentos_por_escopo(requerimentos, regras):
     return selecionados, ignorados
 
 
-def preparar_pastas_requerimentos(pasta_saida, requerimentos):
-    pasta_requerimentos = Path(pasta_saida) / "requerimentos"
+def preparar_pastas_requerimentos(pasta_base, requerimentos):
+    pasta_base = Path(pasta_base)
+    pasta_requerimentos = pasta_base / "requerimentos"
     pasta_requerimentos.mkdir(parents=True, exist_ok=True)
 
     mapeados = []
     for req in requerimentos:
         numero = req.get("requerimento", "sem_numero")
+        if not numero or str(numero).strip().lower() == "sem_numero":
+            numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
+
         pasta_req = pasta_requerimentos / nome_seguro(numero)
         pasta_req.mkdir(parents=True, exist_ok=True)
 
@@ -128,8 +130,8 @@ def preparar_pastas_requerimentos(pasta_saida, requerimentos):
     return pasta_requerimentos, mapeados
 
 
-def salvar_manifesto_requerimentos(pasta_saida, mapeados, ignorados=None):
-    caminho = Path(pasta_saida) / "manifest_requerimentos.json"
+def salvar_manifesto_requerimentos(relatorios_dir, mapeados, ignorados=None):
+    caminho = Path(relatorios_dir) / "manifest_requerimentos.json"
     ignorados = ignorados or []
 
     salvar_json(
@@ -153,32 +155,89 @@ def contar_arquivos_requerimento(pasta_req):
     return len([p for p in pasta_req.rglob("*") if p.is_file() and p.name not in ignorar])
 
 
-def executar_fluxo_sch():
+def _criar_driver_com_pasta(pasta_base):
+    pasta_base = Path(pasta_base).resolve()
+    pasta_base.mkdir(parents=True, exist_ok=True)
+    pasta_download = pasta_base / "browser_downloads"
+    pasta_download.mkdir(parents=True, exist_ok=True)
+
+    tentativas = [
+        {"pasta_base": str(pasta_base), "pasta_download": str(pasta_download)},
+        {"pasta_saida_base": str(pasta_base), "pasta_download": str(pasta_download)},
+        {"pasta_saida": str(pasta_base), "pasta_download": str(pasta_download)},
+    ]
+
+    for kwargs in tentativas:
+        try:
+            return criar_driver(**kwargs)
+        except TypeError:
+            continue
+
+    print("[WARN] criar_driver() não aceitou pasta personalizada. Usando comportamento atual do navegador.")
+    return criar_driver()
+
+
+def executar_fluxo_sch(
+    pasta_base,
+    limite_requerimentos=None,
+    processar_somente_pendentes=False,
+    processar_apenas_radiacao_restrita=True,
+    preencher_caracteristicas=True,
+    preencher_informacoes_adicionais=False,
+    preencher_minuta=True,
+    pausar_antes_anexos=False,
+):
+    pasta_base = Path(pasta_base).resolve()
+    pasta_base.mkdir(parents=True, exist_ok=True)
+
+    relatorios_dir = pasta_base / "relatorios"
+    relatorios_dir.mkdir(parents=True, exist_ok=True)
+
     regras = carregar_regras()
-    driver, wait, pasta_saida, pasta_download = criar_driver()
+    regras["pausar_antes_anexos"] = pausar_antes_anexos
+
+    if limite_requerimentos:
+        regras["limite_requerimentos"] = int(limite_requerimentos)
+
+    driver, wait, pasta_saida_driver, pasta_download = _criar_driver_com_pasta(pasta_base)
+
+    if Path(pasta_saida_driver).resolve() != pasta_base:
+        print(f"[WARN] O navegador retornou pasta de saída diferente da escolhida: {pasta_saida_driver}")
+        print(f"[INFO] Os relatórios e requerimentos continuarão sendo organizados em: {pasta_base}")
 
     relatorio_execucao = []
     inicio_execucao = datetime.now()
 
     try:
         abrir_sch(driver)
-        aguardar_enter("[SCH] Faça o login manualmente no sistema.")
+        aguardar_enter("[SCH] Faça o login manualmente no sistema e pressione Enter para continuar.")
 
         clicar_fila_em_analise(driver, wait)
         requerimentos = coletar_requerimentos(driver, wait, regras)
 
-        if regras.get("limite_requerimentos"):
-            requerimentos = requerimentos[: regras["limite_requerimentos"]]
+        if limite_requerimentos:
+            requerimentos = requerimentos[: int(limite_requerimentos)]
 
         requerimentos_processaveis, requerimentos_ignorados = separar_requerimentos_por_escopo(
             requerimentos,
-            regras,
+            processar_apenas_rr=processar_apenas_radiacao_restrita,
         )
 
         pasta_requerimentos, mapeados = preparar_pastas_requerimentos(
-            pasta_saida,
+            pasta_base,
             requerimentos_processaveis,
         )
+
+        if processar_somente_pendentes:
+            pendentes = {
+                item["requerimento"]
+                for item in mapeados
+                if item["status"] == "pendente"
+            }
+            requerimentos_processaveis = [
+                req for req in requerimentos_processaveis
+                if req.get("requerimento", "sem_numero") in pendentes
+            ]
 
         ignorados_resumidos = [
             {
@@ -191,28 +250,31 @@ def executar_fluxo_sch():
 
         print("[SCH] Mapeando requerimentos...")
         print(f"[SCH] Total coletado na fila: {len(requerimentos)}")
-        print(f"[SCH] Dentro do escopo (radiação restrita): {len(requerimentos_processaveis)}")
+        print(f"[SCH] Dentro do escopo: {len(requerimentos_processaveis)}")
         print(f"[SCH] Fora do escopo: {len(requerimentos_ignorados)}")
-        print(f"[SCH] {sum(1 for x in mapeados if x['status'] == 'pendente')} requerimento(s) pendente(s)")
-        print(f"[SCH] {sum(1 for x in mapeados if x['status'] == 'processado')} requerimento(s) já processado(s)")
+        print(f"[SCH] Pasta base da execução: {pasta_base}")
 
         caminho_manifesto = salvar_manifesto_requerimentos(
-            pasta_saida,
+            relatorios_dir,
             mapeados,
             ignorados=ignorados_resumidos,
         )
         print(f"[SCH] Manifesto salvo em: {caminho_manifesto}")
 
         if not requerimentos_processaveis:
-            print("[SCH][WARN] Nenhum requerimento de radiação restrita encontrado para processamento.")
+            print("[SCH][WARN] Nenhum requerimento selecionado para processamento.")
             return
 
         for req in requerimentos_processaveis:
             numero = req.get("requerimento", "sem_numero")
+            if not numero or str(numero).strip().lower() == "sem_numero":
+                numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
+
             pasta_req = pasta_requerimentos / nome_seguro(numero)
 
             print("=" * 90)
             print(f"[SCH] Iniciando processamento do requerimento {numero}")
+            print(f"[SCH] Pasta do requerimento: {pasta_req}")
             print("=" * 90)
 
             resumo = {
@@ -224,16 +286,22 @@ def executar_fluxo_sch():
                 "downloads_realizados": 0,
                 "status": "iniciado",
                 "inicio": datetime.now().isoformat(),
+                "fim": None,
                 "versao_script": VERSAO_SCRIPT,
-                "escopo_processamento": "radiacao_restrita",
+                "escopo_processamento": "radiacao_restrita" if processar_apenas_radiacao_restrita else "todos",
                 "escopo_normativo": _dados_normativos_radiacao_restrita(),
+                "preenchimento_sch": {
+                    "caracteristicas": preencher_caracteristicas,
+                    "informacoes_adicionais": preencher_informacoes_adicionais,
+                    "minuta": preencher_minuta,
+                },
             }
 
             try:
                 abrir_requerimento(driver, wait, req)
 
-                if regras.get("pausar_antes_anexos", True):
-                    aguardar_enter("[SCH] Se a tela estiver pronta, prossiga para a aba Anexos.")
+                if pausar_antes_anexos:
+                    aguardar_enter("[SCH] Se a tela estiver pronta, pressione Enter para seguir para a aba Anexos.")
 
                 clicar_aba_anexos(driver, wait)
 
@@ -245,14 +313,13 @@ def executar_fluxo_sch():
                     pasta_download=pasta_download,
                     regras=regras,
                 )
-
                 resumo["anexos_baixados"] = anexos_baixados or []
 
                 pdf_cct = localizar_pdf_cct_do_requerimento(pasta_req, regras)
                 resumo["pdf_cct"] = str(pdf_cct) if pdf_cct else ""
 
                 if pdf_cct:
-                    print(f"[SCH] PDF CCT localizado no requerimento: {pdf_cct}")
+                    print(f"[SCH] PDF CCT localizado: {pdf_cct}")
                     dados_pdf = parsear_certificado_pdf(pdf_cct)
                 else:
                     print("[SCH][WARN] Nenhum PDF CCT localizado na pasta do requerimento.")
@@ -260,30 +327,51 @@ def executar_fluxo_sch():
 
                 resumo["dados_pdf"] = dados_pdf
 
-                analise_rapida = preencher_caracteristicas_tecnicas_com_analise(
-                    driver=driver,
-                    wait=wait,
-                    req=req,
-                    anexos_baixados=resumo["anexos_baixados"],
-                    dados_pdf=dados_pdf,
-                )
+                if preencher_caracteristicas:
+                    analise_rapida = preencher_caracteristicas_tecnicas_com_analise(
+                        driver=driver,
+                        wait=wait,
+                        req=req,
+                        anexos_baixados=resumo["anexos_baixados"],
+                        dados_pdf=dados_pdf,
+                    )
+                else:
+                    analise_rapida = {
+                        "classificacao": "",
+                        "texto": "",
+                        "motivos": [],
+                        "origem": "desabilitado_pelo_usuario",
+                    }
+
                 resumo["analise_rapida"] = analise_rapida
                 resumo["observacao_caracteristicas"] = analise_rapida.get("texto", "")
 
-                info_adicionais = preencher_informacoes_adicionais_com_analise(
-                    driver=driver,
-                    wait=wait,
-                    req=req,
-                    anexos_baixados=resumo["anexos_baixados"],
-                    dados_pdf=dados_pdf,
-                    analise_rapida=analise_rapida,
-                )
+                if preencher_informacoes_adicionais:
+                    info_adicionais = preencher_informacoes_adicionais_com_analise(
+                        driver=driver,
+                        wait=wait,
+                        req=req,
+                        anexos_baixados=resumo["anexos_baixados"],
+                        dados_pdf=dados_pdf,
+                        analise_rapida=analise_rapida,
+                    )
+                else:
+                    info_adicionais = {
+                        "texto": "",
+                        "classificacao": analise_rapida.get("classificacao", ""),
+                        "motivos": analise_rapida.get("motivos", []),
+                        "preenchido_automaticamente": False,
+                        "origem": "desabilitado_pelo_usuario",
+                    }
+
                 resumo["informacoes_adicionais"] = info_adicionais
 
-                if regras.get("preencher_minuta", True) and dados_pdf:
+                if preencher_minuta and dados_pdf:
                     preencher_minuta_com_dados(driver, wait, dados_pdf)
-                else:
+                elif preencher_minuta and not dados_pdf:
                     print("[SCH][WARN] Sem dados de CCT para preencher a minuta.")
+                else:
+                    print("[SCH] Preenchimento da minuta desabilitado pelo usuário.")
 
                 qtd_downloads = contar_arquivos_requerimento(pasta_req)
                 resumo["downloads_realizados"] = qtd_downloads
@@ -307,7 +395,7 @@ def executar_fluxo_sch():
                             }
                         )
                     ),
-                    "escopo_processamento": "radiacao_restrita",
+                    "escopo_processamento": resumo["escopo_processamento"],
                     "atualizado_em": datetime.now().isoformat(),
                 }
                 salvar_json(pasta_req / "controle_downloads.json", controle)
@@ -348,7 +436,7 @@ def executar_fluxo_sch():
 
         fim_execucao = datetime.now()
 
-        caminho_relatorio = Path(pasta_saida) / "relatorio_execucao.json"
+        caminho_relatorio = relatorios_dir / "relatorio_execucao.json"
         salvar_json(
             caminho_relatorio,
             {
@@ -364,12 +452,13 @@ def executar_fluxo_sch():
                 "itens": relatorio_execucao,
                 "ignorados_fora_escopo": ignorados_resumidos,
                 "versao_script": VERSAO_SCRIPT,
+                "pasta_base": str(pasta_base),
             },
         )
         print(f"[SCH] Relatório consolidado salvo em: {caminho_relatorio}")
 
         caminho_req_report = gerar_req_report(
-            pasta_saida=Path(pasta_saida),
+            pasta_saida=relatorios_dir,
             resultados=relatorio_execucao,
             versao_script=VERSAO_SCRIPT,
             inicio_execucao=inicio_execucao,
