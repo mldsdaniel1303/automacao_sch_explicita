@@ -22,7 +22,7 @@ from funcoes_sch import (
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 
-VERSAO_SCRIPT = "0.6.0"
+VERSAO_SCRIPT = "0.6.1"
 
 
 def _normalizar_texto(valor):
@@ -102,6 +102,13 @@ def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
     return selecionados, ignorados
 
 
+def _numero_requerimento(req):
+    numero = req.get("requerimento", "sem_numero")
+    if not numero or str(numero).strip().lower() == "sem_numero":
+        numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
+    return str(numero)
+
+
 def preparar_pastas_requerimentos(pasta_base, requerimentos):
     pasta_base = Path(pasta_base)
     pasta_requerimentos = pasta_base / "requerimentos"
@@ -109,10 +116,7 @@ def preparar_pastas_requerimentos(pasta_base, requerimentos):
 
     mapeados = []
     for req in requerimentos:
-        numero = req.get("requerimento", "sem_numero")
-        if not numero or str(numero).strip().lower() == "sem_numero":
-            numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
-
+        numero = _numero_requerimento(req)
         pasta_req = pasta_requerimentos / nome_seguro(numero)
         pasta_req.mkdir(parents=True, exist_ok=True)
 
@@ -130,8 +134,8 @@ def preparar_pastas_requerimentos(pasta_base, requerimentos):
     return pasta_requerimentos, mapeados
 
 
-def salvar_manifesto_requerimentos(relatorios_dir, mapeados, ignorados=None):
-    caminho = Path(relatorios_dir) / "manifest_requerimentos.json"
+def salvar_manifesto_requerimentos(pasta_base, mapeados, ignorados=None):
+    caminho = Path(pasta_base) / "manifest_requerimentos.json"
     ignorados = ignorados or []
 
     salvar_json(
@@ -158,6 +162,7 @@ def contar_arquivos_requerimento(pasta_req):
 def _criar_driver_com_pasta(pasta_base):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
+
     pasta_download = pasta_base / "browser_downloads"
     pasta_download.mkdir(parents=True, exist_ok=True)
 
@@ -189,9 +194,6 @@ def executar_fluxo_sch(
 ):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
-
-    relatorios_dir = pasta_base / "relatorios"
-    relatorios_dir.mkdir(parents=True, exist_ok=True)
 
     regras = carregar_regras()
     regras["pausar_antes_anexos"] = pausar_antes_anexos
@@ -236,7 +238,7 @@ def executar_fluxo_sch(
             }
             requerimentos_processaveis = [
                 req for req in requerimentos_processaveis
-                if req.get("requerimento", "sem_numero") in pendentes
+                if _numero_requerimento(req) in pendentes
             ]
 
         ignorados_resumidos = [
@@ -255,7 +257,7 @@ def executar_fluxo_sch(
         print(f"[SCH] Pasta base da execução: {pasta_base}")
 
         caminho_manifesto = salvar_manifesto_requerimentos(
-            relatorios_dir,
+            pasta_base,
             mapeados,
             ignorados=ignorados_resumidos,
         )
@@ -266,10 +268,7 @@ def executar_fluxo_sch(
             return
 
         for req in requerimentos_processaveis:
-            numero = req.get("requerimento", "sem_numero")
-            if not numero or str(numero).strip().lower() == "sem_numero":
-                numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
-
+            numero = _numero_requerimento(req)
             pasta_req = pasta_requerimentos / nome_seguro(numero)
 
             print("=" * 90)
@@ -309,7 +308,7 @@ def executar_fluxo_sch(
                     driver=driver,
                     wait=wait,
                     req=req,
-                    pasta_saida=pasta_requerimentos,
+                    pasta_saida=pasta_req,
                     pasta_download=pasta_download,
                     regras=regras,
                 )
@@ -436,7 +435,7 @@ def executar_fluxo_sch(
 
         fim_execucao = datetime.now()
 
-        caminho_relatorio = relatorios_dir / "relatorio_execucao.json"
+        caminho_relatorio = pasta_base / "relatorio_execucao.json"
         salvar_json(
             caminho_relatorio,
             {
@@ -458,7 +457,7 @@ def executar_fluxo_sch(
         print(f"[SCH] Relatório consolidado salvo em: {caminho_relatorio}")
 
         caminho_req_report = gerar_req_report(
-            pasta_saida=relatorios_dir,
+            pasta_saida=pasta_base,
             resultados=relatorio_execucao,
             versao_script=VERSAO_SCRIPT,
             inicio_execucao=inicio_execucao,

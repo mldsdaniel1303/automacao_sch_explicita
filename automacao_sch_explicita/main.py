@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import sys
 
 from fluxo_sch import executar_fluxo_sch
@@ -66,6 +67,55 @@ def escolher_pasta(titulo, pasta_padrao):
     return pasta_padrao
 
 
+def normalizar_pasta_base_fluxo(pasta):
+    """
+    Garante que o fluxo completo sempre use a pasta BASE da execução,
+    evitando que o usuário escolha subpastas internas e acabe duplicando
+    a estrutura de saída.
+    """
+    pasta = Path(pasta).expanduser().resolve()
+    nome = pasta.name.lower()
+
+    subpastas_internas = {
+        "browser_downloads",
+        "downloads_temp",
+        "requerimentos",
+        "req_report",
+        "relatorios",
+        "logs",
+        "sem_nome",
+        "anexos",
+    }
+
+    # Caso o usuário selecione uma subpasta interna da estrutura
+    if nome in subpastas_internas:
+        print(f"[INFO] A pasta selecionada foi '{pasta.name}'. Usando a pasta pai como saída base.")
+        return pasta.parent
+
+    # Caso selecione diretamente a pasta de um requerimento:
+    # .../requerimentos/123456
+    if re.fullmatch(r"\d{3,}", pasta.name or ""):
+        if pasta.parent.name.lower() == "requerimentos":
+            print(
+                f"[INFO] Pasta de requerimento detectada ('{pasta.name}'). "
+                f"Usando a pasta base da execução."
+            )
+            return pasta.parent.parent
+
+    # Caso selecione .../requerimentos/123456/anexos
+    if nome == "anexos":
+        pai = pasta.parent
+        avo = pai.parent
+        if re.fullmatch(r"\d{3,}", pai.name or "") and avo.name.lower() == "requerimentos":
+            print(
+                f"[INFO] Pasta de anexos de requerimento detectada ('{pasta.name}'). "
+                f"Usando a pasta base da execução."
+            )
+            return avo.parent
+
+    return pasta
+
+
 def exibir_menu():
     print("\n" + "=" * 90)
     print("AUTOMAÇÃO SCH - MENU PRINCIPAL")
@@ -81,10 +131,12 @@ def coletar_opcoes_fluxo_completo():
     print("Este modo abre o SCH, entra na fila, baixa anexos, analisa documentos e")
     print("opcionalmente preenche abas no sistema.")
 
-    pasta_base = escolher_pasta(
+    pasta_escolhida = escolher_pasta(
         "Escolha a pasta base da execução",
         Path.cwd() / "automacao_sch_output",
     )
+
+    pasta_base = normalizar_pasta_base_fluxo(pasta_escolhida)
 
     limite = perguntar_inteiro_opcional(
         "\nQuantos requerimentos deseja processar? "
