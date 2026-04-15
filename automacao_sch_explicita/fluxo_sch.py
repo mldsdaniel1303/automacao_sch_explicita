@@ -22,7 +22,7 @@ from funcoes_sch import (
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 
-VERSAO_SCRIPT = "0.6.1"
+VERSAO_SCRIPT = "0.6.2"
 
 
 def _normalizar_texto(valor):
@@ -104,7 +104,7 @@ def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
 
 def _numero_requerimento(req):
     numero = req.get("requerimento", "sem_numero")
-    if not numero or str(numero).strip().lower() == "sem_numero":
+    if not numero or str(numero).strip().lower().startswith("sem_numero"):
         numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
     return str(numero)
 
@@ -243,7 +243,7 @@ def executar_fluxo_sch(
 
         ignorados_resumidos = [
             {
-                "requerimento": req.get("requerimento", "sem_numero"),
+                "requerimento": _numero_requerimento(req),
                 "tipo_produto": req.get("tipo_produto", ""),
                 "motivo": "fora_escopo_radiacao_restrita",
             }

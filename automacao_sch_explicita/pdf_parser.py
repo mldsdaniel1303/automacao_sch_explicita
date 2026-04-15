@@ -25,7 +25,7 @@ def _limpar_texto(valor):
 
 def _extrair_primeiro(texto, padroes):
     for padrao in padroes:
-        m = re.search(padrao, texto, re.I)
+        m = re.search(padrao, texto, re.I | re.S)
         if m:
             valor = _limpar_texto(m.group(1))
             if valor:
@@ -89,6 +89,7 @@ def parsear_certificado_pdf(caminho_pdf):
         "homologacao": "",
         "modelo": "",
         "fabricante": "",
+        "ocd": "",
         "observacao_classificacao": "",
         "observacao_texto": "",
         "observacao_motivos": [],
@@ -115,11 +116,15 @@ def parsear_certificado_pdf(caminho_pdf):
     texto_limpo = _limpar_texto(texto)
     linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
 
-    padroes_certificado = [
-        r"N[ÚU]MERO\s+DO\s+CERTIFICADO\s*[:\-]?\s*((?=[A-Z0-9./-]*\d)[A-Z0-9./-]{4,})",
-        r"N[ÚU]MERO\s+DE\s+CERTIFICADO\s*[:\-]?\s*((?=[A-Z0-9./-]*\d)[A-Z0-9./-]{4,})",
-        r"CERTIFICADO(?:\s+DE\s+CONFORMIDADE\s+T[ÉE]CNICA)?\s*(?:N[ºO°.]?|N[ÚU]MERO)?\s*[:\-]?\s*((?=[A-Z0-9./-]*\d)[A-Z0-9./-]{4,})",
-        r"\b((?=\d)[A-Z0-9]{3,6}-\d{2}-\d{3,10})\b",
+    padroes_certificado_contextuais = [
+        r"(?:n[º°o]\s*|n[úu]mero\s+)(?:do|de)\s+certificado(?:\s*/\s*certificate\s*no\.?)?\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
+        r"(?:certificate\s*no\.?)\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
+        r"(?:certificado\s+de\s+conformidade\s+t[ée]cnica).*?(?:n[º°o]\s*|n[úu]mero\s+)?(?:do|de)?\s*certificado(?:\s*/\s*certificate\s*no\.?)?\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
+        r"(?:certificado).*?(?:no\.?|n[º°o]|n[úu]mero)?\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
+    ]
+
+    padroes_certificado_genericos = [
+        r"\b([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})\b",
     ]
 
     padroes_homologacao = [
@@ -127,8 +132,25 @@ def parsear_certificado_pdf(caminho_pdf):
         r"N[ÚU]MERO\s+DE\s+HOMOLOGA[CÇ][AÃ]O\s*[:\-]?\s*([0-9./-]{4,})",
     ]
 
-    resultado["numero_certificado"] = _extrair_primeiro(texto_limpo, padroes_certificado)
+    padroes_ocd = [
+        r"\bOCD\s*[:\-]?\s*([A-Z][A-Z0-9./&() \-]{1,60})",
+        r"Organismo\s+de\s+Certifica(?:ç|c)[aã]o(?:\s+Designado)?\s*[:\-]?\s*([A-Z][A-Z0-9./&() \-]{1,60})",
+    ]
+
+    resultado["numero_certificado"] = _extrair_primeiro(texto_limpo, padroes_certificado_contextuais)
+
+    if not resultado["numero_certificado"]:
+        for linha in linhas:
+            valor = _extrair_primeiro(linha, padroes_certificado_contextuais)
+            if valor:
+                resultado["numero_certificado"] = valor
+                break
+
+    if not resultado["numero_certificado"]:
+        resultado["numero_certificado"] = _extrair_primeiro(texto_limpo, padroes_certificado_genericos)
+
     resultado["homologacao"] = _extrair_primeiro(texto_limpo, padroes_homologacao)
+    resultado["ocd"] = _extrair_primeiro(texto_limpo, padroes_ocd)
 
     for linha in linhas:
         if not resultado["modelo"]:
@@ -146,15 +168,18 @@ def parsear_certificado_pdf(caminho_pdf):
             if m:
                 resultado["homologacao"] = _limpar_texto(m.group(1))
 
-        if not resultado["numero_certificado"]:
-            m = re.search(r"\b((?=\d)[A-Z0-9]{3,6}-\d{2}-\d{3,10})\b", linha.upper(), re.I)
+        if not resultado["ocd"]:
+            m = re.search(r"\bOCD\s*[:\-]?\s*([A-Z][A-Z0-9./&() \-]{1,60})", linha, re.I)
             if m:
-                resultado["numero_certificado"] = _limpar_texto(m.group(1))
+                resultado["ocd"] = _limpar_texto(m.group(1))
 
     if not resultado["numero_certificado"]:
-        m = re.search(r"\b\d{3,6}-\d{2}(?:-\d{2,10})?\b", caminho_pdf.stem.upper())
+        m = re.search(r"\b[A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4}\b", caminho_pdf.stem.upper())
         if m:
             resultado["numero_certificado"] = m.group(0)
+
+    if resultado["ocd"]:
+        resultado["ocd"] = resultado["ocd"].split(" ", 1)[0].strip()
 
     obs = _classificar_observacao_cct(texto)
     resultado["observacao_classificacao"] = obs["observacao_classificacao"]

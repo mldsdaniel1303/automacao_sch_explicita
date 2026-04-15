@@ -39,6 +39,41 @@ OBS_PRODUTO_NAO_ACABADO = (
     "equipamentos passíveis de homologação pode requerer nova avaliação."
 )
 
+def _texto_limpo(valor):
+    return re.sub(r"\s+", " ", (valor or "")).strip()
+
+
+def _somente_digitos(valor):
+    return re.sub(r"\D+", "", valor or "")
+
+
+def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
+    candidatos = []
+
+    texto_linha = _texto_limpo(texto_linha)
+    if texto_linha:
+        candidatos.append(texto_linha)
+
+    for cel in celulas or []:
+        txt = _texto_limpo(cel.text)
+        if txt:
+            candidatos.append(txt)
+
+    padroes = [
+        r"requerimento\s*[:#\-]?\s*(\d{4,})",
+        r"^\s*(\d{4,})\s*$",
+        r"\b(\d{5,})\b",
+    ]
+
+    for texto in candidatos:
+        for padrao in padroes:
+            m = re.search(padrao, texto, re.I)
+            if m:
+                numero = _somente_digitos(m.group(1))
+                if len(numero) >= 4:
+                    return numero
+
+    return ""
 
 def _clicar_com_fallback(driver, elemento):
     try:
@@ -231,16 +266,30 @@ def coletar_requerimentos(driver, wait, regras):
     linhas = tabela.find_elements(By.XPATH, xpath_linhas)
 
     requerimentos = []
+
     for idx, linha in enumerate(linhas, start=1):
         try:
             colunas = linha.find_elements(By.XPATH, "./td")
 
             def valor_coluna(posicao):
-                return colunas[posicao].text.strip() if len(colunas) > posicao else ""
+                return _texto_limpo(colunas[posicao].text) if len(colunas) > posicao else ""
+
+            textos_colunas = [_texto_limpo(td.text) for td in colunas]
+            texto_linha = " | ".join([t for t in textos_colunas if t])
+
+            requerimento_coluna = valor_coluna(idx_requerimento)
+            requerimento_extraido = _extrair_numero_requerimento_de_linha(
+                texto_linha,
+                colunas,
+            )
+
+            numero_requerimento = requerimento_extraido or requerimento_coluna
+            if not numero_requerimento:
+                numero_requerimento = f"sem_numero_linha_{idx}"
 
             dados = {
                 "row_index": idx,
-                "requerimento": valor_coluna(idx_requerimento),
+                "requerimento": numero_requerimento,
                 "homologacao": valor_coluna(idx_homologacao),
                 "certificado": valor_coluna(idx_certificado),
                 "tipo_produto": valor_coluna(idx_tipo_produto),
@@ -248,6 +297,7 @@ def coletar_requerimentos(driver, wait, regras):
                 "solicitante": valor_coluna(idx_solicitante),
                 "fabricante": valor_coluna(idx_fabricante),
                 "data_conclusao": valor_coluna(idx_data_conclusao),
+                "texto_linha": texto_linha,
             }
 
             requerimentos.append(dados)
@@ -256,33 +306,58 @@ def coletar_requerimentos(driver, wait, regras):
             print(f"[SCH][WARN] Falha ao ler linha {idx}: {e}")
 
     print(f"[SCH] {len(requerimentos)} requerimentos encontrados.")
+    for item in requerimentos:
+        print(
+            f"[SCH] Linha {item['row_index']}: "
+            f"requerimento={item.get('requerimento', '')} | "
+            f"homologacao={item.get('homologacao', '')} | "
+            f"certificado={item.get('certificado', '')}"
+        )
+
     return requerimentos
 
 
 def abrir_requerimento(driver, wait, req):
     numero = req.get("requerimento", "")
-    linha_idx = req.get("row_index")
+    linha_idx = int(req.get("row_index"))
 
     xpath_linha = f"(.//tbody/tr[td])[{linha_idx}]"
-    xpath_botao_abrir = ".//img/.. | .//a[img] | .//button"
 
     print(f"[SCH] Abrindo requerimento {numero}...")
 
     tabela = _aguardar_tabela_fila(driver, timeout=8)
     linha = tabela.find_element(By.XPATH, xpath_linha)
 
-    botoes = linha.find_elements(By.XPATH, xpath_botao_abrir)
-    if not botoes:
-        raise Exception(f"Nenhum botão encontrado para o requerimento {numero}.")
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", linha)
 
-    alvo = botoes[1] if len(botoes) >= 2 else botoes[0]
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", alvo)
-    _clicar_com_fallback(driver, alvo)
+    candidatos = linha.find_elements(
+        By.XPATH,
+        ".//a[img] | .//img/ancestor::a[1] | .//button | .//*[@role='button']"
+    )
 
-    esperar_tela_carregar(driver, 0.4)
-    _aguardar_iframe_detalhe(driver, timeout=8)
+    ultimo_erro = None
+    for el in candidatos:
+        try:
+            if el.is_displayed() and el.is_enabled():
+                _clicar_com_fallback(driver, el)
+                esperar_tela_carregar(driver, 0.4)
+                _aguardar_iframe_detalhe(driver, timeout=8)
+                print("[SCH] Requerimento aberto. Tela de detalhes pronta.")
+                return
+        except Exception as e:
+            ultimo_erro = e
+            continue
 
-    print("[SCH] Requerimento aberto. Tela de detalhes pronta.")
+    try:
+        _clicar_com_fallback(driver, linha)
+        esperar_tela_carregar(driver, 0.4)
+        _aguardar_iframe_detalhe(driver, timeout=8)
+        print("[SCH] Requerimento aberto por clique na linha. Tela de detalhes pronta.")
+        return
+    except Exception as e:
+        ultimo_erro = e
+
+    raise Exception(f"Não foi possível abrir o requerimento {numero}. Último erro: {ultimo_erro}")
 
 
 def entrar_iframe_detalhe_analise(driver, wait=None):
@@ -494,9 +569,9 @@ def mover_arquivo_para_requerimento(arquivo_origem, pasta_destino, nome_destino=
 
 
 def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_download, categoria):
-    numero = req.get("requerimento", "sem_numero")
-    pasta_req = Path(pasta_saida) / nome_seguro(numero) / nome_seguro(categoria)
-    pasta_req.mkdir(parents=True, exist_ok=True)
+    pasta_req = Path(pasta_saida)
+    pasta_categoria = pasta_req / nome_seguro(categoria)
+    pasta_categoria.mkdir(parents=True, exist_ok=True)
 
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.2)
@@ -591,7 +666,11 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             if novo_arquivo:
                 nome_limpo = nome_seguro(nome_anexo) or f"anexo_{i}"
                 nome_destino = f"{nome_limpo}{novo_arquivo.suffix.lower()}"
-                arquivo_final = mover_arquivo_para_requerimento(novo_arquivo, pasta_req, nome_destino)
+                arquivo_final = mover_arquivo_para_requerimento(
+                    novo_arquivo,
+                    pasta_categoria,
+                    nome_destino,
+                )
 
                 registro["status"] = "baixado"
                 registro["arquivo"] = str(arquivo_final)
@@ -1259,15 +1338,6 @@ def salvar_informacoes_adicionais(driver, wait):
     print("[SCH] Informações Adicionais salvas.")
     return True
 
-
-def clicar_aba_informacoes_adicionais(driver, wait):
-    print("[SCH] Abrindo aba Informações Adicionais...")
-    _clicar_aba_por_rotulo(
-        driver,
-        wait,
-        "Informações Adicionais",
-        rotulos_alternativos=["Informacoes Adicionais", "Informações", "Informacoes"],
-    )
 
 
 def montar_texto_informacoes_adicionais(req, anexos_baixados, dados_pdf, analise_rapida):
