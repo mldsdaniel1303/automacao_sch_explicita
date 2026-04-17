@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 import json
+import re
 
 from utils import salvar_json
 from pdf_parser import parsear_certificado_pdf
@@ -8,7 +9,7 @@ from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 from funcoes_sch import localizar_pdf_cct_do_requerimento
 
-VERSAO_SCRIPT = "0.6.1"
+VERSAO_SCRIPT = "0.6.2"
 
 
 def contar_arquivos_requerimento(pasta_req):
@@ -27,6 +28,42 @@ def _carregar_json_se_existir(caminho):
             return json.load(f)
     except Exception:
         return {}
+
+
+def _extrair_numero_do_nome_pasta(nome_pasta):
+    nome = str(nome_pasta or "").strip()
+
+    if not nome:
+        return ""
+
+    # Caso ideal: a pasta já é só o número
+    if re.fullmatch(r"\d{3,}", nome):
+        return nome
+
+    # Caso comum: "03030", "03030_mouse", "req_03030", "03030 - teclado"
+    m = re.search(r"\b(\d{3,})\b", nome)
+    if m:
+        return m.group(1)
+
+    return ""
+
+
+def _normalizar_req_local(pasta_req, resumo_existente):
+    numero_pasta = _extrair_numero_do_nome_pasta(Path(pasta_req).name) or Path(pasta_req).name
+
+    req_existente = {}
+    if isinstance(resumo_existente, dict):
+        req_existente = resumo_existente.get("requerimento") or {}
+
+    if not isinstance(req_existente, dict):
+        req_existente = {}
+
+    numero_existente = str(req_existente.get("requerimento", "") or "").strip()
+
+    if not numero_existente or numero_existente.lower().startswith("sem_numero"):
+        req_existente["requerimento"] = numero_pasta
+
+    return req_existente
 
 
 def _parece_pasta_de_requerimento(pasta):
@@ -147,8 +184,6 @@ def executar_modo_analise_local(
     info_pastas = _resolver_pasta_requerimentos(pasta_escolhida)
 
     pasta_base_real = info_pastas["pasta_base"]
-    relatorios_dir = pasta_base_real / "relatorios"
-    relatorios_dir.mkdir(parents=True, exist_ok=True)
 
     requerimentos_dirs = _listar_requerimentos(info_pastas)
 
@@ -174,19 +209,17 @@ def executar_modo_analise_local(
     inicio_execucao = datetime.now()
 
     for pasta_req in requerimentos_dirs:
-        numero = pasta_req.name
+        numero_extraido = _extrair_numero_do_nome_pasta(pasta_req.name) or pasta_req.name
+
         print("-" * 80)
-        print(f"[LOCAL] Analisando requerimento: {numero}")
+        print(f"[LOCAL] Analisando requerimento: {numero_extraido}")
         print(f"[LOCAL] Pasta: {pasta_req}")
 
         resumo_existente = _carregar_json_se_existir(pasta_req / "resumo.json")
-        req = resumo_existente.get("requerimento")
-
-        if not isinstance(req, dict):
-            req = {"requerimento": numero}
+        req = _normalizar_req_local(pasta_req, resumo_existente)
 
         resumo = dict(resumo_existente) if isinstance(resumo_existente, dict) else {}
-        resumo.setdefault("requerimento", req)
+        resumo["requerimento"] = req
         resumo["pasta_requerimento"] = str(pasta_req)
         resumo["inicio"] = datetime.now().isoformat()
         resumo["versao_script"] = VERSAO_SCRIPT
@@ -218,7 +251,7 @@ def executar_modo_analise_local(
             resumo["status"] = "analise_local_sucesso"
             resumo["fim"] = datetime.now().isoformat()
 
-            print(f"[LOCAL] Análise concluída com sucesso: {numero}")
+            print(f"[LOCAL] Análise concluída com sucesso: {numero_extraido}")
 
         except Exception as e:
             resumo["status"] = "analise_local_erro"
@@ -228,14 +261,14 @@ def executar_modo_analise_local(
                 "mensagem": str(e),
                 "repr": repr(e),
             }
-            print(f"[LOCAL][ERRO] Falha no requerimento {numero}: {type(e).__name__}: {e}")
+            print(f"[LOCAL][ERRO] Falha no requerimento {numero_extraido}: {type(e).__name__}: {e}")
 
         salvar_json(pasta_req / "resumo.json", resumo)
         resultados.append(resumo)
 
     fim_execucao = datetime.now()
 
-    caminho_relatorio = relatorios_dir / "relatorio_execucao_local.json"
+    caminho_relatorio = pasta_base_real / "relatorio_execucao_local.json"
     salvar_json(
         caminho_relatorio,
         {
@@ -256,7 +289,7 @@ def executar_modo_analise_local(
     print(f"[LOCAL] Relatório local salvo em: {caminho_relatorio}")
 
     caminho_req_report = gerar_req_report(
-        pasta_saida=relatorios_dir,
+        pasta_saida=pasta_base_real,
         resultados=resultados,
         versao_script=VERSAO_SCRIPT,
         inicio_execucao=inicio_execucao,

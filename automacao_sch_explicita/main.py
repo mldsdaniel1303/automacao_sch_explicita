@@ -68,11 +68,6 @@ def escolher_pasta(titulo, pasta_padrao):
 
 
 def normalizar_pasta_base_fluxo(pasta):
-    """
-    Garante que o fluxo completo sempre use a pasta BASE da execução,
-    evitando que o usuário escolha subpastas internas e acabe duplicando
-    a estrutura de saída.
-    """
     pasta = Path(pasta).expanduser().resolve()
     nome = pasta.name.lower()
 
@@ -87,13 +82,10 @@ def normalizar_pasta_base_fluxo(pasta):
         "anexos",
     }
 
-    # Caso o usuário selecione uma subpasta interna da estrutura
     if nome in subpastas_internas:
         print(f"[INFO] A pasta selecionada foi '{pasta.name}'. Usando a pasta pai como saída base.")
         return pasta.parent
 
-    # Caso selecione diretamente a pasta de um requerimento:
-    # .../requerimentos/123456
     if re.fullmatch(r"\d{3,}", pasta.name or ""):
         if pasta.parent.name.lower() == "requerimentos":
             print(
@@ -102,7 +94,6 @@ def normalizar_pasta_base_fluxo(pasta):
             )
             return pasta.parent.parent
 
-    # Caso selecione .../requerimentos/123456/anexos
     if nome == "anexos":
         pai = pasta.parent
         avo = pai.parent
@@ -135,7 +126,6 @@ def coletar_opcoes_fluxo_completo():
         "Escolha a pasta base da execução",
         Path.cwd() / "automacao_sch_output",
     )
-
     pasta_base = normalizar_pasta_base_fluxo(pasta_escolhida)
 
     limite = perguntar_inteiro_opcional(
@@ -168,11 +158,6 @@ def coletar_opcoes_fluxo_completo():
         padrao=False,
     )
 
-    preencher_minuta = preencher_sch and perguntar_sim_nao(
-        "Deseja preencher Minuta?",
-        padrao=True,
-    )
-
     pausar_antes_anexos = perguntar_sim_nao(
         "Deseja manter pausa manual antes da aba Anexos?",
         padrao=False,
@@ -185,7 +170,6 @@ def coletar_opcoes_fluxo_completo():
         "processar_apenas_radiacao_restrita": processar_apenas_radiacao_restrita,
         "preencher_caracteristicas": preencher_caracteristicas,
         "preencher_informacoes_adicionais": preencher_informacoes_adicionais,
-        "preencher_minuta": preencher_minuta,
         "pausar_antes_anexos": pausar_antes_anexos,
     }
 
@@ -247,7 +231,6 @@ def main():
                 print(f"Filtro radiação restrita: {'sim' if opcoes['processar_apenas_radiacao_restrita'] else 'não'}")
                 print(f"Preencher Características Técnicas: {'sim' if opcoes['preencher_caracteristicas'] else 'não'}")
                 print(f"Preencher Informações Adicionais: {'sim' if opcoes['preencher_informacoes_adicionais'] else 'não'}")
-                print(f"Preencher Minuta: {'sim' if opcoes['preencher_minuta'] else 'não'}")
                 print(f"Pausa antes de anexos: {'sim' if opcoes['pausar_antes_anexos'] else 'não'}")
                 print("=" * 90)
 

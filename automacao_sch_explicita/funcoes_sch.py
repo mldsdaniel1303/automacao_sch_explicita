@@ -39,6 +39,7 @@ OBS_PRODUTO_NAO_ACABADO = (
     "equipamentos passíveis de homologação pode requerer nova avaliação."
 )
 
+
 def _texto_limpo(valor):
     return re.sub(r"\s+", " ", (valor or "")).strip()
 
@@ -75,6 +76,7 @@ def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
 
     return ""
 
+
 def _clicar_com_fallback(driver, elemento):
     try:
         elemento.click()
@@ -94,7 +96,7 @@ def _aguardar_tabela_fila(driver, timeout=6):
     )
 
 
-def _capturar_novas_abas(driver, handles_antes, timeout=1.2, poll=0.1):
+def _capturar_novas_abas(driver, handles_antes, timeout=1.0, poll=0.08):
     inicio = time.time()
     while time.time() - inicio < timeout:
         handles_depois = set(driver.window_handles)
@@ -141,6 +143,47 @@ def _ha_botoes_de_categoria_anexos(driver):
     for xpath in xpaths:
         try:
             if driver.find_elements(By.XPATH, xpath):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ha_campo_caracteristicas(driver):
+    xpaths = [
+        "//label[contains(translate(normalize-space(.), "
+        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'OBSERVA')]"
+        "/following::*[self::textarea or self::input][1]",
+        "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+        "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+        "//input[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+        "//input[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+        "//*[@contenteditable='true']",
+        "//div[contains(@class,'ql-editor')]",
+    ]
+    for xp in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xp)
+            if any(el.is_displayed() for el in elementos):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ha_campo_informacoes_adicionais(driver):
+    xpaths = [
+        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]",
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]",
+        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "(//textarea[not(@disabled)])[1]",
+    ]
+    for xp in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xp)
+            if any(el.is_displayed() for el in elementos):
                 return True
         except Exception:
             continue
@@ -242,7 +285,7 @@ def clicar_fila_em_analise(driver, wait):
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", fila)
     driver.execute_script("arguments[0].click();", fila)
 
-    esperar_tela_carregar(driver, 2)
+    esperar_tela_carregar(driver, 1.2)
     print("[SCH] Fila aberta.")
 
 
@@ -340,8 +383,8 @@ def abrir_requerimento(driver, wait, req):
         try:
             if el.is_displayed() and el.is_enabled():
                 _clicar_com_fallback(driver, el)
-                esperar_tela_carregar(driver, 0.4)
-                _aguardar_iframe_detalhe(driver, timeout=8)
+                esperar_tela_carregar(driver, 0.18)
+                _aguardar_iframe_detalhe(driver, timeout=6)
                 print("[SCH] Requerimento aberto. Tela de detalhes pronta.")
                 return
         except Exception as e:
@@ -350,8 +393,8 @@ def abrir_requerimento(driver, wait, req):
 
     try:
         _clicar_com_fallback(driver, linha)
-        esperar_tela_carregar(driver, 0.4)
-        _aguardar_iframe_detalhe(driver, timeout=8)
+        esperar_tela_carregar(driver, 0.18)
+        _aguardar_iframe_detalhe(driver, timeout=6)
         print("[SCH] Requerimento aberto por clique na linha. Tela de detalhes pronta.")
         return
     except Exception as e:
@@ -362,12 +405,20 @@ def abrir_requerimento(driver, wait, req):
 
 def entrar_iframe_detalhe_analise(driver, wait=None):
     driver.switch_to.default_content()
-    iframe = _aguardar_iframe_detalhe(driver, timeout=10)
+    iframe = _aguardar_iframe_detalhe(driver, timeout=8)
     driver.switch_to.frame(iframe)
     return iframe
 
 
-def _clicar_aba_por_rotulo(driver, wait, rotulo_principal, rotulos_alternativos=None):
+def _clicar_aba_por_rotulo(
+    driver,
+    wait,
+    rotulo_principal,
+    rotulos_alternativos=None,
+    condicao_pronta=None,
+    timeout_click=2.2,
+    timeout_pronta=2.2,
+):
     rotulos = [rotulo_principal]
     if rotulos_alternativos:
         rotulos.extend(rotulos_alternativos)
@@ -386,46 +437,53 @@ def _clicar_aba_por_rotulo(driver, wait, rotulo_principal, rotulos_alternativos=
 
     ultimo_erro = None
 
-    for tentativa in range(3):
+    for _ in range(2):
         entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.2)
+        esperar_tela_carregar(driver, 0.06)
 
         for xpath in candidatos:
             try:
-                aba = WebDriverWait(driver, 4).until(
+                aba = WebDriverWait(driver, timeout_click).until(
                     EC.element_to_be_clickable((By.XPATH, xpath))
                 )
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", aba)
                 _clicar_com_fallback(driver, aba)
 
-                def _aba_ativa(d):
+                def _confirmar(d):
                     try:
                         entrar_iframe_detalhe_analise(d, wait)
+
+                        if condicao_pronta is not None:
+                            return condicao_pronta(d)
+
                         els = d.find_elements(By.XPATH, xpath)
                         return any(_classe_ativa(el) for el in els)
                     except Exception:
                         return False
 
-                WebDriverWait(driver, 3).until(_aba_ativa)
-                esperar_tela_carregar(driver, 0.2)
+                WebDriverWait(driver, timeout_pronta).until(_confirmar)
+                esperar_tela_carregar(driver, 0.06)
 
-                print(f"[SCH] Aba '{rotulo_principal}' aberta. XPath usado: {xpath}")
+                print(f"[SCH] Aba '{rotulo_principal}' aberta.")
                 return xpath
+
             except Exception as e:
                 ultimo_erro = e
+                continue
 
     raise Exception(f"Não foi possível abrir a aba '{rotulo_principal}'. Último erro: {ultimo_erro}")
 
 
 def clicar_aba_anexos(driver, wait):
-    print("[SCH] Tentando abrir aba Anexos...")
-    _clicar_aba_por_rotulo(driver, wait, "Anexos")
-    entrar_iframe_detalhe_analise(driver, wait)
-
-    WebDriverWait(driver, 5).until(
-        lambda d: _ha_tabela_anexos(d) or _ha_botoes_de_categoria_anexos(d)
+    print("[SCH] Abrindo aba Anexos...")
+    _clicar_aba_por_rotulo(
+        driver,
+        wait,
+        "Anexos",
+        condicao_pronta=lambda d: _ha_tabela_anexos(d) or _ha_botoes_de_categoria_anexos(d),
+        timeout_click=2.2,
+        timeout_pronta=2.2,
     )
-    print("[SCH] Aba Anexos ativada com sucesso.")
 
 
 def clicar_categoria_anexo(driver, wait, categoria):
@@ -439,18 +497,18 @@ def clicar_categoria_anexo(driver, wait, categoria):
     print(f"[SCH] Abrindo categoria de anexos: {categoria}")
     ultimo_erro = None
 
-    for tentativa in range(3):
+    for tentativa in range(2):
         entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.2)
+        esperar_tela_carregar(driver, 0.08)
 
         for xpath in xpaths:
             try:
-                botao = WebDriverWait(driver, 3).until(
+                botao = WebDriverWait(driver, 2.5).until(
                     EC.element_to_be_clickable((By.XPATH, xpath))
                 )
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao)
                 driver.execute_script("arguments[0].click();", botao)
-                esperar_tela_carregar(driver, 0.3)
+                esperar_tela_carregar(driver, 0.10)
 
                 def _categoria_pronta(d):
                     try:
@@ -459,16 +517,13 @@ def clicar_categoria_anexo(driver, wait, categoria):
                     except Exception:
                         return False
 
-                WebDriverWait(driver, 2).until(_categoria_pronta)
-                print(f"[SCH] Categoria aberta com sucesso: {categoria}")
+                WebDriverWait(driver, 1.8).until(_categoria_pronta)
+                print(f"[SCH] Categoria aberta: {categoria}")
                 return
 
             except Exception as e:
                 ultimo_erro = e
-                print(
-                    f"[SCH][WARN] Tentativa {tentativa + 1} falhou ao abrir "
-                    f"categoria {categoria} com XPath {xpath}: {e}"
-                )
+                continue
 
     raise Exception(
         f"Não foi possível abrir a categoria {categoria}. Último erro: {ultimo_erro}"
@@ -478,10 +533,9 @@ def clicar_categoria_anexo(driver, wait, categoria):
 def localizar_tabela_anexos(driver, wait):
     for xpath in XPATHS_TABELA_ANEXOS:
         try:
-            tabela = WebDriverWait(driver, 5).until(
+            tabela = WebDriverWait(driver, 3).until(
                 EC.presence_of_element_located((By.XPATH, xpath))
             )
-            print(f"[SCH] Tabela de anexos localizada com XPath: {xpath}")
             return tabela
         except Exception:
             pass
@@ -501,7 +555,7 @@ def listar_arquivos_estaveis(pasta_download):
     }
 
 
-def esperar_novo_arquivo_baixado(pasta_download, arquivos_antes, timeout=20, poll=0.12):
+def esperar_novo_arquivo_baixado(pasta_download, arquivos_antes, timeout=8, poll=0.08):
     inicio = time.time()
     pasta = Path(pasta_download)
     ultimo_tamanho = {}
@@ -574,12 +628,12 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
     pasta_categoria.mkdir(parents=True, exist_ok=True)
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.2)
+    esperar_tela_carregar(driver, 0.08)
 
     tabela = localizar_tabela_anexos(driver, wait)
     total_linhas = len(tabela.find_elements(By.XPATH, ".//tr[td]"))
 
-    print(f"[SCH] {total_linhas} linhas encontradas na categoria {categoria}.")
+    print(f"[SCH] {total_linhas} linha(s) na categoria {categoria}.")
     anexos_categoria = []
 
     for i in range(1, total_linhas + 1):
@@ -589,7 +643,6 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             linhas = tabela.find_elements(By.XPATH, ".//tr[td]")
 
             if len(linhas) < i:
-                print(f"[SCH][WARN] Linha {i} não está mais disponível em {categoria}.")
                 break
 
             linha = linhas[i - 1]
@@ -631,7 +684,6 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
                     break
 
             if link is None:
-                print(f"[SCH][WARN] Link não encontrado para o anexo {id_linha} da categoria {categoria}.")
                 registro["status"] = "sem_link"
                 anexos_categoria.append(registro)
                 continue
@@ -645,11 +697,10 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
             _clicar_com_fallback(driver, link)
 
-            novas_abas = _capturar_novas_abas(driver, handles_antes, timeout=1.0)
+            novas_abas = _capturar_novas_abas(driver, handles_antes, timeout=0.8)
 
             if novas_abas:
                 for nova_aba in novas_abas:
-                    print(f"[SCH][WARN] O anexo abriu em nova aba. Fechando aba extra: {nome_anexo}")
                     driver.switch_to.window(nova_aba)
                     driver.close()
 
@@ -659,8 +710,8 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             novo_arquivo = esperar_novo_arquivo_baixado(
                 pasta_download,
                 arquivos_antes,
-                timeout=20,
-                poll=0.12,
+                timeout=8,
+                poll=0.08,
             )
 
             if novo_arquivo:
@@ -856,7 +907,7 @@ def _preencher_campo(driver, wait, xpaths, valor, descricao):
             valor,
         )
 
-    esperar_tela_carregar(driver, 0.2)
+    esperar_tela_carregar(driver, 0.12)
 
 
 def preencher_campo_numero_certificado(driver, wait, valor):
@@ -944,7 +995,7 @@ def preencher_minuta_com_dados(driver, wait, dados_pdf):
     try:
         clicar_aba_minuta(driver, wait)
         entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.3)
+        esperar_tela_carregar(driver, 0.2)
     except Exception as e:
         print(f"[SCH][WARN] Não foi possível abrir a aba Minuta: {e}")
         return False
@@ -1020,6 +1071,9 @@ def clicar_aba_caracteristicas_tecnicas(driver, wait):
         wait,
         "Características Técnicas",
         rotulos_alternativos=["Caracteristicas Tecnicas", "Características", "Caracteristicas"],
+        condicao_pronta=_ha_campo_caracteristicas,
+        timeout_click=2.2,
+        timeout_pronta=2.2,
     )
 
 
@@ -1032,11 +1086,11 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
     html = texto.replace("\n", "<br>")
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.3)
+    esperar_tela_carregar(driver, 0.12)
 
     for xpath in xpaths_input:
         try:
-            elementos = WebDriverWait(driver, 4).until(
+            elementos = WebDriverWait(driver, 3).until(
                 EC.presence_of_all_elements_located((By.XPATH, xpath))
             )
             for campo in elementos:
@@ -1061,7 +1115,7 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
                                 texto_plano,
                             )
 
-                        esperar_tela_carregar(driver, 0.3)
+                        esperar_tela_carregar(driver, 0.12)
                         return
                 except Exception:
                     continue
@@ -1076,7 +1130,7 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
 
     entrar_iframe_detalhe_analise(driver, wait)
     if _tentar_preencher_editor_rico(driver, xpaths_editor, html):
-        esperar_tela_carregar(driver, 0.3)
+        esperar_tela_carregar(driver, 0.12)
         return
 
     raise Exception(f"Não foi possível localizar o campo de texto: {descricao}")
@@ -1118,6 +1172,9 @@ def clicar_aba_informacoes_adicionais(driver, wait):
         wait,
         "Informações Adicionais",
         rotulos_alternativos=["Informacoes Adicionais", "Informações", "Informacoes"],
+        condicao_pronta=_ha_campo_informacoes_adicionais,
+        timeout_click=2.2,
+        timeout_pronta=2.2,
     )
 
 
@@ -1127,7 +1184,7 @@ TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES = (
 )
 
 
-def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=5):
+def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=4):
     for xpath in xpaths:
         try:
             elementos = WebDriverWait(driver, timeout).until(
@@ -1174,7 +1231,7 @@ def _checkbox_esta_marcado(elemento):
 
 def marcar_acompanhar_processo(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.3)
+    esperar_tela_carregar(driver, 0.12)
 
     checkbox_xpaths = [
         "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
@@ -1210,20 +1267,15 @@ def marcar_acompanhar_processo(driver, wait):
         print("[SCH] Opção 'Desejo acompanhar este processo' já está marcada.")
         return True
 
-    alvo_clique = None
-
-    if checkbox:
-        alvo_clique = checkbox
-    else:
-        alvo_clique = _achar_primeiro_elemento_visivel(
-            driver,
-            label_xpaths,
-            "checkbox/label de acompanhar processo",
-            timeout=4,
-        )
+    alvo_clique = checkbox or _achar_primeiro_elemento_visivel(
+        driver,
+        label_xpaths,
+        "checkbox/label de acompanhar processo",
+        timeout=3,
+    )
 
     _clicar_com_fallback(driver, alvo_clique)
-    esperar_tela_carregar(driver, 0.3)
+    esperar_tela_carregar(driver, 0.12)
 
     entrar_iframe_detalhe_analise(driver, wait)
 
@@ -1250,7 +1302,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
         return False
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.3)
+    esperar_tela_carregar(driver, 0.12)
 
     marcar_acompanhar_processo(driver, wait)
 
@@ -1266,7 +1318,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
         driver,
         xpaths_texto,
         "campo Acompanhar Processo",
-        timeout=5,
+        timeout=4,
     )
 
     _clicar_com_fallback(driver, campo)
@@ -1287,7 +1339,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
             texto,
         )
 
-    esperar_tela_carregar(driver, 0.3)
+    esperar_tela_carregar(driver, 0.12)
 
     try:
         valor = (campo.get_attribute("value") or "").strip()
@@ -1314,7 +1366,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.3)
+    esperar_tela_carregar(driver, 0.12)
 
     xpaths_salvar = [
         "//button[normalize-space()='Salvar']",
@@ -1329,15 +1381,14 @@ def salvar_informacoes_adicionais(driver, wait):
         driver,
         xpaths_salvar,
         "botão Salvar em Informações Adicionais",
-        timeout=5,
+        timeout=4,
     )
 
     _clicar_com_fallback(driver, botao)
-    esperar_tela_carregar(driver, 0.8)
+    esperar_tela_carregar(driver, 0.35)
 
     print("[SCH] Informações Adicionais salvas.")
     return True
-
 
 
 def montar_texto_informacoes_adicionais(req, anexos_baixados, dados_pdf, analise_rapida):
@@ -1409,8 +1460,8 @@ def voltar_para_fila(driver, wait):
                 EC.element_to_be_clickable((By.XPATH, xpath))
             )
             _clicar_com_fallback(driver, botao)
-            esperar_tela_carregar(driver, 0.4)
-            _aguardar_tabela_fila(driver, timeout=5)
+            esperar_tela_carregar(driver, 0.25)
+            _aguardar_tabela_fila(driver, timeout=4)
             print("[SCH] Retorno para a fila concluído por botão.")
             return
         except Exception:
@@ -1419,8 +1470,8 @@ def voltar_para_fila(driver, wait):
     try:
         driver.switch_to.default_content()
         driver.back()
-        esperar_tela_carregar(driver, 0.5)
-        _aguardar_tabela_fila(driver, timeout=5)
+        esperar_tela_carregar(driver, 0.30)
+        _aguardar_tabela_fila(driver, timeout=4)
         print("[SCH] Retorno para a fila concluído por back().")
         return
     except Exception:

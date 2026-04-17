@@ -16,7 +16,6 @@ from funcoes_sch import (
     localizar_pdf_cct_do_requerimento,
     preencher_caracteristicas_tecnicas_com_analise,
     preencher_informacoes_adicionais_com_analise,
-    preencher_minuta_com_dados,
     voltar_para_fila,
 )
 from analise_requerimentos import analisar_requerimento
@@ -189,7 +188,6 @@ def executar_fluxo_sch(
     processar_apenas_radiacao_restrita=True,
     preencher_caracteristicas=True,
     preencher_informacoes_adicionais=False,
-    preencher_minuta=True,
     pausar_antes_anexos=False,
 ):
     pasta_base = Path(pasta_base).resolve()
@@ -208,12 +206,13 @@ def executar_fluxo_sch(
         print(f"[INFO] Os relatórios e requerimentos continuarão sendo organizados em: {pasta_base}")
 
     relatorio_execucao = []
-    inicio_execucao = datetime.now()
 
     try:
         abrir_sch(driver)
         aguardar_enter("[SCH] Faça o login manualmente no sistema e pressione Enter para continuar.")
 
+        inicio_execucao = datetime.now()
+        
         clicar_fila_em_analise(driver, wait)
         requerimentos = coletar_requerimentos(driver, wait, regras)
 
@@ -292,15 +291,12 @@ def executar_fluxo_sch(
                 "preenchimento_sch": {
                     "caracteristicas": preencher_caracteristicas,
                     "informacoes_adicionais": preencher_informacoes_adicionais,
-                    "minuta": preencher_minuta,
+                    
                 },
             }
 
             try:
                 abrir_requerimento(driver, wait, req)
-
-                if pausar_antes_anexos:
-                    aguardar_enter("[SCH] Se a tela estiver pronta, pressione Enter para seguir para a aba Anexos.")
 
                 clicar_aba_anexos(driver, wait)
 
@@ -364,13 +360,6 @@ def executar_fluxo_sch(
                     }
 
                 resumo["informacoes_adicionais"] = info_adicionais
-
-                if preencher_minuta and dados_pdf:
-                    preencher_minuta_com_dados(driver, wait, dados_pdf)
-                elif preencher_minuta and not dados_pdf:
-                    print("[SCH][WARN] Sem dados de CCT para preencher a minuta.")
-                else:
-                    print("[SCH] Preenchimento da minuta desabilitado pelo usuário.")
 
                 qtd_downloads = contar_arquivos_requerimento(pasta_req)
                 resumo["downloads_realizados"] = qtd_downloads

@@ -24,6 +24,10 @@ def _fmt_analise(resultado):
     return resultado.get("analise_documental") or {}
 
 
+def _fmt_dados_pdf(resultado):
+    return resultado.get("dados_pdf") or {}
+
+
 def _fmt_alertas(resultado):
     return _fmt_analise(resultado).get("alertas", [])
 
@@ -38,6 +42,76 @@ def _fmt_docs(resultado):
 
 def _fmt_normas(resultado):
     return _fmt_analise(resultado).get("normas_aplicaveis", [])
+
+
+def _fmt_ocd(resultado):
+    dados_pdf = _fmt_dados_pdf(resultado)
+    ocd_cct = (dados_pdf.get("ocd") or "").strip()
+    return ocd_cct or "Não identificado"
+
+
+def _fmt_equipamentos(resultado):
+    analise = _fmt_analise(resultado)
+    req = resultado.get("requerimento") or {}
+    return ", ".join(analise.get("equipamentos", [])) or (req.get("tipo_produto") or "Não identificado")
+
+
+def _fmt_numero_certificado(resultado):
+    return (_fmt_dados_pdf(resultado).get("numero_certificado") or "").strip() or "Não identificado"
+
+
+def _fmt_homologacao(resultado):
+    return (_fmt_dados_pdf(resultado).get("homologacao") or "").strip() or "Não identificado"
+
+
+def _fmt_modelo(resultado):
+    return (_fmt_dados_pdf(resultado).get("modelo") or "").strip() or "Não identificado"
+
+
+def _parse_iso_dt(valor):
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(valor)
+    except Exception:
+        return None
+
+
+def _tempo_ativo_resultado_segundos(resultado):
+    inicio = _parse_iso_dt(resultado.get("inicio"))
+    fim = _parse_iso_dt(resultado.get("fim"))
+
+    if inicio and fim and fim >= inicio:
+        return round((fim - inicio).total_seconds(), 2)
+
+    analise = _fmt_analise(resultado)
+    tempo_analise = analise.get("tempo_analise_segundos")
+    if isinstance(tempo_analise, (int, float)):
+        return round(float(tempo_analise), 2)
+
+    try:
+        return round(float(tempo_analise or 0), 2)
+    except Exception:
+        return 0.0
+
+
+def _tempo_ativo_total_segundos(resultados):
+    return round(sum(_tempo_ativo_resultado_segundos(r) for r in resultados), 2)
+
+
+def _fmt_duracao(segundos):
+    try:
+        segundos = float(segundos or 0)
+    except Exception:
+        segundos = 0.0
+
+    horas = int(segundos // 3600)
+    minutos = int((segundos % 3600) // 60)
+    secs = round(segundos % 60, 2)
+
+    if horas > 0:
+        return f"{horas:02d}:{minutos:02d}:{secs:05.2f}"
+    return f"{minutos:02d}:{secs:05.2f}"
 
 
 def _criar_tabela_normas(normas):
@@ -119,7 +193,6 @@ def _css():
 def _html_requerimento(resultado):
     req_numero = _fmt_req(resultado)
     analise = _fmt_analise(resultado)
-    req = resultado.get("requerimento") or {}
     palavras = _fmt_palavras(resultado)
     normas = _fmt_normas(resultado)
     docs = _fmt_docs(resultado)
@@ -131,8 +204,7 @@ def _html_requerimento(resultado):
         [f"<div class='alerta'>{escape(a)}</div>" for a in alertas]
     ) or "<div class='ok'>Nenhum alerta identificado.</div>"
 
-    equipamentos = ", ".join(analise.get("equipamentos", [])) or (req.get("tipo_produto") or "Não identificado")
-    ocd = analise.get("ocd", "") or "Não identificado"
+    tempo_ativo = _tempo_ativo_resultado_segundos(resultado)
 
     return f"""
     <html>
@@ -143,10 +215,13 @@ def _html_requerimento(resultado):
     </head>
     <body>
         <h1>Requerimento {escape(req_numero)}</h1>
-        <p class="muted">Tempo de análise: {escape(str(analise.get("tempo_analise_segundos", "")))} segundo(s)</p>
+        <p class="muted">Tempo de análise: {escape(str(tempo_ativo))} segundo(s)</p>
 
-        <p><b>OCD:</b> {escape(ocd)}</p>
-        <p><b>Equipamento(s):</b> {escape(equipamentos)}</p>
+        <p><b>OCD:</b> {escape(_fmt_ocd(resultado))}</p>
+        <p><b>Número do certificado:</b> {escape(_fmt_numero_certificado(resultado))}</p>
+        <p><b>Homologação:</b> {escape(_fmt_homologacao(resultado))}</p>
+        <p><b>Modelo:</b> {escape(_fmt_modelo(resultado))}</p>
+        <p><b>Equipamento(s):</b> {escape(_fmt_equipamentos(resultado))}</p>
 
         <h2>Palavras-chave encontradas</h2>
         <p>{palavras_txt}</p>
@@ -185,12 +260,13 @@ def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
     sucessos = sum(1 for x in resultados if x.get("status") == "sucesso")
     erros = sum(1 for x in resultados if x.get("status") == "erro")
     docs = sum(int(x.get("downloads_realizados", 0) or 0) for x in resultados)
-    tempo_total = fim_execucao - inicio_execucao
+
+    tempo_total_decorrido_segundos = round((fim_execucao - inicio_execucao).total_seconds(), 2)
+    tempo_ativo_automacao_segundos = _tempo_ativo_total_segundos(resultados)
 
     itens_html = []
     for idx, resultado in enumerate(resultados, start=1):
         req_numero = _fmt_req(resultado)
-        analise = _fmt_analise(resultado)
         palavras = _fmt_palavras(resultado)
         palavras_txt = " ".join([f"{escape(k)} (x{v})" for k, v in palavras.items()]) or "Nenhuma"
 
@@ -200,11 +276,14 @@ def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
             <h1>{idx} Requerimento {escape(req_numero)}</h1>
             <p>
                 A seguir, os detalhes da análise dos documentos associados a este requerimento.
-                Tempo de análise: {escape(str(analise.get("tempo_analise_segundos", "")))} segundo(s).
+                Tempo de análise: {escape(str(_tempo_ativo_resultado_segundos(resultado)))} segundo(s).
             </p>
             <ul>
-                <li><b>OCD:</b> {escape(str(analise.get("ocd", "Não identificado")))}</li>
-                <li><b>Equipamento(s):</b> {escape(", ".join(analise.get("equipamentos", [])) or "Não identificado")}</li>
+                <li><b>OCD:</b> {escape(_fmt_ocd(resultado))}</li>
+                <li><b>Número do certificado:</b> {escape(_fmt_numero_certificado(resultado))}</li>
+                <li><b>Homologação:</b> {escape(_fmt_homologacao(resultado))}</li>
+                <li><b>Modelo:</b> {escape(_fmt_modelo(resultado))}</li>
+                <li><b>Equipamento(s):</b> {escape(_fmt_equipamentos(resultado))}</li>
             </ul>
 
             <p><b>Lista das palavras-chave encontradas:</b> {palavras_txt}</p>
@@ -242,7 +321,8 @@ def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
             <ul>
                 <li>Requerimentos analisados: {total}</li>
                 <li>Documentos processados: {docs}</li>
-                <li>Tempo de processamento: {tempo_total}</li>
+                <li>Tempo ativo da automação: {_fmt_duracao(tempo_ativo_automacao_segundos)}</li>
+                <li>Tempo total decorrido: {_fmt_duracao(tempo_total_decorrido_segundos)}</li>
                 <li>Data do processamento: {fim_execucao.strftime("%H:%M:%S %d/%m/%Y")}</li>
                 <li>Versão do script: {escape(str(versao_script))}</li>
                 <li>Sucessos: {sucessos}</li>
