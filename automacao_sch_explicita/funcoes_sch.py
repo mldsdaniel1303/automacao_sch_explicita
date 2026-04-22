@@ -1,6 +1,7 @@
 import re
 import shutil
 import time
+import unicodedata
 from pathlib import Path
 
 from selenium.webdriver.common.by import By
@@ -1040,6 +1041,180 @@ def _normalizar_texto_rapido(texto):
     texto = texto.replace("módulo", "modulo")
     texto = re.sub(r"\s+", " ", texto)
     return texto.strip()
+
+
+def _remover_acentos(texto):
+    texto = str(texto or "")
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", texto)
+        if not unicodedata.combining(ch)
+    )
+
+
+def _normalizar_texto_comparacao(texto):
+    texto = _texto_limpo(texto)
+    texto = _remover_acentos(texto).lower()
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _normalizar_numero_comparacao(texto):
+    return _somente_digitos(texto)
+
+
+def _comparar_valores(sch_valor, cct_valor, campo, modo="texto"):
+    sch_bruto = _texto_limpo(sch_valor)
+    cct_bruto = _texto_limpo(cct_valor)
+
+    if not sch_bruto and not cct_bruto:
+        return {
+            "campo": campo,
+            "status": "ausente_nos_dois",
+            "valor_sch": sch_bruto,
+            "valor_cct": cct_bruto,
+            "valor_sch_normalizado": "",
+            "valor_cct_normalizado": "",
+            "diverge": False,
+        }
+
+    if not sch_bruto or not cct_bruto:
+        return {
+            "campo": campo,
+            "status": "ausente_em_um_dos_lados",
+            "valor_sch": sch_bruto,
+            "valor_cct": cct_bruto,
+            "valor_sch_normalizado": "",
+            "valor_cct_normalizado": "",
+            "diverge": True,
+        }
+
+    if modo == "numero":
+        sch_norm = _normalizar_numero_comparacao(sch_bruto)
+        cct_norm = _normalizar_numero_comparacao(cct_bruto)
+        iguais = bool(sch_norm and cct_norm and sch_norm == cct_norm)
+
+    elif modo == "texto_flex":
+        sch_norm = _normalizar_texto_comparacao(sch_bruto)
+        cct_norm = _normalizar_texto_comparacao(cct_bruto)
+        iguais = bool(
+            sch_norm and cct_norm and (
+                sch_norm == cct_norm
+                or sch_norm in cct_norm
+                or cct_norm in sch_norm
+            )
+        )
+
+    else:
+        sch_norm = _normalizar_texto_comparacao(sch_bruto)
+        cct_norm = _normalizar_texto_comparacao(cct_bruto)
+        iguais = bool(sch_norm and cct_norm and sch_norm == cct_norm)
+
+    return {
+        "campo": campo,
+        "status": "ok" if iguais else "divergente",
+        "valor_sch": sch_bruto,
+        "valor_cct": cct_bruto,
+        "valor_sch_normalizado": sch_norm,
+        "valor_cct_normalizado": cct_norm,
+        "diverge": not iguais,
+    }
+
+
+def comparar_dados_sch_x_cct(req, dados_pdf):
+    req = req or {}
+    dados_pdf = dados_pdf or {}
+
+    comparacoes = [
+        _comparar_valores(
+            req.get("certificado", ""),
+            dados_pdf.get("numero_certificado", ""),
+            "certificado",
+            modo="numero",
+        ),
+        _comparar_valores(
+            req.get("homologacao", ""),
+            dados_pdf.get("homologacao", ""),
+            "homologacao",
+            modo="numero",
+        ),
+        _comparar_valores(
+            req.get("modelo", ""),
+            dados_pdf.get("modelo", ""),
+            "modelo",
+            modo="texto",
+        ),
+        _comparar_valores(
+            req.get("fabricante", ""),
+            dados_pdf.get("fabricante", ""),
+            "fabricante",
+            modo="texto_flex",
+        ),
+        _comparar_valores(
+            req.get("tipo_produto", ""),
+            dados_pdf.get("tipo_produto", ""),
+            "tipo_produto",
+            modo="texto_flex",
+        ),
+    ]
+
+    divergencias = [item for item in comparacoes if item["diverge"]]
+    campos_ausentes = [
+        item for item in comparacoes
+        if item["status"] in {"ausente_nos_dois", "ausente_em_um_dos_lados"}
+    ]
+
+    if divergencias:
+        status_geral = "divergente"
+    elif campos_ausentes:
+        status_geral = "parcial"
+    else:
+        status_geral = "ok"
+
+    return {
+        "status_geral": status_geral,
+        "comparacoes": comparacoes,
+        "divergencias": divergencias,
+        "campos_ausentes": campos_ausentes,
+        "requerimento": req.get("requerimento", ""),
+    }
+
+
+def avisar_resultado_conferencia_sch_cct(resultado):
+    resultado = resultado or {}
+    requerimento = resultado.get("requerimento", "") or "sem_numero"
+    status_geral = resultado.get("status_geral", "desconhecido")
+    divergencias = resultado.get("divergencias", []) or []
+    campos_ausentes = resultado.get("campos_ausentes", []) or []
+
+    if status_geral == "ok":
+        print(f"[SCH] Conferência SCH x CCT OK no requerimento {requerimento}.")
+        return
+
+    if status_geral == "parcial":
+        print(
+            f"[SCH][WARN] Conferência SCH x CCT parcial no requerimento {requerimento}. "
+            "Há campos ausentes."
+        )
+    else:
+        print(
+            f"[SCH][WARN] Divergência encontrada na conferência SCH x CCT "
+            f"do requerimento {requerimento}."
+        )
+
+    for item in divergencias:
+        print(
+            f"[SCH][WARN] Campo divergente: {item['campo']} | "
+            f"SCH='{item['valor_sch']}' | "
+            f"CCT='{item['valor_cct']}'"
+        )
+
+    for item in campos_ausentes:
+        print(
+            f"[SCH][WARN] Campo ausente: {item['campo']} | "
+            f"SCH='{item['valor_sch']}' | "
+            f"CCT='{item['valor_cct']}'"
+        )
 
 
 def decidir_texto_observacao_por_cct(dados_pdf):

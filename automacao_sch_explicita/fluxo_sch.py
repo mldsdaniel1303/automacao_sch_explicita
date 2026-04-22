@@ -14,6 +14,9 @@ from funcoes_sch import (
     clicar_aba_anexos,
     baixar_todos_os_anexos_de_todas_as_categorias,
     localizar_pdf_cct_do_requerimento,
+    comparar_dados_sch_x_cct,
+    avisar_resultado_conferencia_sch_cct,
+    preencher_minuta_com_dados,
     preencher_caracteristicas_tecnicas_com_analise,
     preencher_informacoes_adicionais_com_analise,
     voltar_para_fila,
@@ -21,7 +24,7 @@ from funcoes_sch import (
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 
-VERSAO_SCRIPT = "0.6.2"
+VERSAO_SCRIPT = "0.6.4"
 
 
 def _normalizar_texto(valor):
@@ -181,6 +184,16 @@ def _criar_driver_com_pasta(pasta_base):
     return criar_driver()
 
 
+def perguntar_se_fecha_navegador():
+    while True:
+        resposta = input("[SCH] Deseja fechar o navegador ao final do fluxo? (s/n): ").strip().lower()
+        if resposta in {"s", "sim"}:
+            return True
+        if resposta in {"n", "nao", "não"}:
+            return False
+        print("[SCH][WARN] Resposta inválida. Digite 's' para sim ou 'n' para não.")
+
+
 def executar_fluxo_sch(
     pasta_base,
     limite_requerimentos=None,
@@ -189,6 +202,7 @@ def executar_fluxo_sch(
     preencher_caracteristicas=True,
     preencher_informacoes_adicionais=False,
     pausar_antes_anexos=False,
+    fechar_navegador_ao_final=None,
 ):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
@@ -207,12 +221,15 @@ def executar_fluxo_sch(
 
     relatorio_execucao = []
 
+    if fechar_navegador_ao_final is None:
+        fechar_navegador_ao_final = perguntar_se_fecha_navegador()
+
     try:
         abrir_sch(driver)
         aguardar_enter("[SCH] Faça o login manualmente no sistema e pressione Enter para continuar.")
 
         inicio_execucao = datetime.now()
-        
+
         clicar_fila_em_analise(driver, wait)
         requerimentos = coletar_requerimentos(driver, wait, regras)
 
@@ -281,6 +298,7 @@ def executar_fluxo_sch(
                 "anexos_baixados": [],
                 "dados_pdf": {},
                 "pdf_cct": "",
+                "conferencia_sch_cct": {},
                 "downloads_realizados": 0,
                 "status": "iniciado",
                 "inicio": datetime.now().isoformat(),
@@ -289,9 +307,13 @@ def executar_fluxo_sch(
                 "escopo_processamento": "radiacao_restrita" if processar_apenas_radiacao_restrita else "todos",
                 "escopo_normativo": _dados_normativos_radiacao_restrita(),
                 "preenchimento_sch": {
+                    "minuta": True,
                     "caracteristicas": preencher_caracteristicas,
                     "informacoes_adicionais": preencher_informacoes_adicionais,
-                    
+                },
+                "minuta": {
+                    "preenchida": False,
+                    "motivo": "",
                 },
             }
 
@@ -321,6 +343,40 @@ def executar_fluxo_sch(
                     dados_pdf = {}
 
                 resumo["dados_pdf"] = dados_pdf
+
+                if dados_pdf:
+                    conferencia = comparar_dados_sch_x_cct(req, dados_pdf)
+                    avisar_resultado_conferencia_sch_cct(conferencia)
+                    resumo["conferencia_sch_cct"] = conferencia
+
+                    if conferencia.get("status_geral") == "divergente":
+                        print(
+                            f"[SCH][WARN] O requerimento {numero} possui divergências entre SCH e CCT. "
+                            "Revisão manual recomendada."
+                        )
+
+                    minuta_ok = preencher_minuta_com_dados(driver, wait, dados_pdf)
+                    resumo["minuta"] = {
+                        "preenchida": bool(minuta_ok),
+                        "motivo": "preenchida_com_dados_do_cct" if minuta_ok else "falha_ou_preenchimento_parcial",
+                    }
+                else:
+                    resumo["conferencia_sch_cct"] = {
+                        "status_geral": "sem_cct",
+                        "comparacoes": [],
+                        "divergencias": [],
+                        "campos_ausentes": [],
+                        "requerimento": numero,
+                        "motivo": "cct_nao_localizado_ou_nao_parseado",
+                    }
+                    resumo["minuta"] = {
+                        "preenchida": False,
+                        "motivo": "cct_nao_localizado_ou_nao_parseado",
+                    }
+                    print(
+                        f"[SCH][WARN] Conferência SCH x CCT não executada no requerimento {numero} "
+                        "porque não houve dados válidos do CCT."
+                    )
 
                 if preencher_caracteristicas:
                     analise_rapida = preencher_caracteristicas_tecnicas_com_analise(
@@ -455,5 +511,8 @@ def executar_fluxo_sch(
         print(f"[SCH] Pasta req_report gerada em: {caminho_req_report}")
 
     finally:
-        print("[SCH] Encerrando navegador.")
-        driver.quit()
+        if fechar_navegador_ao_final:
+            print("[SCH] Encerrando navegador.")
+            driver.quit()
+        else:
+            print("[SCH] Navegador mantido aberto ao final do fluxo.")
