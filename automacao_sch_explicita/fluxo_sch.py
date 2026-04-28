@@ -14,9 +14,9 @@ from funcoes_sch import (
     clicar_aba_anexos,
     baixar_todos_os_anexos_de_todas_as_categorias,
     localizar_pdf_cct_do_requerimento,
+    extrair_tabela_tecnica_sch,
     comparar_dados_sch_x_cct,
     avisar_resultado_conferencia_sch_cct,
-    preencher_minuta_com_dados,
     preencher_caracteristicas_tecnicas_com_analise,
     preencher_informacoes_adicionais_com_analise,
     voltar_para_fila,
@@ -24,7 +24,7 @@ from funcoes_sch import (
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 
-VERSAO_SCRIPT = "0.6.4"
+VERSAO_SCRIPT = "0.6.7"
 
 
 def _normalizar_texto(valor):
@@ -233,6 +233,9 @@ def executar_fluxo_sch(
         clicar_fila_em_analise(driver, wait)
         requerimentos = coletar_requerimentos(driver, wait, regras)
 
+        # Processa do mais antigo para o mais novo (de baixo para cima na fila)
+        requerimentos = list(reversed(requerimentos))
+
         if limite_requerimentos:
             requerimentos = requerimentos[: int(limite_requerimentos)]
 
@@ -298,6 +301,7 @@ def executar_fluxo_sch(
                 "anexos_baixados": [],
                 "dados_pdf": {},
                 "pdf_cct": "",
+                "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
                 "downloads_realizados": 0,
                 "status": "iniciado",
@@ -307,13 +311,13 @@ def executar_fluxo_sch(
                 "escopo_processamento": "radiacao_restrita" if processar_apenas_radiacao_restrita else "todos",
                 "escopo_normativo": _dados_normativos_radiacao_restrita(),
                 "preenchimento_sch": {
-                    "minuta": True,
+                    "minuta": False,
                     "caracteristicas": preencher_caracteristicas,
                     "informacoes_adicionais": preencher_informacoes_adicionais,
                 },
                 "minuta": {
                     "preenchida": False,
-                    "motivo": "",
+                    "motivo": "desabilitada",
                 },
             }
 
@@ -344,6 +348,14 @@ def executar_fluxo_sch(
 
                 resumo["dados_pdf"] = dados_pdf
 
+                try:
+                    req["tabela_tecnica_sch"] = extrair_tabela_tecnica_sch(driver, wait)
+                    resumo["tabela_tecnica_sch"] = req.get("tabela_tecnica_sch", {})
+                except Exception as e:
+                    print(f"[SCH][WARN] Não foi possível extrair a tabela técnica do SCH: {e}")
+                    req["tabela_tecnica_sch"] = {"cabecalho": [], "linhas": []}
+                    resumo["tabela_tecnica_sch"] = req["tabela_tecnica_sch"]
+
                 if dados_pdf:
                     conferencia = comparar_dados_sch_x_cct(req, dados_pdf)
                     avisar_resultado_conferencia_sch_cct(conferencia)
@@ -354,23 +366,18 @@ def executar_fluxo_sch(
                             f"[SCH][WARN] O requerimento {numero} possui divergências entre SCH e CCT. "
                             "Revisão manual recomendada."
                         )
-
-                    minuta_ok = preencher_minuta_com_dados(driver, wait, dados_pdf)
-                    resumo["minuta"] = {
-                        "preenchida": bool(minuta_ok),
-                        "motivo": "preenchida_com_dados_do_cct" if minuta_ok else "falha_ou_preenchimento_parcial",
-                    }
                 else:
                     resumo["conferencia_sch_cct"] = {
                         "status_geral": "sem_cct",
                         "comparacoes": [],
                         "divergencias": [],
                         "campos_ausentes": [],
+                        "comparacao_tabela_tecnica": {
+                            "status": "sem_tabela",
+                            "motivo": "cct_nao_localizado_ou_nao_parseado",
+                            "divergencias": [],
+                        },
                         "requerimento": numero,
-                        "motivo": "cct_nao_localizado_ou_nao_parseado",
-                    }
-                    resumo["minuta"] = {
-                        "preenchida": False,
                         "motivo": "cct_nao_localizado_ou_nao_parseado",
                     }
                     print(
@@ -435,6 +442,8 @@ def executar_fluxo_sch(
                                     "erro",
                                     "erro_categoria",
                                     "nao_identificado",
+                                    "duplicado_ignorado",
+                                    "ja_existente",
                                 }
                             }
                         )

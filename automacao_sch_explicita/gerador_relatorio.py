@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -26,6 +27,10 @@ def _fmt_analise(resultado):
 
 def _fmt_dados_pdf(resultado):
     return resultado.get("dados_pdf") or {}
+
+
+def _fmt_conferencia(resultado):
+    return resultado.get("conferencia_sch_cct") or {}
 
 
 def _fmt_alertas(resultado):
@@ -66,6 +71,10 @@ def _fmt_homologacao(resultado):
 
 def _fmt_modelo(resultado):
     return (_fmt_dados_pdf(resultado).get("modelo") or "").strip() or "Não identificado"
+
+
+def _fmt_minuta(resultado):
+    return resultado.get("minuta") or {}
 
 
 def _parse_iso_dt(valor):
@@ -190,9 +199,262 @@ def _css():
     """
 
 
+def _nome_humano_campo(campo):
+    nomes = {
+        "certificado": "Certificado",
+        "homologacao": "Homologação",
+        "modelo": "Modelo",
+        "fabricante": "Fabricante",
+        "tipo_produto": "Tipo do produto",
+    }
+    return nomes.get(campo, str(campo or "").replace("_", " ").title())
+
+
+def _construir_mensagens_conferencia(conferencia):
+    conferencia = conferencia or {}
+    mensagens = conferencia.get("mensagens_humanas") or []
+    if mensagens:
+        return mensagens
+
+    divergencias = conferencia.get("divergencias", []) or []
+    mensagens = []
+
+    for item in divergencias:
+        nome_campo = _nome_humano_campo(item.get("campo", ""))
+
+        valor_sch = (item.get("valor_sch") or "").strip() or "não foi identificado"
+        valor_cct = (item.get("valor_cct") or "").strip() or "não foi identificado"
+
+        mensagens.append(
+            f'{nome_campo}: no SCH está "{valor_sch}", mas no CCT está "{valor_cct}".'
+        )
+
+    return mensagens
+
+
+def _extrair_itens_de_mensagens(mensagens):
+    itens = []
+
+    padrao = re.compile(
+        r'^(?P<campo>.+?): no SCH está "(?P<sch>.*?)", mas no CCT está "(?P<cct>.*?)"\.$',
+        re.IGNORECASE,
+    )
+
+    mapa_campos = {
+        "certificado": "certificado",
+        "homologação": "homologacao",
+        "homologacao": "homologacao",
+        "modelo": "modelo",
+        "fabricante": "fabricante",
+        "tipo do produto": "tipo_produto",
+    }
+
+    for msg in mensagens or []:
+        texto = str(msg or "").strip()
+        m = padrao.match(texto)
+        if not m:
+            continue
+
+        campo_txt = m.group("campo").strip().lower()
+        campo = mapa_campos.get(campo_txt, campo_txt.replace(" ", "_"))
+
+        itens.append(
+            {
+                "campo": campo,
+                "valor_sch": m.group("sch").strip(),
+                "valor_cct": m.group("cct").strip(),
+                "status": "divergente",
+            }
+        )
+
+    return itens
+
+
+def _valor_html(valor):
+    return escape(str(valor or "Não identificado"))
+
+
+def _criar_tabela_campos(titulo, linhas):
+    corpo = [
+        f"<h3>{escape(titulo)}</h3>",
+        "<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>",
+    ]
+
+    for campo, valor in linhas:
+        corpo.append(
+            "<tr>"
+            f"<td>{escape(str(campo))}</td>"
+            f"<td>{_valor_html(valor)}</td>"
+            "</tr>"
+        )
+
+    corpo.append("</tbody></table>")
+    return "".join(corpo)
+
+
+def _linhas_tabela_sch(resultado):
+    req = resultado.get("requerimento") or {}
+    return [
+        ("Requerimento", req.get("requerimento", "")),
+        ("Homologação", req.get("homologacao", "")),
+        ("Certificado", req.get("certificado", "")),
+        ("Tipo do produto", req.get("tipo_produto", "")),
+        ("Modelo", req.get("modelo", "")),
+        ("Solicitante", req.get("solicitante", "")),
+        ("Fabricante", req.get("fabricante", "")),
+        ("Data de conclusão", req.get("data_conclusao", "")),
+    ]
+
+
+def _linhas_tabela_cct(resultado):
+    dados_pdf = _fmt_dados_pdf(resultado)
+    return [
+        ("Número do certificado", dados_pdf.get("numero_certificado", "")),
+        ("Homologação", dados_pdf.get("homologacao", "")),
+        ("Tipo do produto", dados_pdf.get("tipo_produto", "")),
+        ("Modelo", dados_pdf.get("modelo", "")),
+        ("Fabricante", dados_pdf.get("fabricante", "")),
+        ("OCD", dados_pdf.get("ocd", "")),
+        ("Classificação da observação", dados_pdf.get("observacao_classificacao", "")),
+    ]
+
+
+def _criar_tabela_comparacao(resultado):
+    conferencia = _fmt_conferencia(resultado)
+    comparacoes = conferencia.get("comparacoes", []) or []
+    divergencias = conferencia.get("divergencias", []) or []
+    mensagens = conferencia.get("mensagens_humanas", []) or []
+
+    itens = comparacoes or divergencias
+
+    if not itens:
+        itens = _extrair_itens_de_mensagens(mensagens)
+
+    if not itens:
+        req = resultado.get("requerimento") or {}
+        dados_pdf = _fmt_dados_pdf(resultado)
+
+        itens = [
+            {
+                "campo": "certificado",
+                "valor_sch": req.get("certificado", ""),
+                "valor_cct": dados_pdf.get("numero_certificado", ""),
+                "status": "não_comparado",
+            },
+            {
+                "campo": "homologacao",
+                "valor_sch": req.get("homologacao", ""),
+                "valor_cct": dados_pdf.get("homologacao", ""),
+                "status": "não_comparado",
+            },
+            {
+                "campo": "modelo",
+                "valor_sch": req.get("modelo", ""),
+                "valor_cct": dados_pdf.get("modelo", ""),
+                "status": "não_comparado",
+            },
+            {
+                "campo": "fabricante",
+                "valor_sch": req.get("fabricante", ""),
+                "valor_cct": dados_pdf.get("fabricante", ""),
+                "status": "não_comparado",
+            },
+            {
+                "campo": "tipo_produto",
+                "valor_sch": req.get("tipo_produto", ""),
+                "valor_cct": dados_pdf.get("tipo_produto", ""),
+                "status": "não_comparado",
+            },
+        ]
+
+    linhas = [
+        "<h3>Tabela comparativa SCH x CCT</h3>",
+        "<table><thead><tr><th>Campo</th><th>SCH</th><th>CCT</th><th>Status</th></tr></thead><tbody>",
+    ]
+
+    for item in itens:
+        campo = _nome_humano_campo(item.get("campo", ""))
+        valor_sch = (item.get("valor_sch") or "").strip() or "Não identificado"
+        valor_cct = (item.get("valor_cct") or "").strip() or "Não identificado"
+        status = item.get("status", "")
+
+        if status == "ok":
+            status_txt = "OK"
+        elif status == "divergente":
+            status_txt = "Divergente"
+        elif status == "ausente_em_um_dos_lados":
+            status_txt = "Ausente em um dos lados"
+        elif status == "ausente_nos_dois":
+            status_txt = "Ausente nos dois"
+        elif status == "não_comparado":
+            status_txt = "Não comparado"
+        else:
+            status_txt = status or "Não identificado"
+
+        linhas.append(
+            "<tr>"
+            f"<td>{escape(campo)}</td>"
+            f"<td>{escape(valor_sch)}</td>"
+            f"<td>{escape(valor_cct)}</td>"
+            f"<td>{escape(status_txt)}</td>"
+            "</tr>"
+        )
+
+    linhas.append("</tbody></table>")
+    return "".join(linhas)
+
+
+def _html_conferencia_bloco(resultado):
+    conferencia = _fmt_conferencia(resultado)
+    status_geral = (conferencia.get("status_geral") or "").strip().lower()
+
+    blocos = ["<h2>Conferência SCH x CCT</h2>"]
+
+    if status_geral == "ok":
+        blocos.append("<div class='ok'>Sem incongruências entre os dados do SCH e do CCT.</div>")
+    elif status_geral == "sem_cct":
+        blocos.append("<div class='alerta'>Não foi possível realizar a conferência SCH x CCT porque não houve dados válidos do CCT.</div>")
+    else:
+        blocos.append("<div class='alerta'>Foram encontradas incongruências entre os dados do SCH e do CCT.</div>")
+
+    blocos.append(_criar_tabela_comparacao(resultado))
+    blocos.append(_criar_tabela_campos("Tabela do SCH", _linhas_tabela_sch(resultado)))
+    blocos.append(_criar_tabela_campos("Tabela do CCT", _linhas_tabela_cct(resultado)))
+
+    return "".join(blocos)
+
+
+def _html_dados_sch(resultado):
+    info_adicionais = resultado.get("informacoes_adicionais") or {}
+    minuta = _fmt_minuta(resultado)
+
+    minuta_preenchida = minuta.get("preenchida", False)
+    minuta_motivo = minuta.get("motivo", "")
+
+    linhas = [
+        "<h2>Dados do SCH</h2>",
+        "<ul>",
+        f"<li><b>Observação em Características Técnicas:</b> {escape(str(resultado.get('observacao_caracteristicas', '')))}</li>",
+        f"<li><b>Informações Adicionais:</b> {escape(str(info_adicionais.get('texto', '')))}</li>",
+        f"<li><b>Minuta preenchida:</b> {'Sim' if minuta_preenchida else 'Não'}</li>",
+    ]
+
+    if minuta_motivo:
+        linhas.append(f"<li><b>Status da minuta:</b> {escape(str(minuta_motivo))}</li>")
+
+    linhas.extend(
+        [
+            f"<li><b>CCT localizado:</b> {escape(str(resultado.get('pdf_cct', '')))}</li>",
+            f"<li><b>Downloads realizados:</b> {escape(str(resultado.get('downloads_realizados', 0)))}</li>",
+            "</ul>",
+        ]
+    )
+
+    return "".join(linhas)
+
+
 def _html_requerimento(resultado):
     req_numero = _fmt_req(resultado)
-    analise = _fmt_analise(resultado)
     palavras = _fmt_palavras(resultado)
     normas = _fmt_normas(resultado)
     docs = _fmt_docs(resultado)
@@ -243,13 +505,9 @@ def _html_requerimento(resultado):
         <h3>Outros Documentos Processados</h3>
         {_criar_tabela_outros(docs.get("outros_documentos", []))}
 
-        <h2>Dados do SCH</h2>
-        <ul>
-            <li><b>Observação em Características Técnicas:</b> {escape(str(resultado.get("observacao_caracteristicas", "")))}</li>
-            <li><b>Informações Adicionais:</b> {escape(str((resultado.get("informacoes_adicionais") or {}).get("texto", "")))}</li>
-            <li><b>CCT localizado:</b> {escape(str(resultado.get("pdf_cct", "")))}</li>
-            <li><b>Downloads realizados:</b> {escape(str(resultado.get("downloads_realizados", 0)))}</li>
-        </ul>
+        {_html_conferencia_bloco(resultado)}
+
+        {_html_dados_sch(resultado)}
     </body>
     </html>
     """
@@ -300,6 +558,10 @@ def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
 
             <h2>Alertas</h2>
             {"".join([f"<div class='alerta'>{escape(a)}</div>" for a in _fmt_alertas(resultado)]) or "<div class='ok'>Nenhum alerta identificado.</div>"}
+
+            {_html_conferencia_bloco(resultado)}
+
+            {_html_dados_sch(resultado)}
             """
         )
 

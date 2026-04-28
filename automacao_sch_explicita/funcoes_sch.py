@@ -384,8 +384,8 @@ def abrir_requerimento(driver, wait, req):
         try:
             if el.is_displayed() and el.is_enabled():
                 _clicar_com_fallback(driver, el)
-                esperar_tela_carregar(driver, 0.18)
-                _aguardar_iframe_detalhe(driver, timeout=6)
+                esperar_tela_carregar(driver, 0.04)
+                _aguardar_iframe_detalhe(driver, timeout=4)
                 print("[SCH] Requerimento aberto. Tela de detalhes pronta.")
                 return
         except Exception as e:
@@ -394,15 +394,14 @@ def abrir_requerimento(driver, wait, req):
 
     try:
         _clicar_com_fallback(driver, linha)
-        esperar_tela_carregar(driver, 0.18)
-        _aguardar_iframe_detalhe(driver, timeout=6)
+        esperar_tela_carregar(driver, 0.04)
+        _aguardar_iframe_detalhe(driver, timeout=4)
         print("[SCH] Requerimento aberto por clique na linha. Tela de detalhes pronta.")
         return
     except Exception as e:
         ultimo_erro = e
 
     raise Exception(f"Não foi possível abrir o requerimento {numero}. Último erro: {ultimo_erro}")
-
 
 def entrar_iframe_detalhe_analise(driver, wait=None):
     driver.switch_to.default_content()
@@ -417,8 +416,8 @@ def _clicar_aba_por_rotulo(
     rotulo_principal,
     rotulos_alternativos=None,
     condicao_pronta=None,
-    timeout_click=2.2,
-    timeout_pronta=2.2,
+    timeout_click=1.4,
+    timeout_pronta=1.4,
 ):
     rotulos = [rotulo_principal]
     if rotulos_alternativos:
@@ -440,11 +439,11 @@ def _clicar_aba_por_rotulo(
 
     for _ in range(2):
         entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.06)
+        esperar_tela_carregar(driver, 0.02)
 
         for xpath in candidatos:
             try:
-                aba = WebDriverWait(driver, timeout_click).until(
+                aba = WebDriverWait(driver, timeout_click, poll_frequency=0.08).until(
                     EC.element_to_be_clickable((By.XPATH, xpath))
                 )
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", aba)
@@ -462,8 +461,8 @@ def _clicar_aba_por_rotulo(
                     except Exception:
                         return False
 
-                WebDriverWait(driver, timeout_pronta).until(_confirmar)
-                esperar_tela_carregar(driver, 0.06)
+                WebDriverWait(driver, timeout_pronta, poll_frequency=0.08).until(_confirmar)
+                esperar_tela_carregar(driver, 0.02)
 
                 print(f"[SCH] Aba '{rotulo_principal}' aberta.")
                 return xpath
@@ -474,7 +473,6 @@ def _clicar_aba_por_rotulo(
 
     raise Exception(f"Não foi possível abrir a aba '{rotulo_principal}'. Último erro: {ultimo_erro}")
 
-
 def clicar_aba_anexos(driver, wait):
     print("[SCH] Abrindo aba Anexos...")
     _clicar_aba_por_rotulo(
@@ -482,8 +480,8 @@ def clicar_aba_anexos(driver, wait):
         wait,
         "Anexos",
         condicao_pronta=lambda d: _ha_tabela_anexos(d) or _ha_botoes_de_categoria_anexos(d),
-        timeout_click=2.2,
-        timeout_pronta=2.2,
+        timeout_click=1.2,
+        timeout_pronta=1.2,
     )
 
 
@@ -498,18 +496,17 @@ def clicar_categoria_anexo(driver, wait, categoria):
     print(f"[SCH] Abrindo categoria de anexos: {categoria}")
     ultimo_erro = None
 
-    for tentativa in range(2):
+    for _ in range(2):
         entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.08)
+        esperar_tela_carregar(driver, 0.02)
 
         for xpath in xpaths:
             try:
-                botao = WebDriverWait(driver, 2.5).until(
+                botao = WebDriverWait(driver, 1.8, poll_frequency=0.08).until(
                     EC.element_to_be_clickable((By.XPATH, xpath))
                 )
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao)
                 driver.execute_script("arguments[0].click();", botao)
-                esperar_tela_carregar(driver, 0.10)
 
                 def _categoria_pronta(d):
                     try:
@@ -518,7 +515,9 @@ def clicar_categoria_anexo(driver, wait, categoria):
                     except Exception:
                         return False
 
-                WebDriverWait(driver, 1.8).until(_categoria_pronta)
+                WebDriverWait(driver, 1.4, poll_frequency=0.08).until(_categoria_pronta)
+                esperar_tela_carregar(driver, 0.03)
+
                 print(f"[SCH] Categoria aberta: {categoria}")
                 return
 
@@ -629,13 +628,14 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
     pasta_categoria.mkdir(parents=True, exist_ok=True)
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.08)
+    esperar_tela_carregar(driver, 0.03)
 
     tabela = localizar_tabela_anexos(driver, wait)
     total_linhas = len(tabela.find_elements(By.XPATH, ".//tr[td]"))
 
     print(f"[SCH] {total_linhas} linha(s) na categoria {categoria}.")
     anexos_categoria = []
+    vistos_categoria = set()
 
     for i in range(1, total_linhas + 1):
         try:
@@ -669,6 +669,28 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
                 "contato": contato,
                 "status": "pendente",
             }
+
+            chave_doc = (
+                str(id_linha).strip(),
+                str(tipo_documento).strip().lower(),
+                str(nome_anexo).strip().lower(),
+            )
+
+            if chave_doc in vistos_categoria:
+                registro["status"] = "duplicado_ignorado"
+                anexos_categoria.append(registro)
+                continue
+
+            vistos_categoria.add(chave_doc)
+
+            nome_limpo_existente = nome_seguro(nome_anexo) or f"anexo_{i}"
+            arquivos_existentes = list(pasta_categoria.glob(f"{nome_limpo_existente}.*"))
+            if arquivos_existentes:
+                registro["status"] = "ja_existente"
+                registro["arquivo"] = str(arquivos_existentes[0])
+                anexos_categoria.append(registro)
+                print(f"[SCH] Anexo já existente, ignorando novo download: {arquivos_existentes[0].name}")
+                continue
 
             xpaths_download = [
                 ".//td[5]//a",
@@ -770,6 +792,7 @@ def baixar_todos_os_anexos_de_todas_as_categorias(
             "Fotos do produto",
         ]
 
+    categorias = list(dict.fromkeys(categorias))
     categorias = sorted(categorias, key=lambda x: 0 if "CCT" in x.upper() else 1)
 
     print(f"[SCH] Iniciando download das categorias de anexos: {len(categorias)} categorias.")
@@ -799,7 +822,6 @@ def baixar_todos_os_anexos_de_todas_as_categorias(
 
     print("[SCH] Download de todas as categorias finalizado.")
     return anexos_baixados
-
 
 def localizar_pdf_cct_do_requerimento(pasta_req, regras=None):
     pasta_req = Path(pasta_req)
@@ -908,7 +930,7 @@ def _preencher_campo(driver, wait, xpaths, valor, descricao):
             valor,
         )
 
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
 
 def preencher_campo_numero_certificado(driver, wait, valor):
@@ -1121,6 +1143,127 @@ def _comparar_valores(sch_valor, cct_valor, campo, modo="texto"):
     }
 
 
+
+def _normalizar_texto_tabela(valor):
+    valor = _texto_limpo(valor)
+    valor = _remover_acentos(valor).lower()
+    valor = re.sub(r"\s+", " ", valor).strip()
+    return valor
+
+
+def _normalizar_linha_tabela(linha):
+    return [_normalizar_texto_tabela(cel) for cel in (linha or [])]
+
+
+def _cabecalho_tem_taxa_maxima_transmissao(cabecalho):
+    texto = " | ".join(_normalizar_linha_tabela(cabecalho))
+    return "taxa maxima de transmissao" in texto
+
+
+def _remover_coluna_taxa_transmissao_cct(tabela_cct):
+    if not tabela_cct:
+        return {"cabecalho": [], "linhas": []}
+
+    cabecalho = list(tabela_cct.get("cabecalho", []) or [])
+    linhas = [list(l) for l in (tabela_cct.get("linhas", []) or [])]
+
+    if not cabecalho:
+        return {"cabecalho": cabecalho, "linhas": linhas}
+
+    if _cabecalho_tem_taxa_maxima_transmissao(cabecalho):
+        cabecalho = cabecalho[:-1]
+        linhas = [linha[:-1] if len(linha) >= 1 else linha for linha in linhas]
+
+    return {
+        "cabecalho": cabecalho,
+        "linhas": linhas,
+    }
+
+
+def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
+    tabela_sch = tabela_sch or {}
+    tabela_cct = tabela_cct or {}
+
+    cab_sch = list(tabela_sch.get("cabecalho", []) or [])
+    linhas_sch = [list(l) for l in (tabela_sch.get("linhas", []) or [])]
+
+    tabela_cct_ajustada = _remover_coluna_taxa_transmissao_cct(tabela_cct)
+    cab_cct = list(tabela_cct_ajustada.get("cabecalho", []) or [])
+    linhas_cct = [list(l) for l in (tabela_cct_ajustada.get("linhas", []) or [])]
+
+    if not linhas_sch and not linhas_cct:
+        return {
+            "status": "sem_tabela",
+            "motivo": "nenhuma_tabela_disponivel",
+            "divergencias": [],
+        }
+
+    divergencias = []
+
+    if len(linhas_sch) != len(linhas_cct):
+        divergencias.append(
+            {
+                "tipo": "quantidade_linhas_diferente",
+                "linhas_sch": len(linhas_sch),
+                "linhas_cct": len(linhas_cct),
+            }
+        )
+
+    total_linhas = min(len(linhas_sch), len(linhas_cct))
+
+    for idx_linha in range(total_linhas):
+        linha_sch_bruta = linhas_sch[idx_linha]
+        linha_cct_bruta = linhas_cct[idx_linha]
+
+        linha_sch = _normalizar_linha_tabela(linha_sch_bruta)
+        linha_cct = _normalizar_linha_tabela(linha_cct_bruta)
+
+        if len(linha_sch) != len(linha_cct):
+            divergencias.append(
+                {
+                    "tipo": "quantidade_colunas_diferente_na_linha",
+                    "linha": idx_linha + 1,
+                    "colunas_sch": len(linha_sch),
+                    "colunas_cct": len(linha_cct),
+                }
+            )
+
+        comparar_ate = min(len(linha_sch), len(linha_cct))
+
+        for idx_col in range(comparar_ate):
+            valor_sch = linha_sch[idx_col]
+            valor_cct = linha_cct[idx_col]
+
+            if valor_sch != valor_cct:
+                nome_coluna = ""
+                if idx_col < len(cab_sch):
+                    nome_coluna = cab_sch[idx_col]
+                elif idx_col < len(cab_cct):
+                    nome_coluna = cab_cct[idx_col]
+                else:
+                    nome_coluna = f"coluna_{idx_col + 1}"
+
+                divergencias.append(
+                    {
+                        "tipo": "valor_diferente",
+                        "linha": idx_linha + 1,
+                        "coluna": idx_col + 1,
+                        "nome_coluna": nome_coluna,
+                        "valor_sch": linha_sch_bruta[idx_col] if idx_col < len(linha_sch_bruta) else "",
+                        "valor_cct": linha_cct_bruta[idx_col] if idx_col < len(linha_cct_bruta) else "",
+                    }
+                )
+
+    return {
+        "status": "ok" if not divergencias else "divergente",
+        "cabecalho_sch": cab_sch,
+        "cabecalho_cct_considerado": cab_cct,
+        "linhas_sch": len(linhas_sch),
+        "linhas_cct_consideradas": len(linhas_cct),
+        "coluna_ignorada_cct": "Taxa Máxima de Transmissão",
+        "divergencias": divergencias,
+    }
+
 def comparar_dados_sch_x_cct(req, dados_pdf):
     req = req or {}
     dados_pdf = dados_pdf or {}
@@ -1164,6 +1307,23 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         if item["status"] in {"ausente_nos_dois", "ausente_em_um_dos_lados"}
     ]
 
+    comparacao_tabela = comparar_tabelas_tecnicas_sch_cct(
+        req.get("tabela_tecnica_sch"),
+        dados_pdf.get("tabela_tecnica_cct"),
+    )
+
+    if comparacao_tabela.get("status") == "divergente":
+        divergencias.append(
+            {
+                "campo": "tabela_tecnica",
+                "status": "divergente",
+                "valor_sch": "Tabela técnica do SCH",
+                "valor_cct": "Tabela técnica do CCT",
+                "diverge": True,
+                "detalhes_tabela": comparacao_tabela,
+            }
+        )
+
     if divergencias:
         status_geral = "divergente"
     elif campos_ausentes:
@@ -1176,6 +1336,7 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         "comparacoes": comparacoes,
         "divergencias": divergencias,
         "campos_ausentes": campos_ausentes,
+        "comparacao_tabela_tecnica": comparacao_tabela,
         "requerimento": req.get("requerimento", ""),
     }
 
@@ -1183,38 +1344,83 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
 def avisar_resultado_conferencia_sch_cct(resultado):
     resultado = resultado or {}
     requerimento = resultado.get("requerimento", "") or "sem_numero"
-    status_geral = resultado.get("status_geral", "desconhecido")
     divergencias = resultado.get("divergencias", []) or []
-    campos_ausentes = resultado.get("campos_ausentes", []) or []
 
-    if status_geral == "ok":
+    if not divergencias:
         print(f"[SCH] Conferência SCH x CCT OK no requerimento {requerimento}.")
+        resultado["mensagens_humanas"] = []
         return
 
-    if status_geral == "parcial":
-        print(
-            f"[SCH][WARN] Conferência SCH x CCT parcial no requerimento {requerimento}. "
-            "Há campos ausentes."
-        )
-    else:
-        print(
-            f"[SCH][WARN] Divergência encontrada na conferência SCH x CCT "
-            f"do requerimento {requerimento}."
-        )
+    mensagens_humanas = []
+
+    print(f"[SCH][INCONGRUÊNCIA] Requerimento {requerimento}")
+
+    nomes_campos = {
+        "certificado": "Certificado",
+        "homologacao": "Homologação",
+        "modelo": "Modelo",
+        "fabricante": "Fabricante",
+        "tipo_produto": "Tipo do produto",
+        "tabela_tecnica": "Tabela técnica",
+    }
 
     for item in divergencias:
-        print(
-            f"[SCH][WARN] Campo divergente: {item['campo']} | "
-            f"SCH='{item['valor_sch']}' | "
-            f"CCT='{item['valor_cct']}'"
+        campo = item.get("campo", "")
+        nome_campo = nomes_campos.get(campo, campo.replace("_", " ").title())
+
+        if campo == "tabela_tecnica":
+            detalhes = item.get("detalhes_tabela", {}) or {}
+            diverg_tabela = detalhes.get("divergencias", []) or []
+
+            if not diverg_tabela:
+                mensagem = "Tabela técnica: divergência identificada, mas sem detalhes disponíveis."
+                print(f"[SCH][INCONGRUÊNCIA] - {mensagem}")
+                mensagens_humanas.append(mensagem)
+                continue
+
+            for div in diverg_tabela:
+                tipo = div.get("tipo", "")
+
+                if tipo == "quantidade_linhas_diferente":
+                    mensagem = (
+                        "Tabela técnica: quantidade de linhas diferente. "
+                        f"No SCH há {div.get('linhas_sch', 0)} linha(s) e no CCT há {div.get('linhas_cct', 0)} linha(s)."
+                    )
+                elif tipo == "quantidade_colunas_diferente_na_linha":
+                    mensagem = (
+                        f"Tabela técnica: quantidade de colunas diferente na linha {div.get('linha', '')}. "
+                        f"No SCH há {div.get('colunas_sch', 0)} coluna(s) e no CCT há {div.get('colunas_cct', 0)} coluna(s)."
+                    )
+                elif tipo == "valor_diferente":
+                    mensagem = (
+                        f"Tabela técnica, linha {div.get('linha', '')}, coluna '{div.get('nome_coluna', '')}': "
+                        f'no SCH está "{div.get("valor_sch", "")}", mas no CCT está "{div.get("valor_cct", "")}".'
+                    )
+                else:
+                    mensagem = f"Tabela técnica: divergência detectada ({tipo})."
+
+                print(f"[SCH][INCONGRUÊNCIA] - {mensagem}")
+                mensagens_humanas.append(mensagem)
+
+            continue
+
+        valor_sch = (item.get("valor_sch") or "").strip()
+        valor_cct = (item.get("valor_cct") or "").strip()
+
+        if not valor_sch:
+            valor_sch = "não foi identificado"
+        if not valor_cct:
+            valor_cct = "não foi identificado"
+
+        mensagem = (
+            f'{nome_campo}: no SCH está "{valor_sch}", '
+            f'mas no CCT está "{valor_cct}".'
         )
 
-    for item in campos_ausentes:
-        print(
-            f"[SCH][WARN] Campo ausente: {item['campo']} | "
-            f"SCH='{item['valor_sch']}' | "
-            f"CCT='{item['valor_cct']}'"
-        )
+        print(f"[SCH][INCONGRUÊNCIA] - {mensagem}")
+        mensagens_humanas.append(mensagem)
+
+    resultado["mensagens_humanas"] = mensagens_humanas
 
 
 def decidir_texto_observacao_por_cct(dados_pdf):
@@ -1247,8 +1453,8 @@ def clicar_aba_caracteristicas_tecnicas(driver, wait):
         "Características Técnicas",
         rotulos_alternativos=["Caracteristicas Tecnicas", "Características", "Caracteristicas"],
         condicao_pronta=_ha_campo_caracteristicas,
-        timeout_click=2.2,
-        timeout_pronta=2.2,
+        timeout_click=1.2,
+        timeout_pronta=1.2,
     )
 
 
@@ -1261,7 +1467,7 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
     html = texto.replace("\n", "<br>")
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
     for xpath in xpaths_input:
         try:
@@ -1290,7 +1496,7 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
                                 texto_plano,
                             )
 
-                        esperar_tela_carregar(driver, 0.12)
+                        esperar_tela_carregar(driver, 0.04)
                         return
                 except Exception:
                     continue
@@ -1305,11 +1511,10 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
 
     entrar_iframe_detalhe_analise(driver, wait)
     if _tentar_preencher_editor_rico(driver, xpaths_editor, html):
-        esperar_tela_carregar(driver, 0.12)
+        esperar_tela_carregar(driver, 0.04)
         return
 
     raise Exception(f"Não foi possível localizar o campo de texto: {descricao}")
-
 
 def preencher_observacao_caracteristicas(driver, wait, texto):
     print(f"[SCH] Preenchendo observação técnica: {texto}")
@@ -1348,8 +1553,8 @@ def clicar_aba_informacoes_adicionais(driver, wait):
         "Informações Adicionais",
         rotulos_alternativos=["Informacoes Adicionais", "Informações", "Informacoes"],
         condicao_pronta=_ha_campo_informacoes_adicionais,
-        timeout_click=2.2,
-        timeout_pronta=2.2,
+        timeout_click=1.2,
+        timeout_pronta=1.2,
     )
 
 
@@ -1628,15 +1833,18 @@ def voltar_para_fila(driver, wait):
         "//img[contains(@src,'voltar')]/..",
     ]
 
+    driver.switch_to.default_content()
+
     for xpath in candidatos:
         try:
-            driver.switch_to.default_content()
-            botao = WebDriverWait(driver, 2).until(
+            botao = WebDriverWait(driver, 1.2, poll_frequency=0.08).until(
                 EC.element_to_be_clickable((By.XPATH, xpath))
             )
             _clicar_com_fallback(driver, botao)
-            esperar_tela_carregar(driver, 0.25)
-            _aguardar_tabela_fila(driver, timeout=4)
+
+            WebDriverWait(driver, 3, poll_frequency=0.08).until(
+                EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
+            )
             print("[SCH] Retorno para a fila concluído por botão.")
             return
         except Exception:
@@ -1645,8 +1853,10 @@ def voltar_para_fila(driver, wait):
     try:
         driver.switch_to.default_content()
         driver.back()
-        esperar_tela_carregar(driver, 0.30)
-        _aguardar_tabela_fila(driver, timeout=4)
+
+        WebDriverWait(driver, 3, poll_frequency=0.08).until(
+            EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
+        )
         print("[SCH] Retorno para a fila concluído por back().")
         return
     except Exception:
