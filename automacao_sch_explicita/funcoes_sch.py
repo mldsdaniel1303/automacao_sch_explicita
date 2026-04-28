@@ -857,206 +857,6 @@ def localizar_pdf_cct_do_requerimento(pasta_req, regras=None):
     return None
 
 
-def clicar_aba_minuta(driver, wait):
-    print("[SCH] Abrindo aba Minuta...")
-    _clicar_aba_por_rotulo(driver, wait, "Minuta")
-
-
-def _achar_campo_visivel(driver, wait, xpaths, descricao):
-    entrar_iframe_detalhe_analise(driver, wait)
-
-    for xpath in xpaths:
-        try:
-            elementos = WebDriverWait(driver, 4).until(
-                EC.presence_of_all_elements_located((By.XPATH, xpath))
-            )
-
-            for el in elementos:
-                try:
-                    if el.is_displayed() and el.is_enabled():
-                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-                        return el
-                except Exception:
-                    continue
-        except Exception:
-            continue
-
-    candidatos = driver.find_elements(
-        By.XPATH,
-        "//input[not(@type='hidden')] | //textarea | //select"
-    )
-
-    visiveis = []
-    for el in candidatos:
-        try:
-            if el.is_displayed() and el.is_enabled():
-                visiveis.append(el)
-        except Exception:
-            continue
-
-    if visiveis:
-        print(
-            f"[SCH][WARN] Campo específico não encontrado para '{descricao}'. "
-            f"Usando fallback com {len(visiveis)} campo(s) visível(is)."
-        )
-        return visiveis[0]
-
-    raise Exception(f"Campo não encontrado/visível: {descricao}")
-
-
-def _preencher_campo(driver, wait, xpaths, valor, descricao):
-    valor = (valor or "").strip()
-    if not valor:
-        print(f"[SCH][WARN] Valor vazio para o campo {descricao}.")
-        return
-
-    print(f"[SCH] Preenchendo {descricao}: {valor}")
-    campo = _achar_campo_visivel(driver, wait, xpaths, descricao)
-    _clicar_com_fallback(driver, campo)
-
-    try:
-        campo.send_keys(Keys.CONTROL, "a")
-        campo.send_keys(Keys.DELETE)
-        campo.send_keys(valor)
-    except Exception:
-        driver.execute_script(
-            """
-            arguments[0].value = arguments[1];
-            arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
-            arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-            arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
-            """,
-            campo,
-            valor,
-        )
-
-    esperar_tela_carregar(driver, 0.04)
-
-
-def preencher_campo_numero_certificado(driver, wait, valor):
-    xpaths = [
-        "//label[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'CERTIFICADO')]"
-        "/following::*[self::input or self::textarea or self::select][1]",
-
-        "//td[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'CERTIFICADO')]"
-        "/following-sibling::td//*[self::input or self::textarea or self::select][1]",
-
-        "//span[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'CERTIFICADO')]"
-        "/following::*[self::input or self::textarea or self::select][1]",
-
-        "//input[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'CERT')]",
-        "//input[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'CERT')]",
-        "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'CERT')]",
-        "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'CERT')]",
-
-        "(//input[not(@type='hidden') and not(@disabled)] | //textarea[not(@disabled)] | //select[not(@disabled)])[1]",
-    ]
-    _preencher_campo(driver, wait, xpaths, valor, "número do certificado")
-
-
-def preencher_campo_homologacao(driver, wait, valor):
-    xpaths = [
-        "//label[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'HOMOLOG')]"
-        "/following::*[self::input or self::textarea or self::select][1]",
-
-        "//td[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'HOMOLOG')]"
-        "/following-sibling::td//*[self::input or self::textarea or self::select][1]",
-
-        "//span[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'HOMOLOG')]"
-        "/following::*[self::input or self::textarea or self::select][1]",
-
-        "//input[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'HOMOLOG')]",
-        "//input[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'HOMOLOG')]",
-        "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'HOMOLOG')]",
-        "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'HOMOLOG')]",
-
-        "(//input[not(@type='hidden') and not(@disabled)] | //textarea[not(@disabled)] | //select[not(@disabled)])[2]",
-    ]
-    _preencher_campo(driver, wait, xpaths, valor, "homologação")
-
-
-def preencher_campo_modelo(driver, wait, valor):
-    xpaths = [
-        "//label[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'MODELO')]"
-        "/following::*[self::input or self::textarea or self::select][1]",
-
-        "//td[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'MODELO')]"
-        "/following-sibling::td//*[self::input or self::textarea or self::select][1]",
-
-        "//span[contains(translate(normalize-space(.), "
-        "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'MODELO')]"
-        "/following::*[self::input or self::textarea or self::select][1]",
-
-        "//input[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MODELO')]",
-        "//input[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MODELO')]",
-        "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MODELO')]",
-        "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MODELO')]",
-
-        "(//input[not(@type='hidden') and not(@disabled)] | //textarea[not(@disabled)] | //select[not(@disabled)])[3]",
-    ]
-    _preencher_campo(driver, wait, xpaths, valor, "modelo")
-
-
-def preencher_minuta_com_dados(driver, wait, dados_pdf):
-    try:
-        clicar_aba_minuta(driver, wait)
-        entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.2)
-    except Exception as e:
-        print(f"[SCH][WARN] Não foi possível abrir a aba Minuta: {e}")
-        return False
-
-    erros = []
-
-    try:
-        preencher_campo_numero_certificado(
-            driver, wait, dados_pdf.get("numero_certificado", "")
-        )
-    except Exception as e:
-        print(f"[SCH][WARN] Não foi possível preencher número do certificado: {e}")
-        erros.append(f"numero_certificado: {e}")
-
-    try:
-        preencher_campo_homologacao(
-            driver, wait, dados_pdf.get("homologacao", "")
-        )
-    except Exception as e:
-        print(f"[SCH][WARN] Não foi possível preencher homologação: {e}")
-        erros.append(f"homologacao: {e}")
-
-    try:
-        preencher_campo_modelo(
-            driver, wait, dados_pdf.get("modelo", "")
-        )
-    except Exception as e:
-        print(f"[SCH][WARN] Não foi possível preencher modelo: {e}")
-        erros.append(f"modelo: {e}")
-
-    if erros:
-        print(f"[SCH][WARN] Minuta preenchida parcialmente. Problemas: {erros}")
-        return False
-
-    print("[SCH] Minuta preenchida com sucesso.")
-    return True
-
-
 def _normalizar_texto_rapido(texto):
     texto = (texto or "").lower()
     texto = texto.replace("não", "nao")
@@ -1151,45 +951,156 @@ def _normalizar_texto_tabela(valor):
     return valor
 
 
-def _normalizar_linha_tabela(linha):
-    return [_normalizar_texto_tabela(cel) for cel in (linha or [])]
+def _cabecalho_canonico(valor):
+    texto = _normalizar_texto_tabela(valor)
 
-
-def _cabecalho_tem_taxa_maxima_transmissao(cabecalho):
-    texto = " | ".join(_normalizar_linha_tabela(cabecalho))
-    return "taxa maxima de transmissao" in texto
-
-
-def _remover_coluna_taxa_transmissao_cct(tabela_cct):
-    if not tabela_cct:
-        return {"cabecalho": [], "linhas": []}
-
-    cabecalho = list(tabela_cct.get("cabecalho", []) or [])
-    linhas = [list(l) for l in (tabela_cct.get("linhas", []) or [])]
-
-    if not cabecalho:
-        return {"cabecalho": cabecalho, "linhas": linhas}
-
-    if _cabecalho_tem_taxa_maxima_transmissao(cabecalho):
-        cabecalho = cabecalho[:-1]
-        linhas = [linha[:-1] if len(linha) >= 1 else linha for linha in linhas]
-
-    return {
-        "cabecalho": cabecalho,
-        "linhas": linhas,
+    mapeamentos = {
+        "faixa_freq_tx": [
+            "faixa de frequencias tx mhz",
+            "faixa de frequencias tx",
+            "faixa de frequencias",
+            "faixa de frequencias frequency range mhz",
+            "faixa de frequencias frequency range",
+            "frequency range mhz",
+            "frequency range",
+        ],
+        "potencia_max_saida": [
+            "potencia maxima de saida w",
+            "potencia maxima de saida",
+            "saida maximum power w",
+            "maximum power w",
+            "maximum power",
+        ],
+        "designacao_emissoes": [
+            "designacao de emissoes",
+            "designation of emission",
+            "designation of emissions",
+        ],
+        "tecnologias": [
+            "tecnologias",
+            "tecnologia technology",
+            "technology",
+            "technologies",
+        ],
+        "tipo_modulacao": [
+            "tipo de modulacao",
+            "type of modulation",
+            "modulacao",
+            "modulation",
+        ],
     }
+
+    for canonico, aliases in mapeamentos.items():
+        for alias in aliases:
+            if alias in texto:
+                return canonico
+
+    return ""
+
+
+def _normalizar_valor_tabela_por_campo(campo, valor):
+    texto = _normalizar_texto_tabela(valor)
+
+    if not texto:
+        return ""
+
+    if campo == "faixa_freq_tx":
+        texto = texto.replace(" ate ", "-")
+        texto = texto.replace(" a ", "-")
+        texto = texto.replace("–", "-")
+        texto = texto.replace("—", "-")
+        texto = texto.replace("mhz", "")
+        texto = texto.replace(" ", "")
+        return texto
+
+    if campo == "potencia_max_saida":
+        texto = texto.replace("w", "").strip()
+        texto = texto.replace(",", ".")
+        try:
+            return f"{float(texto):.6f}".rstrip("0").rstrip(".")
+        except Exception:
+            return texto
+
+    if campo == "designacao_emissoes":
+        return texto.upper().replace(" ", "")
+
+    if campo == "tecnologias":
+        # equivalências
+        texto = texto.replace("fhss", "salto em frequencia")
+        texto = texto.replace("dsss", "sequencia direta")
+
+        # reduz descrições longas para a mesma ideia semântica
+        if "salto em frequencia" in texto:
+            return "salto em frequencia"
+
+        if "sequencia direta" in texto:
+            return "sequencia direta"
+
+        if "bluetooth low energy" in texto or "bluetooth le" in texto:
+            return "bluetooth le"
+
+        texto = re.sub(r"\s+", " ", texto).strip()
+        return texto
+
+    if campo == "tipo_modulacao":
+        return texto.upper().replace(" ", "")
+
+    return texto
+
+
+def _mapear_colunas_relevantes(cabecalho):
+    mapeamento = {}
+
+    for idx, col in enumerate(cabecalho or []):
+        canonico = _cabecalho_canonico(col)
+        if canonico and canonico not in mapeamento:
+            mapeamento[canonico] = idx
+
+    return mapeamento
+
+
+def _extrair_linhas_comparaveis(tabela):
+    tabela = tabela or {}
+    cabecalho = list(tabela.get("cabecalho", []) or [])
+    linhas = [list(l) for l in (tabela.get("linhas", []) or [])]
+
+    mapa_colunas = _mapear_colunas_relevantes(cabecalho)
+
+    campos_alvo = [
+        "faixa_freq_tx",
+        "potencia_max_saida",
+        "designacao_emissoes",
+        "tecnologias",
+        "tipo_modulacao",
+    ]
+
+    linhas_saida = []
+    for linha in linhas:
+        registro = {}
+        for campo in campos_alvo:
+            idx = mapa_colunas.get(campo)
+            valor = linha[idx] if idx is not None and idx < len(linha) else ""
+            registro[campo] = _normalizar_valor_tabela_por_campo(campo, valor)
+
+        if any(registro.values()):
+            linhas_saida.append(registro)
+
+    return linhas_saida
+
+
+def _assinatura_linha_tabela(registro):
+    return (
+        registro.get("faixa_freq_tx", ""),
+        registro.get("potencia_max_saida", ""),
+        registro.get("designacao_emissoes", ""),
+        registro.get("tecnologias", ""),
+        registro.get("tipo_modulacao", ""),
+    )
 
 
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
-    tabela_sch = tabela_sch or {}
-    tabela_cct = tabela_cct or {}
-
-    cab_sch = list(tabela_sch.get("cabecalho", []) or [])
-    linhas_sch = [list(l) for l in (tabela_sch.get("linhas", []) or [])]
-
-    tabela_cct_ajustada = _remover_coluna_taxa_transmissao_cct(tabela_cct)
-    cab_cct = list(tabela_cct_ajustada.get("cabecalho", []) or [])
-    linhas_cct = [list(l) for l in (tabela_cct_ajustada.get("linhas", []) or [])]
+    linhas_sch = _extrair_linhas_comparaveis(tabela_sch)
+    linhas_cct = _extrair_linhas_comparaveis(tabela_cct)
 
     if not linhas_sch and not linhas_cct:
         return {
@@ -1198,71 +1109,177 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
             "divergencias": [],
         }
 
+    linhas_sch_ord = sorted(linhas_sch, key=_assinatura_linha_tabela)
+    linhas_cct_ord = sorted(linhas_cct, key=_assinatura_linha_tabela)
+
     divergencias = []
 
-    if len(linhas_sch) != len(linhas_cct):
+    if len(linhas_sch_ord) != len(linhas_cct_ord):
         divergencias.append(
             {
                 "tipo": "quantidade_linhas_diferente",
-                "linhas_sch": len(linhas_sch),
-                "linhas_cct": len(linhas_cct),
+                "linhas_sch": len(linhas_sch_ord),
+                "linhas_cct": len(linhas_cct_ord),
             }
         )
 
-    total_linhas = min(len(linhas_sch), len(linhas_cct))
+    total = min(len(linhas_sch_ord), len(linhas_cct_ord))
+    campos = [
+        ("faixa_freq_tx", "Faixa de Frequências Tx (MHz)"),
+        ("potencia_max_saida", "Potência Máxima de Saída (W)"),
+        ("designacao_emissoes", "Designação de Emissões"),
+        ("tecnologias", "Tecnologias"),
+        ("tipo_modulacao", "Tipo de Modulação"),
+    ]
 
-    for idx_linha in range(total_linhas):
-        linha_sch_bruta = linhas_sch[idx_linha]
-        linha_cct_bruta = linhas_cct[idx_linha]
+    for i in range(total):
+        sch = linhas_sch_ord[i]
+        cct = linhas_cct_ord[i]
 
-        linha_sch = _normalizar_linha_tabela(linha_sch_bruta)
-        linha_cct = _normalizar_linha_tabela(linha_cct_bruta)
-
-        if len(linha_sch) != len(linha_cct):
-            divergencias.append(
-                {
-                    "tipo": "quantidade_colunas_diferente_na_linha",
-                    "linha": idx_linha + 1,
-                    "colunas_sch": len(linha_sch),
-                    "colunas_cct": len(linha_cct),
-                }
-            )
-
-        comparar_ate = min(len(linha_sch), len(linha_cct))
-
-        for idx_col in range(comparar_ate):
-            valor_sch = linha_sch[idx_col]
-            valor_cct = linha_cct[idx_col]
+        for chave, nome_coluna in campos:
+            valor_sch = sch.get(chave, "")
+            valor_cct = cct.get(chave, "")
 
             if valor_sch != valor_cct:
-                nome_coluna = ""
-                if idx_col < len(cab_sch):
-                    nome_coluna = cab_sch[idx_col]
-                elif idx_col < len(cab_cct):
-                    nome_coluna = cab_cct[idx_col]
-                else:
-                    nome_coluna = f"coluna_{idx_col + 1}"
-
                 divergencias.append(
                     {
                         "tipo": "valor_diferente",
-                        "linha": idx_linha + 1,
-                        "coluna": idx_col + 1,
+                        "linha": i + 1,
+                        "coluna": nome_coluna,
                         "nome_coluna": nome_coluna,
-                        "valor_sch": linha_sch_bruta[idx_col] if idx_col < len(linha_sch_bruta) else "",
-                        "valor_cct": linha_cct_bruta[idx_col] if idx_col < len(linha_cct_bruta) else "",
+                        "valor_sch": valor_sch,
+                        "valor_cct": valor_cct,
                     }
                 )
 
     return {
         "status": "ok" if not divergencias else "divergente",
-        "cabecalho_sch": cab_sch,
-        "cabecalho_cct_considerado": cab_cct,
-        "linhas_sch": len(linhas_sch),
-        "linhas_cct_consideradas": len(linhas_cct),
-        "coluna_ignorada_cct": "Taxa Máxima de Transmissão",
+        "linhas_sch": len(linhas_sch_ord),
+        "linhas_cct": len(linhas_cct_ord),
+        "campos_comparados": [
+            "Faixa de Frequências Tx (MHz)",
+            "Potência Máxima de Saída (W)",
+            "Designação de Emissões",
+            "Tecnologias",
+            "Tipo de Modulação",
+        ],
+        "colunas_ignoradas_do_cct": [
+            "SAR Cabeça / SAR head",
+            "SAR Corpo / SAR body",
+            "Padrão / Standard",
+            "Taxa de transmissão / Transmission rate",
+        ],
         "divergencias": divergencias,
     }
+
+
+def extrair_tabela_tecnica_sch(driver, wait):
+    clicar_aba_caracteristicas_tecnicas(driver, wait)
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.04)
+
+    xpaths_tabela = [
+        "//table[.//th[contains(., 'Faixa')] and .//th[contains(., 'Pot')]]",
+        "//table[.//th[contains(., 'Frequ')] and .//th[contains(., 'Emiss')]]",
+        "//table[.//td[contains(., 'Faixa')] and .//td[contains(., 'Pot')]]",
+        "//table[.//td[contains(., 'Frequ')] and .//td[contains(., 'Emiss')]]",
+    ]
+
+    tabela = None
+    for xp in xpaths_tabela:
+        try:
+            tabela = WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.XPATH, xp))
+            )
+            break
+        except Exception:
+            continue
+
+    if tabela is None:
+        return {"cabecalho": [], "linhas": []}
+
+    trs = tabela.find_elements(By.XPATH, ".//tr")
+    if not trs:
+        return {"cabecalho": [], "linhas": []}
+
+    cabecalho = []
+    linhas = []
+
+    for tr in trs:
+        celulas = tr.find_elements(By.XPATH, "./th | ./td")
+        valores = [_texto_limpo(c.text) for c in celulas]
+
+        if not any(valores):
+            continue
+
+        if not cabecalho and _eh_linha_cabecalho_tabela_sch(valores):
+            cabecalho = valores
+            continue
+
+        linhas.append(valores)
+
+    if not cabecalho and linhas:
+        primeira = linhas[0]
+        if _eh_linha_cabecalho_tabela_sch(primeira):
+            cabecalho = primeira
+            linhas = linhas[1:]
+
+    return _limpar_tabela_tecnica_sch(cabecalho, linhas)
+
+
+def _normalizar_cabecalho_tabela_sch(texto):
+    texto = _texto_limpo(texto)
+    texto = _remover_acentos(texto).lower()
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _eh_linha_cabecalho_tabela_sch(celulas):
+    if not celulas:
+        return False
+
+    texto = " | ".join(_normalizar_cabecalho_tabela_sch(c) for c in celulas if c)
+    sinais = [
+        "faixa",
+        "frequencia",
+        "potencia",
+        "emissao",
+        "tecnologia",
+        "modulacao",
+    ]
+    return sum(1 for s in sinais if s in texto) >= 2
+
+
+def _limpar_tabela_tecnica_sch(cabecalho, linhas):
+    cabecalho = [_texto_limpo(c) for c in (cabecalho or [])]
+    linhas = [[_texto_limpo(c) for c in (linha or [])] for linha in (linhas or [])]
+
+    total_colunas = max([len(cabecalho)] + [len(l) for l in linhas] + [0])
+    if total_colunas == 0:
+        return {"cabecalho": [], "linhas": []}
+
+    cabecalho = cabecalho + [""] * (total_colunas - len(cabecalho))
+    linhas = [l + [""] * (total_colunas - len(l)) for l in linhas]
+
+    manter = []
+    for idx in range(total_colunas):
+        valores_coluna = [cabecalho[idx]] + [linha[idx] for linha in linhas]
+        if any(_texto_limpo(v) for v in valores_coluna):
+            manter.append(idx)
+
+    cabecalho = [cabecalho[idx] for idx in manter]
+    linhas = [[linha[idx] for idx in manter] for linha in linhas]
+
+    # No SCH queremos só as 5 colunas comparáveis
+    max_colunas_comparaveis = 5
+    cabecalho = cabecalho[:max_colunas_comparaveis]
+    linhas = [linha[:max_colunas_comparaveis] for linha in linhas]
+
+    return {
+        "cabecalho": cabecalho,
+        "linhas": [linha for linha in linhas if any(_texto_limpo(c) for c in linha)],
+    }
+
 
 def comparar_dados_sch_x_cct(req, dados_pdf):
     req = req or {}
@@ -1393,7 +1410,7 @@ def avisar_resultado_conferencia_sch_cct(resultado):
                     )
                 elif tipo == "valor_diferente":
                     mensagem = (
-                        f"Tabela técnica, linha {div.get('linha', '')}, coluna '{div.get('nome_coluna', '')}': "
+                        f"Tabela técnica, linha {div.get('linha', '')}, campo '{div.get('nome_coluna', '')}': "
                         f'no SCH está "{div.get("valor_sch", "")}", mas no CCT está "{div.get("valor_cct", "")}".'
                     )
                 else:
@@ -1611,7 +1628,7 @@ def _checkbox_esta_marcado(elemento):
 
 def marcar_acompanhar_processo(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
     checkbox_xpaths = [
         "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
@@ -1655,7 +1672,7 @@ def marcar_acompanhar_processo(driver, wait):
     )
 
     _clicar_com_fallback(driver, alvo_clique)
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
     entrar_iframe_detalhe_analise(driver, wait)
 
@@ -1682,7 +1699,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
         return False
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
     marcar_acompanhar_processo(driver, wait)
 
@@ -1719,7 +1736,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
             texto,
         )
 
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
     try:
         valor = (campo.get_attribute("value") or "").strip()
@@ -1746,7 +1763,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.12)
+    esperar_tela_carregar(driver, 0.04)
 
     xpaths_salvar = [
         "//button[normalize-space()='Salvar']",
@@ -1765,7 +1782,7 @@ def salvar_informacoes_adicionais(driver, wait):
     )
 
     _clicar_com_fallback(driver, botao)
-    esperar_tela_carregar(driver, 0.35)
+    esperar_tela_carregar(driver, 0.10)
 
     print("[SCH] Informações Adicionais salvas.")
     return True
