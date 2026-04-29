@@ -19,12 +19,14 @@ from funcoes_sch import (
     avisar_resultado_conferencia_sch_cct,
     preencher_caracteristicas_tecnicas_com_analise,
     preencher_informacoes_adicionais_com_analise,
+    avaliar_validade_cct,
+    preencher_minuta_sar_se_necessario,
     voltar_para_fila,
 )
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 
-VERSAO_SCRIPT = "0.6.7"
+VERSAO_SCRIPT = "0.6.8"
 
 
 def _normalizar_texto(valor):
@@ -301,6 +303,8 @@ def executar_fluxo_sch(
                 "anexos_baixados": [],
                 "dados_pdf": {},
                 "pdf_cct": "",
+                "validade_cct": {},
+                "sar_minuta": {},
                 "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
                 "downloads_realizados": 0,
@@ -347,6 +351,14 @@ def executar_fluxo_sch(
                     dados_pdf = {}
 
                 resumo["dados_pdf"] = dados_pdf
+
+                validade_cct = avaliar_validade_cct(dados_pdf)
+                resumo["validade_cct"] = validade_cct
+
+                if validade_cct.get("status") == "alerta":
+                    print(f"[SCH][WARN] CCT: {validade_cct.get('mensagem')}")
+                else:
+                    print(f"[SCH] CCT: {validade_cct.get('mensagem')}")
 
                 try:
                     req["tabela_tecnica_sch"] = extrair_tabela_tecnica_sch(driver, wait)
@@ -403,6 +415,27 @@ def executar_fluxo_sch(
 
                 resumo["analise_rapida"] = analise_rapida
                 resumo["observacao_caracteristicas"] = analise_rapida.get("texto", "")
+
+                sar_minuta = preencher_minuta_sar_se_necessario(
+                    driver=driver,
+                    wait=wait,
+                    dados_pdf=dados_pdf,
+                )
+
+                resumo["sar_minuta"] = sar_minuta
+                resumo["minuta"] = {
+                    "preenchida": bool(sar_minuta.get("preenchido_automaticamente")),
+                    "salvo": bool(sar_minuta.get("salvo")),
+                    "confirmado_apos_salvar": bool(sar_minuta.get("confirmado_apos_salvar")),
+                    "status": sar_minuta.get("status", ""),
+                    "mensagem": sar_minuta.get("mensagem", ""),
+                    "frase": sar_minuta.get("frase", ""),
+                }   
+
+                resumo["preenchimento_sch"]["minuta"] = bool(
+                    sar_minuta.get("preenchido_automaticamente")
+                )
+
 
                 if preencher_informacoes_adicionais:
                     info_adicionais = preencher_informacoes_adicionais_com_analise(

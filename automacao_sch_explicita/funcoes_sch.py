@@ -2,8 +2,9 @@ import re
 import shutil
 import time
 import unicodedata
-from pathlib import Path
 
+from pathlib import Path
+from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -857,6 +858,145 @@ def localizar_pdf_cct_do_requerimento(pasta_req, regras=None):
     return None
 
 
+def _texto_total_dados_pdf(dados_pdf):
+    partes = []
+
+    def percorrer(valor):
+        if valor is None:
+            return
+
+        if isinstance(valor, dict):
+            for v in valor.values():
+                percorrer(v)
+            return
+
+        if isinstance(valor, list):
+            for v in valor:
+                percorrer(v)
+            return
+
+        partes.append(str(valor))
+
+    percorrer(dados_pdf or {})
+    return " ".join(partes)
+
+
+def _extrair_primeira_data_por_rotulos(texto, rotulos):
+    texto = texto or ""
+
+    for rotulo in rotulos:
+        padrao = rf"{rotulo}[^\d]{{0,40}}(\d{{2}}/\d{{2}}/\d{{4}})"
+        m = re.search(padrao, texto, re.I)
+        if m:
+            return m.group(1)
+
+    return ""
+
+
+def _converter_data_br(valor):
+    if not valor:
+        return None
+
+    valor = str(valor).strip()
+
+    formatos = [
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+    ]
+
+    for formato in formatos:
+        try:
+            return datetime.strptime(valor[:10], formato).date()
+        except Exception:
+            continue
+
+    return None
+
+
+def _somar_anos(data, anos):
+    try:
+        return data.replace(year=data.year + anos)
+    except ValueError:
+        return data.replace(month=2, day=28, year=data.year + anos)
+
+
+def avaliar_validade_cct(dados_pdf):
+    dados_pdf = dados_pdf or {}
+
+    emissao_bruta = (
+        dados_pdf.get("data_emissao")
+        or dados_pdf.get("emissao")
+        or dados_pdf.get("data_de_emissao")
+        or dados_pdf.get("emitido_em")
+        or ""
+    )
+
+    validade_bruta = (
+        dados_pdf.get("data_validade")
+        or dados_pdf.get("validade")
+        or dados_pdf.get("data_de_validade")
+        or dados_pdf.get("valido_ate")
+        or dados_pdf.get("válido_até")
+        or ""
+    )
+
+    texto_total = _texto_total_dados_pdf(dados_pdf)
+
+    if not emissao_bruta:
+        emissao_bruta = _extrair_primeira_data_por_rotulos(
+            texto_total,
+            [
+                "emiss[aã]o",
+                "data de emiss[aã]o",
+                "emitido em",
+            ],
+        )
+
+    if not validade_bruta:
+        validade_bruta = _extrair_primeira_data_por_rotulos(
+            texto_total,
+            [
+                "validade",
+                "data de validade",
+                "v[aá]lido at[eé]",
+                "valido ate",
+            ],
+        )
+
+    data_emissao = _converter_data_br(emissao_bruta)
+    data_validade = _converter_data_br(validade_bruta)
+
+    resultado = {
+        "data_emissao_bruta": emissao_bruta,
+        "data_validade_bruta": validade_bruta,
+        "data_emissao": data_emissao.isoformat() if data_emissao else "",
+        "data_validade": data_validade.isoformat() if data_validade else "",
+        "status": "nao_verificado",
+        "mensagem": "",
+    }
+
+    if not data_emissao or not data_validade:
+        resultado["status"] = "alerta"
+        resultado["mensagem"] = "Não foi possível identificar emissão e/ou validade do CCT."
+        return resultado
+
+    limite = _somar_anos(data_emissao, 2)
+
+    resultado["limite_2_anos"] = limite.isoformat()
+    resultado["dias_entre_emissao_validade"] = (data_validade - data_emissao).days
+
+    if data_validade <= limite:
+        resultado["status"] = "ok"
+        resultado["mensagem"] = "Validade do CCT dentro do limite de até 2 anos após a emissão."
+    else:
+        resultado["status"] = "alerta"
+        resultado["mensagem"] = "Validade do CCT superior a 2 anos após a emissão. Conferir manualmente."
+
+    return resultado
+
+
+
 def _normalizar_texto_rapido(texto):
     texto = (texto or "").lower()
     texto = texto.replace("não", "nao")
@@ -1478,7 +1618,7 @@ def clicar_aba_caracteristicas_tecnicas(driver, wait):
 def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpaths_editor=None):
     if not texto:
         print(f"[SCH][WARN] Texto vazio para {descricao}.")
-        return
+        return False
 
     texto_plano = texto.replace("<br>", "\n").strip()
     html = texto.replace("\n", "<br>")
@@ -1491,32 +1631,42 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
             elementos = WebDriverWait(driver, 3).until(
                 EC.presence_of_all_elements_located((By.XPATH, xpath))
             )
+
             for campo in elementos:
                 try:
-                    if campo.is_displayed() and campo.is_enabled():
-                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", campo)
-                        _clicar_com_fallback(driver, campo)
+                    if not campo.is_displayed() or not campo.is_enabled():
+                        continue
 
-                        try:
-                            campo.send_keys(Keys.CONTROL, "a")
-                            campo.send_keys(Keys.DELETE)
-                            campo.send_keys(texto_plano)
-                        except Exception:
-                            driver.execute_script(
-                                """
-                                arguments[0].value = arguments[1];
-                                arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
-                                arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-                                arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
-                                """,
-                                campo,
-                                texto_plano,
-                            )
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", campo)
+                    _clicar_com_fallback(driver, campo)
 
-                        esperar_tela_carregar(driver, 0.04)
-                        return
+                    try:
+                        campo.send_keys(Keys.CONTROL, "a")
+                        campo.send_keys(Keys.DELETE)
+                        campo.send_keys(texto_plano)
+                    except Exception:
+                        driver.execute_script("arguments[0].value = arguments[1];", campo, texto_plano)
+
+                    driver.execute_script(
+                        """
+                        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+                        """,
+                        campo,
+                    )
+
+                    try:
+                        campo.send_keys(Keys.TAB)
+                    except Exception:
+                        pass
+
+                    esperar_tela_carregar(driver, 0.08)
+                    return True
+
                 except Exception:
                     continue
+
         except Exception:
             pass
 
@@ -1527,25 +1677,526 @@ def _preencher_texto_em_area(driver, wait, texto, descricao, xpaths_input, xpath
     ]
 
     entrar_iframe_detalhe_analise(driver, wait)
+
     if _tentar_preencher_editor_rico(driver, xpaths_editor, html):
-        esperar_tela_carregar(driver, 0.04)
-        return
+        esperar_tela_carregar(driver, 0.08)
+        return True
 
     raise Exception(f"Não foi possível localizar o campo de texto: {descricao}")
 
 def preencher_observacao_caracteristicas(driver, wait, texto):
     print(f"[SCH] Preenchendo observação técnica: {texto}")
+
     xpaths_input = [
         "//label[contains(translate(normalize-space(.), "
         "'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç', "
         "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ'), 'OBSERVA')]"
         "/following::*[self::textarea or self::input][1]",
+
         "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
         "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
         "//input[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
         "//input[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+
+        "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'CARACTERISTICA')]",
+        "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'CARACTERISTICA')]",
     ]
-    _preencher_texto_em_area(driver, wait, texto, "observação em Características Técnicas", xpaths_input)
+
+    return _preencher_texto_em_area(
+        driver,
+        wait,
+        texto,
+        "observação em Características Técnicas",
+        xpaths_input,
+    )
+
+
+def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
+
+    xpaths_salvar = [
+        "//button[normalize-space()='Salvar']",
+        "//a[normalize-space()='Salvar']",
+        "//input[@type='submit' and contains(@value,'Salvar')]",
+        "//input[@type='button' and contains(@value,'Salvar')]",
+        "//span[normalize-space()='Salvar']/ancestor::button[1]",
+        "//span[normalize-space()='Salvar']/ancestor::a[1]",
+        "//*[@title='Salvar']",
+        "//*[self::a or self::button][contains(normalize-space(), 'Salvar')]",
+    ]
+
+    botao_salvar = None
+
+    for xpath in xpaths_salvar:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+            for el in elementos:
+                try:
+                    if el.is_displayed() and el.is_enabled():
+                        botao_salvar = el
+                        break
+                except Exception:
+                    continue
+
+            if botao_salvar:
+                break
+
+        except Exception:
+            continue
+
+    if not botao_salvar:
+        print("[SCH][WARN] Botão Salvar não encontrado em Características Técnicas.")
+        return {
+            "salvo": False,
+            "motivo": "botao_salvar_nao_encontrado",
+        }
+
+    print("[SCH] Salvando Características Técnicas...")
+
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao_salvar)
+    _clicar_com_fallback(driver, botao_salvar)
+
+    esperar_tela_carregar(driver, 0.8)
+
+    try:
+        alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
+        print(f"[SCH] Alerta após salvar Características Técnicas: {alert.text}")
+        alert.accept()
+        esperar_tela_carregar(driver, 0.5)
+    except Exception:
+        pass
+
+    confirmado = False
+
+    if texto_esperado:
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+
+            texto_esperado_norm = _normalizar_texto_comparacao(texto_esperado)
+
+            xpaths_validacao = [
+                "//textarea[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+                "//textarea[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+                "//input[contains(translate(@name,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+                "//input[contains(translate(@id,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'OBSERV')]",
+                "//*[@contenteditable='true']",
+                "//div[contains(@class,'ql-editor')]",
+            ]
+
+            for xpath in xpaths_validacao:
+                elementos = driver.find_elements(By.XPATH, xpath)
+
+                for el in elementos:
+                    try:
+                        if not el.is_displayed():
+                            continue
+
+                        valor = driver.execute_script(
+                            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+                            el,
+                        )
+
+                        if texto_esperado_norm and texto_esperado_norm in _normalizar_texto_comparacao(valor):
+                            confirmado = True
+                            break
+
+                    except Exception:
+                        continue
+
+                if confirmado:
+                    break
+
+        except Exception:
+            confirmado = False
+
+    if confirmado:
+        print("[SCH] Características Técnicas salvas e conferidas com sucesso.")
+    else:
+        print("[SCH][WARN] Características Técnicas salvas, mas não foi possível confirmar o texto após salvar.")
+
+    return {
+        "salvo": True,
+        "confirmado_apos_salvar": confirmado,
+    }
+
+
+FRASE_SAR_NAO_APLICAVEL = "Ensaio de SAR não aplicável."
+
+
+def analisar_sar_cct(dados_pdf):
+    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
+
+    termos_nao_aplicavel = [
+        "ensaio de sar nao aplicavel",
+        "sar nao aplicavel",
+        "ensaio sar nao aplicavel",
+        "nao se aplica sar",
+        "sar nao se aplica",
+    ]
+
+    termos_dados_sar = [
+        "sar cabeca",
+        "sar corpo",
+        "sar head",
+        "sar body",
+        "valor sar",
+        "limite sar",
+        "taxa de absorcao especifica",
+        "w kg",
+        "w/kg",
+    ]
+
+    tem_nao_aplicavel = any(t in texto for t in termos_nao_aplicavel)
+    tem_dados_sar = any(t in texto for t in termos_dados_sar)
+
+    if tem_nao_aplicavel and tem_dados_sar:
+        return {
+            "status": "conflito",
+            "sar_aplicavel": None,
+            "preencher_frase": False,
+            "frase": "",
+            "mensagem": "Foram encontrados sinais de SAR não aplicável e também dados de SAR. Conferir manualmente.",
+        }
+
+    if tem_dados_sar:
+        return {
+            "status": "sar_aplicavel",
+            "sar_aplicavel": True,
+            "preencher_frase": False,
+            "frase": "",
+            "mensagem": "Foram encontrados dados/colunas de SAR no CCT. A frase não será inserida.",
+        }
+
+    if tem_nao_aplicavel:
+        return {
+            "status": "sar_nao_aplicavel",
+            "sar_aplicavel": False,
+            "preencher_frase": True,
+            "frase": FRASE_SAR_NAO_APLICAVEL,
+            "mensagem": "Foi identificado no CCT que o ensaio de SAR não é aplicável.",
+        }
+
+    return {
+        "status": "nao_identificado",
+        "sar_aplicavel": None,
+        "preencher_frase": False,
+        "frase": "",
+        "mensagem": "Não foi possível determinar automaticamente a aplicabilidade de SAR.",
+    }
+
+
+def _ha_campo_corrigir_minuta(driver):
+    xpaths = [
+        "//textarea[not(@disabled)]",
+        "//*[@contenteditable='true']",
+        "//div[contains(@class,'ql-editor')]",
+        "//iframe",
+        "//*[contains(normalize-space(), 'Minuta')]",
+        "//*[contains(normalize-space(), 'Corrigir Minuta')]",
+    ]
+
+    for xp in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xp)
+            if any(el.is_displayed() for el in elementos):
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
+def clicar_corrigir_minuta(driver, wait):
+    print("[SCH] Abrindo Corrigir Minuta...")
+
+    _clicar_aba_por_rotulo(
+        driver,
+        wait,
+        "Corrigir Minuta",
+        rotulos_alternativos=[
+            "Minuta",
+            "Corrigir minuta",
+            "Correção da Minuta",
+            "Correcao da Minuta",
+        ],
+        condicao_pronta=_ha_campo_corrigir_minuta,
+        timeout_click=2.0,
+        timeout_pronta=2.0,
+    )
+
+
+def _inserir_texto_sem_apagar(driver, wait, texto, descricao, xpaths_input, xpaths_editor=None):
+    if not texto:
+        print(f"[SCH][WARN] Texto vazio para {descricao}.")
+        return False
+
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
+
+    texto_norm = _normalizar_texto_comparacao(texto)
+
+    for xpath in xpaths_input:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for campo in elementos:
+                try:
+                    if not campo.is_displayed() or not campo.is_enabled():
+                        continue
+
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", campo)
+
+                    valor_atual = driver.execute_script(
+                        "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+                        campo,
+                    ) or ""
+
+                    if texto_norm in _normalizar_texto_comparacao(valor_atual):
+                        print(f"[SCH] Texto já existente em {descricao}.")
+                        return True
+
+                    novo_texto = f"{valor_atual}\n{texto}".strip() if valor_atual else texto
+                    tag = (campo.tag_name or "").lower()
+
+                    if tag in {"textarea", "input"}:
+                        driver.execute_script("arguments[0].value = arguments[1];", campo, novo_texto)
+                    else:
+                        novo_html = novo_texto.replace("\n", "<br>")
+                        driver.execute_script("arguments[0].innerHTML = arguments[1];", campo, novo_html)
+
+                    driver.execute_script(
+                        """
+                        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+                        """,
+                        campo,
+                    )
+
+                    try:
+                        campo.send_keys(Keys.TAB)
+                    except Exception:
+                        pass
+
+                    esperar_tela_carregar(driver, 0.08)
+                    print(f"[SCH] Texto inserido em {descricao}.")
+                    return True
+
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    xpaths_editor = xpaths_editor or [
+        "//*[@contenteditable='true']",
+        "//div[contains(@class,'ql-editor')]",
+        "//div[contains(@class,'ui-editor')]//*[@contenteditable='true']",
+    ]
+
+    for xpath in xpaths_editor:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for editor in elementos:
+                try:
+                    if not editor.is_displayed():
+                        continue
+
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", editor)
+
+                    valor_atual = driver.execute_script(
+                        "return (arguments[0].innerText || arguments[0].textContent || '').trim();",
+                        editor,
+                    ) or ""
+
+                    if texto_norm in _normalizar_texto_comparacao(valor_atual):
+                        print(f"[SCH] Texto já existente em {descricao}.")
+                        return True
+
+                    novo_texto = f"{valor_atual}\n{texto}".strip() if valor_atual else texto
+                    novo_html = novo_texto.replace("\n", "<br>")
+
+                    _preencher_html_em_elemento(driver, editor, novo_html)
+                    esperar_tela_carregar(driver, 0.08)
+
+                    print(f"[SCH] Texto inserido em {descricao}.")
+                    return True
+
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    raise Exception(f"Não foi possível localizar o campo para inserir texto: {descricao}")
+
+
+def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
+
+    xpaths_salvar = [
+        "//button[normalize-space()='Salvar']",
+        "//a[normalize-space()='Salvar']",
+        "//input[@type='submit' and contains(@value,'Salvar')]",
+        "//input[@type='button' and contains(@value,'Salvar')]",
+        "//span[normalize-space()='Salvar']/ancestor::button[1]",
+        "//span[normalize-space()='Salvar']/ancestor::a[1]",
+        "//*[@title='Salvar']",
+        "//*[self::a or self::button][contains(normalize-space(), 'Salvar')]",
+    ]
+
+    botao_salvar = None
+
+    for xpath in xpaths_salvar:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for el in elementos:
+                try:
+                    if el.is_displayed() and el.is_enabled():
+                        botao_salvar = el
+                        break
+                except Exception:
+                    continue
+
+            if botao_salvar:
+                break
+
+        except Exception:
+            continue
+
+    if not botao_salvar:
+        print("[SCH][WARN] Botão Salvar não encontrado em Corrigir Minuta.")
+        return {
+            "salvo": False,
+            "motivo": "botao_salvar_nao_encontrado",
+        }
+
+    print("[SCH] Salvando Corrigir Minuta...")
+
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao_salvar)
+    _clicar_com_fallback(driver, botao_salvar)
+
+    esperar_tela_carregar(driver, 0.8)
+
+    try:
+        alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
+        print(f"[SCH] Alerta após salvar Corrigir Minuta: {alert.text}")
+        alert.accept()
+        esperar_tela_carregar(driver, 0.5)
+    except Exception:
+        pass
+
+    confirmado = False
+
+    if texto_esperado:
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+            texto_esperado_norm = _normalizar_texto_comparacao(texto_esperado)
+
+            xpaths_validacao = [
+                "//textarea[not(@disabled)]",
+                "//*[@contenteditable='true']",
+                "//div[contains(@class,'ql-editor')]",
+                "//input[not(@disabled)]",
+            ]
+
+            for xpath in xpaths_validacao:
+                elementos = driver.find_elements(By.XPATH, xpath)
+
+                for el in elementos:
+                    try:
+                        if not el.is_displayed():
+                            continue
+
+                        valor = driver.execute_script(
+                            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+                            el,
+                        ) or ""
+
+                        if texto_esperado_norm in _normalizar_texto_comparacao(valor):
+                            confirmado = True
+                            break
+
+                    except Exception:
+                        continue
+
+                if confirmado:
+                    break
+
+        except Exception:
+            confirmado = False
+
+    if confirmado:
+        print("[SCH] Corrigir Minuta salva e conferida com sucesso.")
+    else:
+        print("[SCH][WARN] Corrigir Minuta salva, mas não foi possível confirmar o texto após salvar.")
+
+    return {
+        "salvo": True,
+        "confirmado_apos_salvar": confirmado,
+    }
+
+
+def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
+    analise_sar = analisar_sar_cct(dados_pdf)
+
+    print(
+        f"[SCH] Análise SAR: {analise_sar.get('status')} | "
+        f"{analise_sar.get('mensagem')}"
+    )
+
+    if not analise_sar.get("preencher_frase"):
+        analise_sar["preenchido_automaticamente"] = False
+        analise_sar["salvo"] = False
+        analise_sar["confirmado_apos_salvar"] = False
+        return analise_sar
+
+    try:
+        clicar_corrigir_minuta(driver, wait)
+
+        xpaths_minuta = [
+            "//textarea[not(@disabled)]",
+            "//*[@contenteditable='true']",
+            "//div[contains(@class,'ql-editor')]",
+            "//input[not(@disabled)]",
+        ]
+
+        preenchido = _inserir_texto_sem_apagar(
+            driver=driver,
+            wait=wait,
+            texto=analise_sar["frase"],
+            descricao="Corrigir Minuta",
+            xpaths_input=xpaths_minuta,
+        )
+
+        resultado_salvar = salvar_minuta_corrigida(
+            driver=driver,
+            wait=wait,
+            texto_esperado=analise_sar["frase"],
+        )
+
+        analise_sar["preenchido_automaticamente"] = bool(preenchido)
+        analise_sar["salvo"] = bool(resultado_salvar.get("salvo"))
+        analise_sar["confirmado_apos_salvar"] = bool(
+            resultado_salvar.get("confirmado_apos_salvar")
+        )
+        analise_sar["resultado_salvamento"] = resultado_salvar
+
+        return analise_sar
+
+    except Exception as e:
+        print(f"[SCH][WARN] Não foi possível preencher a frase de SAR na minuta: {e}")
+
+        analise_sar["preenchido_automaticamente"] = False
+        analise_sar["salvo"] = False
+        analise_sar["confirmado_apos_salvar"] = False
+        analise_sar["erro"] = str(e)
+
+        return analise_sar
 
 
 def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_baixados, dados_pdf):
@@ -1557,7 +2208,25 @@ def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_bai
     )
 
     clicar_aba_caracteristicas_tecnicas(driver, wait)
-    preencher_observacao_caracteristicas(driver, wait, analise["texto"])
+
+    preenchido = preencher_observacao_caracteristicas(
+        driver,
+        wait,
+        analise["texto"],
+    )
+
+    resultado_salvamento = salvar_caracteristicas_tecnicas(
+        driver,
+        wait,
+        texto_esperado=analise["texto"],
+    )
+
+    analise["preenchido_automaticamente"] = bool(preenchido)
+    analise["salvo"] = bool(resultado_salvamento.get("salvo"))
+    analise["confirmado_apos_salvar"] = bool(
+        resultado_salvamento.get("confirmado_apos_salvar")
+    )
+    analise["resultado_salvamento"] = resultado_salvamento
 
     return analise
 
