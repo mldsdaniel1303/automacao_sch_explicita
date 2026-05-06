@@ -82,13 +82,220 @@ def _extrair_valor_por_rotulo(linhas, rotulos):
     return ""
 
 
+def _limpar_numero_certificado(valor):
+    valor = str(valor or "").strip()
+    valor = valor.replace("_", " ")
+    valor = valor.replace("–", "-").replace("—", "-")
+    valor = re.sub(r"\s+", " ", valor)
+    valor = re.sub(r"\s*/\s*", "/", valor)
+    valor = re.sub(r"\s*-\s*", "-", valor)
+    valor = valor.strip(" :;,-")
+    return valor.upper()
+
+
+def _eh_cep(valor):
+    texto = str(valor or "").strip()
+    return bool(re.fullmatch(r"\d{2}\.?\d{3}-?\d{3}", texto))
+
+
+def _extrair_candidatos_certificado(texto):
+    texto = texto or ""
+
+    padroes = [
+        # ICC 09.104/2025-I
+        r"\b(?:ICC|NCC)\s*[-_]?\s*\d{1,5}(?:\.\d{1,5})?\s*/\s*\d{2,4}(?:\s*[-–—]\s*[A-Z0-9]+)?\b",
+
+        # NCC 29900/26
+        r"\b(?:ICC|NCC)\s*[-_]?\s*\d{1,6}\s*/\s*\d{2,4}(?:\s*[-–—]\s*[A-Z0-9]+)?\b",
+
+        # ICC 09.104-2025-I
+        r"\b(?:ICC|NCC)\s*[-_]?\s*\d{1,5}(?:\.\d{1,5})?\s*[-_]\s*\d{2,4}(?:\s*[-_]\s*[A-Z0-9]+)?\b",
+    ]
+
+    candidatos = []
+
+    for padrao in padroes:
+        for m in re.finditer(padrao, texto, flags=re.I):
+            candidato = _limpar_numero_certificado(m.group(0))
+
+            if not candidato:
+                continue
+
+            if _eh_cep(candidato):
+                continue
+
+            candidatos.append(candidato)
+
+    return candidatos
+
+
+def extrair_numero_certificado_cct(texto):
+    texto = texto or ""
+
+    padroes_rotulo = [
+        r"n[uú]mero\s+do\s+certificado\s*/?\s*certificate\s*#?",
+        r"certificate\s*#?",
+        r"certificate\s+number",
+        r"certificado\s*#?",
+    ]
+
+    for rotulo in padroes_rotulo:
+        m = re.search(rotulo, texto, flags=re.I)
+        if not m:
+            continue
+
+        trecho = texto[m.start(): m.start() + 700]
+        candidatos = _extrair_candidatos_certificado(trecho)
+
+        if candidatos:
+            return candidatos[0]
+
+    candidatos = _extrair_candidatos_certificado(texto)
+
+    if candidatos:
+        return candidatos[0]
+
+    return ""
+
+
+def _extrair_numero_certificado_do_nome(caminho_pdf):
+    stem = Path(caminho_pdf).stem if caminho_pdf else ""
+    stem = stem.replace("_", " ")
+    candidatos = _extrair_candidatos_certificado(stem)
+
+    if candidatos:
+        return candidatos[0]
+
+    return ""
+
+
+def _extrair_data_por_rotulo(texto, rotulos):
+    texto = texto or ""
+
+    for rotulo in rotulos:
+        padrao = rf"{rotulo}[^\d]{{0,50}}(\d{{2}}/\d{{2}}/\d{{4}})"
+        m = re.search(padrao, texto, flags=re.I)
+        if m:
+            return m.group(1)
+
+    return ""
+
+
+def _limpar_valor_tabela_rotulada(valor):
+    valor = _limpar_texto(valor)
+    valor = re.sub(r"\s+", " ", valor)
+    return valor.strip(" :-;")
+
+
+def _label_contem(label_norm, termos):
+    return any(termo in label_norm for termo in termos)
+
+
+def _extrair_campos_cct_de_tabelas(tabelas_brutas):
+    """
+    Extrai campos principais do CCT a partir de tabelas do tipo:
+    [Modelo / Model] [CCBQ730M]
+    [Tipo de Produto / Type of Product] [Transceptor de Radiação Restrita]
+    """
+    campos = {
+        "modelo": "",
+        "nome_comercial": "",
+        "tipo_produto": "",
+        "servico_aplicacao": "",
+        "solicitante": "",
+        "fabricante": "",
+        "regulamentos": "",
+    }
+
+    for tabela in tabelas_brutas or []:
+        linhas = _limpar_tabela_bruta(tabela)
+
+        for linha in linhas:
+            if len(linha) < 2:
+                continue
+
+            label = _limpar_texto(linha[0])
+            valor = _limpar_valor_tabela_rotulada(linha[1])
+
+            if not label or not valor:
+                continue
+
+            label_norm = _normalizar_texto(label)
+
+            if not campos["modelo"] and _label_contem(label_norm, ["modelo", "model"]):
+                if "nome comercial" not in label_norm and "commercial name" not in label_norm:
+                    campos["modelo"] = valor
+                    continue
+
+            if not campos["nome_comercial"] and _label_contem(label_norm, ["nome comercial", "commercial name"]):
+                campos["nome_comercial"] = valor
+                continue
+
+            if not campos["tipo_produto"] and _label_contem(label_norm, ["tipo de produto", "tipo do produto", "type of product"]):
+                campos["tipo_produto"] = valor
+                continue
+
+            if not campos["servico_aplicacao"] and _label_contem(label_norm, ["servico aplicacao", "serviço aplicação", "service application"]):
+                campos["servico_aplicacao"] = valor
+                continue
+
+            if not campos["solicitante"] and _label_contem(label_norm, ["solicitante", "applicant"]):
+                campos["solicitante"] = valor
+                continue
+
+            if not campos["fabricante"] and _label_contem(label_norm, ["fabricante", "manufacturer"]):
+                campos["fabricante"] = valor
+                continue
+
+            if not campos["regulamentos"] and _label_contem(label_norm, ["regulamento", "regulation"]):
+                campos["regulamentos"] = valor
+                continue
+
+    return campos
+
+
+def _valor_parece_tipo_produto(valor):
+    texto = _normalizar_texto(valor)
+
+    if not texto:
+        return False
+
+    sinais_ruins = [
+        "icc ",
+        "ncc ",
+        "certificado desde",
+        "data de emissao",
+        "valido ate",
+        "válido até",
+        "produto certificado desde",
+        "certificate",
+        "cnpj",
+        "cep",
+    ]
+
+    if any(s in texto for s in sinais_ruins):
+        return False
+
+    sinais_tipo = [
+        "transceptor",
+        "radiacao restrita",
+        "radiação restrita",
+        "produto para telecomunicacao",
+        "equipamento",
+        "terminal",
+        "modulo",
+        "módulo",
+    ]
+
+    return any(s in texto for s in sinais_tipo)
+
+
 def _limpar_ocd(valor):
     valor = _limpar_texto(valor)
 
     if not valor:
         return ""
 
-    # remove prefixos ruins que às vezes entram na captura
     valor = re.sub(r"^(pela|pelo|da|do|de)\s+", "", valor, flags=re.I).strip()
 
     ruins = {
@@ -105,8 +312,7 @@ def _limpar_ocd(valor):
     if _normalizar_texto(valor) in ruins:
         return ""
 
-    # corta quando vier algo claramente explicativo demais
-    valor = re.split(r"\b(certifica|certifica|atesta|declara|informa)\b", valor, flags=re.I)[0].strip(" -:;,")
+    valor = re.split(r"\b(certifica|atesta|declara|informa)\b", valor, flags=re.I)[0].strip(" -:;,")
 
     if len(valor) < 3:
         return ""
@@ -170,10 +376,13 @@ def _limpar_celula_tabela(valor):
 
 def _limpar_tabela_bruta(tabela):
     linhas = []
+
     for linha in tabela or []:
         limpa = [_limpar_celula_tabela(cel) for cel in (linha or [])]
+
         if any(c for c in limpa):
             linhas.append(limpa)
+
     return linhas
 
 
@@ -189,6 +398,7 @@ def _pontuacao_cabecalho_tabela(cabecalho):
         "tecnologia",
         "modulacao",
         "taxa maxima de transmissao",
+        "sar",
     ]
 
     for s in sinais:
@@ -205,16 +415,18 @@ def _ajustar_tabela_extraida(cabecalho, linhas):
     total_colunas = max(
         [len(cabecalho)] + [len(l) for l in linhas] + [0]
     )
+
     if total_colunas == 0:
         return {"cabecalho": [], "linhas": []}
 
     cabecalho = cabecalho + [""] * (total_colunas - len(cabecalho))
     linhas = [l + [""] * (total_colunas - len(l)) for l in linhas]
 
-    # remove colunas totalmente vazias
     manter = []
+
     for idx in range(total_colunas):
         valores = [cabecalho[idx]] + [linha[idx] for linha in linhas]
+
         if any(_limpar_texto(v) for v in valores):
             manter.append(idx)
 
@@ -234,6 +446,7 @@ def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
 
     for tabela in tabelas_brutas:
         linhas = _limpar_tabela_bruta(tabela)
+
         if len(linhas) < 2:
             continue
 
@@ -244,7 +457,7 @@ def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
             if score < 2:
                 continue
 
-            corpo = linhas[idx_cab + 1 :]
+            corpo = linhas[idx_cab + 1:]
             corpo = [l for l in corpo if any(_limpar_texto(c) for c in l)]
 
             if not corpo:
@@ -267,12 +480,15 @@ def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
 
 
 def _inferir_tipo_produto(texto, valor_extraido=""):
-    if valor_extraido:
+    if valor_extraido and _valor_parece_tipo_produto(valor_extraido):
         return valor_extraido
 
     texto_norm = _normalizar_texto(texto)
 
-    if "radiacao restrita" in texto_norm:
+    if "transceptor de radiacao restrita" in texto_norm:
+        return "Transceptor de Radiação Restrita"
+
+    if "radiocomunicacao de radiacao restrita" in texto_norm or "radiacao restrita" in texto_norm:
         return "Transceptor de Radiação Restrita"
 
     return ""
@@ -284,8 +500,12 @@ def parsear_certificado_pdf(caminho_pdf):
         "homologacao": "",
         "modelo": "",
         "fabricante": "",
+        "solicitante": "",
         "tipo_produto": "",
+        "data_emissao": "",
+        "data_validade": "",
         "ocd": "",
+        "regulamentos": "",
         "tabela_tecnica_cct": {
             "cabecalho": [],
             "linhas": [],
@@ -303,6 +523,7 @@ def parsear_certificado_pdf(caminho_pdf):
         return resultado
 
     caminho_pdf = Path(caminho_pdf)
+
     if not caminho_pdf.exists():
         print(f"[PDF][WARN] Arquivo não encontrado: {caminho_pdf}")
         return resultado
@@ -313,6 +534,7 @@ def parsear_certificado_pdf(caminho_pdf):
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             texto_total.append(page.extract_text() or "")
+
             try:
                 tabelas_brutas.extend(page.extract_tables() or [])
             except Exception:
@@ -322,16 +544,12 @@ def parsear_certificado_pdf(caminho_pdf):
     texto_limpo = _limpar_texto(texto)
     linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
 
-    padroes_certificado_contextuais = [
-        r"(?:n[º°o]\s*|n[úu]mero\s+)(?:do|de)\s+certificado(?:\s*/\s*certificate\s*no\.?)?\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
-        r"(?:certificate\s*no\.?)\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
-        r"(?:certificado\s+de\s+conformidade\s+t[ée]cnica).*?(?:n[º°o]\s*|n[úu]mero\s+)?(?:do|de)?\s*certificado(?:\s*/\s*certificate\s*no\.?)?\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
-        r"(?:certificado).*?(?:no\.?|n[º°o]|n[úu]mero)?\s*[:\-]?\s*([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})",
-    ]
+    campos_tabela = _extrair_campos_cct_de_tabelas(tabelas_brutas)
 
-    padroes_certificado_genericos = [
-        r"\b([A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4})\b",
-    ]
+    resultado["numero_certificado"] = extrair_numero_certificado_cct(texto)
+
+    if not resultado["numero_certificado"]:
+        resultado["numero_certificado"] = _extrair_numero_certificado_do_nome(caminho_pdf)
 
     padroes_homologacao = [
         r"HOMOLOGA[CÇ][AÃ]O(?:\s+ANATEL)?\s*[:\-]?\s*([0-9./-]{4,})",
@@ -343,47 +561,82 @@ def parsear_certificado_pdf(caminho_pdf):
         r"Organismo\s+de\s+Certifica(?:ç|c)[aã]o(?:\s+Designado)?\s*[:\-]?\s*([^\n]{3,80})",
     ]
 
-    resultado["numero_certificado"] = _extrair_primeiro(texto_limpo, padroes_certificado_contextuais)
-
-    if not resultado["numero_certificado"]:
-        for linha in linhas:
-            valor = _extrair_primeiro(linha, padroes_certificado_contextuais)
-            if valor:
-                resultado["numero_certificado"] = valor
-                break
-
-    if not resultado["numero_certificado"]:
-        resultado["numero_certificado"] = _extrair_primeiro(texto_limpo, padroes_certificado_genericos)
-
     resultado["homologacao"] = _extrair_primeiro(texto_limpo, padroes_homologacao)
 
     ocd_bruto = _extrair_primeiro(texto_limpo, padroes_ocd)
     resultado["ocd"] = _limpar_ocd(ocd_bruto)
 
-    resultado["modelo"] = _extrair_valor_por_rotulo(
+    resultado["modelo"] = campos_tabela.get("modelo") or _extrair_valor_por_rotulo(
         linhas,
         ["MODELO", "MODEL"],
     )
 
-    resultado["fabricante"] = _extrair_valor_por_rotulo(
-        linhas,
-        ["FABRICANTE", "MANUFACTURER"],
-    )
-
-    resultado["tipo_produto"] = _extrair_valor_por_rotulo(
+    resultado["fabricante"] = campos_tabela.get("fabricante") or _extrair_valor_por_rotulo(
         linhas,
         [
-            "TIPO DE PRODUTO",
-            "TIPO DO PRODUTO",
-            "DESCRIÇÃO DO PRODUTO",
-            "DESCRICAO DO PRODUTO",
-            "PRODUTO",
+            "NOME E ENDEREÇO DO FABRICANTE",
+            "NOME E ENDERECO DO FABRICANTE",
+            "FABRICANTE",
+            "MANUFACTURER",
+        ],
+    )
+
+    resultado["solicitante"] = campos_tabela.get("solicitante") or _extrair_valor_por_rotulo(
+        linhas,
+        [
+            "NOME E ENDEREÇO DO SOLICITANTE",
+            "NOME E ENDERECO DO SOLICITANTE",
+            "SOLICITANTE",
+            "APPLICANT",
+        ],
+    )
+
+    tipo_tabela = campos_tabela.get("tipo_produto", "")
+
+    if tipo_tabela and _valor_parece_tipo_produto(tipo_tabela):
+        resultado["tipo_produto"] = tipo_tabela
+    else:
+        resultado["tipo_produto"] = _extrair_valor_por_rotulo(
+            linhas,
+            [
+                "TIPO DE PRODUTO",
+                "TIPO DO PRODUTO",
+                "TYPE OF PRODUCT",
+                "DESCRIÇÃO DO PRODUTO",
+                "DESCRICAO DO PRODUTO",
+            ],
+        )
+
+    resultado["tipo_produto"] = _inferir_tipo_produto(
+        texto,
+        resultado["tipo_produto"],
+    )
+
+    resultado["regulamentos"] = campos_tabela.get("regulamentos", "")
+
+    resultado["data_emissao"] = _extrair_data_por_rotulo(
+        texto,
+        [
+            "data de emiss[aã]o",
+            "emission date",
+            "emitido em",
+        ],
+    )
+
+    resultado["data_validade"] = _extrair_data_por_rotulo(
+        texto,
+        [
+            "v[aá]lido at[eé]",
+            "valid until",
+            "validade",
+            "data de validade",
         ],
     )
 
     if not resultado["homologacao"]:
         for linha in linhas:
             m = re.search(r"HOMOLOGA[CÇ][AÃ]O(?:\s+ANATEL)?\s*[:\-]\s*([0-9./-]{4,})", linha, re.I)
+
             if m:
                 resultado["homologacao"] = _limpar_texto(m.group(1))
                 break
@@ -391,26 +644,18 @@ def parsear_certificado_pdf(caminho_pdf):
     if not resultado["ocd"]:
         for linha in linhas:
             m = re.search(r"\bOCD\b\s*[:\-]?\s*([^\n]{3,80})", linha, re.I)
+
             if m:
                 valor = _limpar_ocd(m.group(1))
+
                 if valor:
                     resultado["ocd"] = valor
                     break
-
-    if not resultado["numero_certificado"]:
-        m = re.search(r"\b[A-Z0-9./]{2,20}(?:-[A-Z0-9./]{1,20}){1,4}\b", caminho_pdf.stem.upper())
-        if m:
-            resultado["numero_certificado"] = m.group(0)
 
     obs = _classificar_observacao_cct(texto)
     resultado["observacao_classificacao"] = obs["observacao_classificacao"]
     resultado["observacao_texto"] = obs["observacao_texto"]
     resultado["observacao_motivos"] = obs["observacao_motivos"]
-
-    resultado["tipo_produto"] = _inferir_tipo_produto(
-        texto,
-        resultado["tipo_produto"],
-    )
 
     resultado["tabela_tecnica_cct"] = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas)
 

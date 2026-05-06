@@ -14,11 +14,19 @@ def _seguro(texto):
 
 
 def _fmt_req(resultado):
-    return (
-        (resultado.get("requerimento") or {}).get("requerimento")
-        or resultado.get("requerimento_numero")
-        or "sem_numero"
-    )
+    req = resultado.get("requerimento")
+
+    if isinstance(req, dict):
+        return (
+            req.get("requerimento")
+            or resultado.get("requerimento_numero")
+            or "sem_numero"
+        )
+
+    if req:
+        return str(req)
+
+    return resultado.get("requerimento_numero") or "sem_numero"
 
 
 def _fmt_analise(resultado):
@@ -58,8 +66,12 @@ def _fmt_ocd(resultado):
 def _fmt_equipamentos(resultado):
     analise = _fmt_analise(resultado)
     req = resultado.get("requerimento") or {}
-    return ", ".join(analise.get("equipamentos", [])) or (req.get("tipo_produto") or "Não identificado")
 
+    tipo_produto = ""
+    if isinstance(req, dict):
+        tipo_produto = req.get("tipo_produto") or ""
+
+    return ", ".join(analise.get("equipamentos", [])) or tipo_produto or "Não identificado"
 
 def _fmt_numero_certificado(resultado):
     return (_fmt_dados_pdf(resultado).get("numero_certificado") or "").strip() or "Não identificado"
@@ -123,21 +135,221 @@ def _fmt_duracao(segundos):
     return f"{minutos:02d}:{secs:05.2f}"
 
 
+def _normalizar_status_conferencia(valor):
+    """
+    Converte valores variados em:
+    C        = Conforme
+    NC       = Não Conforme
+    N/A      = Não Aplicável
+    REVISAR  = Revisar manualmente
+
+    Aceita booleanos, textos, dicionários e valores vazios.
+    """
+    if isinstance(valor, dict):
+        valor = (
+            valor.get("status")
+            or valor.get("resultado")
+            or valor.get("valor")
+            or valor.get("conforme")
+            or valor.get("aplicavel")
+        )
+
+    if valor is True:
+        return "C"
+
+    if valor is False:
+        return "NC"
+
+    texto_original = str(valor if valor is not None else "").strip()
+
+    if not texto_original:
+        return "N/A"
+
+    texto = texto_original.lower()
+    texto = texto.replace("não", "nao")
+    texto = texto.replace("ã", "a")
+    texto = texto.replace("á", "a")
+    texto = texto.replace("à", "a")
+    texto = texto.replace("â", "a")
+    texto = texto.replace("é", "e")
+    texto = texto.replace("ê", "e")
+    texto = texto.replace("í", "i")
+    texto = texto.replace("ó", "o")
+    texto = texto.replace("ô", "o")
+    texto = texto.replace("õ", "o")
+    texto = texto.replace("ú", "u")
+    texto = texto.replace("ç", "c")
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    conformes = {
+        "c",
+        "conforme",
+        "ok",
+        "sim",
+        "true",
+        "check",
+        "checado",
+        "aprovado",
+        "✓",
+        "✔",
+    }
+
+    nao_conformes = {
+        "nc",
+        "nao conforme",
+        "x",
+        "erro",
+        "false",
+        "falso",
+        "divergente",
+        "ausente em um dos lados",
+        "ausente_em_um_dos_lados",
+        "✗",
+        "✕",
+        "❌",
+    }
+
+    nao_aplicaveis = {
+        "n/a",
+        "na",
+        "n.a",
+        "nao aplicavel",
+        "nao se aplica",
+        "nao aplicavel ao caso",
+        "nao_comparado",
+        "nao comparado",
+        "ausente nos dois",
+        "ausente_nos_dois",
+        "sem_tabela",
+        "sem tabela",
+        "nao identificado",
+        "nao verificado",
+    }
+
+    revisar = {
+        "revisar",
+        "revisar manualmente",
+        "revisao",
+        "revisar_manual",
+        "revisar_manualmente",
+        "inconclusivo",
+        "inconclusiva",
+        "alerta",
+        "manual",
+        "pendente de revisao",
+        "revisao manual",
+    }
+
+    if texto in conformes:
+        return "C"
+
+    if texto in nao_conformes:
+        return "NC"
+
+    if texto in nao_aplicaveis:
+        return "N/A"
+
+    if texto in revisar:
+        return "REVISAR"
+
+    # Fallback: textos conhecidos parcialmente
+    if "diverg" in texto or "nao conforme" in texto:
+        return "NC"
+
+    if "nao aplic" in texto or "nao se aplica" in texto:
+        return "N/A"
+
+    if "revis" in texto or "inconclus" in texto or "alerta" in texto:
+        return "REVISAR"
+
+    if texto == "ok" or "conforme" in texto:
+        return "C"
+
+    return "N/A"
+
+
+def _classe_status_conferencia(status):
+    status = _normalizar_status_conferencia(status)
+
+    if status == "C":
+        return "status-c"
+
+    if status == "NC":
+        return "status-nc"
+
+    if status == "REVISAR":
+        return "status-revisar"
+
+    return "status-na"
+
+def _td_status_conferencia(valor):
+    status = _normalizar_status_conferencia(valor)
+    classe = _classe_status_conferencia(status)
+
+    titulos = {
+        "C": "Conforme",
+        "NC": "Não Conforme",
+        "N/A": "Não Aplicável",
+        "REVISAR": "Revisar manualmente",
+    }
+
+    detalhe = ""
+
+    if isinstance(valor, dict):
+        motivo = valor.get("motivo", "")
+        evidencia = valor.get("evidencia", "")
+        esperado = valor.get("esperado", "")
+
+        partes = []
+        if motivo:
+            partes.append(f"Motivo: {motivo}")
+        if esperado:
+            partes.append(f"Esperado: {esperado}")
+        if evidencia:
+            partes.append(f"Evidência: {evidencia}")
+
+        detalhe = " | ".join(partes)
+
+    titulo = detalhe or titulos.get(status, status)
+
+    return (
+        f'<td class="status-cell {classe}" title="{escape(titulo)}">'
+        f"{escape(status)}"
+        "</td>"
+    )
+
+def _legenda_status_conferencia():
+    return (
+        '<div class="legenda-status">'
+        '<span class="status-cell status-c">C</span> Conforme '
+        '<span class="status-cell status-nc">NC</span> Não Conforme '
+        '<span class="status-cell status-na">N/A</span> Não Aplicável '
+        '<span class="status-cell status-revisar">REVISAR</span> Revisar manualmente'
+        '</div>'
+    )
+
+
+
 def _criar_tabela_normas(normas):
     if not normas:
         return "<p>Nenhuma norma aplicável identificada.</p>"
 
     linhas = [
-        "<table><thead><tr><th>Status</th><th>Norma</th><th>Motivador(es)</th></tr></thead><tbody>"
+        _legenda_status_conferencia(),
+        "<table><thead><tr><th>Status</th><th>Norma</th><th>Motivador(es)</th></tr></thead><tbody>",
     ]
+
     for item in normas:
+        status = item.get("status", "")
+
         linhas.append(
             "<tr>"
-            f"<td>{'✓' if item.get('status') == 'ok' else escape(str(item.get('status', '')))}</td>"
+            f"{_td_status_conferencia(status)}"
             f"<td>{escape(str(item.get('norma', '')))}</td>"
             f"<td>{escape(str(item.get('motivadores', '')))}</td>"
             "</tr>"
         )
+
     linhas.append("</tbody></table>")
     return "".join(linhas)
 
@@ -147,18 +359,21 @@ def _criar_tabela_relatorios(relatorios):
         return "<p>Nenhum relatório de ensaio processado.</p>"
 
     linhas = [
-        "<table><thead><tr><th>Documento</th><th>Lab</th><th>Sol</th><th>Fab</th><th>Mod</th></tr></thead><tbody>"
+        _legenda_status_conferencia(),
+        "<table><thead><tr><th>Documento</th><th>Lab</th><th>Sol</th><th>Fab</th><th>Mod</th></tr></thead><tbody>",
     ]
+
     for item in relatorios:
         linhas.append(
             "<tr>"
             f"<td>{escape(str(item.get('documento', '')))}</td>"
-            f"<td>{'✓' if item.get('lab') else '✗'}</td>"
-            f"<td>{'✓' if item.get('sol') else '✗'}</td>"
-            f"<td>{'✓' if item.get('fab') else '✗'}</td>"
-            f"<td>{'✓' if item.get('mod') else '✗'}</td>"
+            f"{_td_status_conferencia(item.get('lab'))}"
+            f"{_td_status_conferencia(item.get('sol'))}"
+            f"{_td_status_conferencia(item.get('fab'))}"
+            f"{_td_status_conferencia(item.get('mod'))}"
             "</tr>"
         )
+
     linhas.append("</tbody></table>")
     return "".join(linhas)
 
@@ -187,9 +402,57 @@ def _css():
     .sumario { background: #f6f7fb; padding: 16px; border-radius: 10px; }
     .alerta { background: #fff4e5; border-left: 5px solid #f59e0b; padding: 10px 12px; margin: 8px 0; }
     .ok { background: #ecfdf5; border-left: 5px solid #10b981; padding: 10px 12px; margin: 8px 0; }
+
     table { border-collapse: collapse; width: 100%; margin: 12px 0 24px 0; }
     th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; vertical-align: top; }
     th { background: #f3f4f6; }
+
+    .status-cell {
+        text-align: center;
+        font-weight: bold;
+        min-width: 44px;
+        white-space: nowrap;
+    }
+
+    .status-c {
+        background: #d4edda;
+        color: #155724;
+    }
+
+    .status-nc {
+        background: #f8d7da;
+        color: #721c24;
+    }
+
+    .status-na {
+        background: #e2e3e5;
+        color: #383d41;
+    }
+
+    .status-revisar {
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .legenda-status {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin: 8px 0 10px 0;
+        font-size: 13px;
+        color: #374151;
+    }
+
+    .legenda-status .status-cell {
+        display: inline-block;
+        border: 1px solid #d1d5db;
+        padding: 3px 8px;
+        min-width: 36px;
+        border-radius: 4px;
+        margin-left: 8px;
+    }
+
     .muted { color: #666; }
     .small { font-size: 12px; }
     .break { page-break-before: always; margin-top: 48px; }
@@ -369,40 +632,42 @@ def _criar_tabela_comparacao(resultado):
 
     linhas = [
         "<h3>Tabela comparativa SCH x CCT</h3>",
+        _legenda_status_conferencia(),
         "<table><thead><tr><th>Campo</th><th>SCH</th><th>CCT</th><th>Status</th></tr></thead><tbody>",
     ]
 
     for item in itens:
         campo = _nome_humano_campo(item.get("campo", ""))
-        valor_sch = (item.get("valor_sch") or "").strip() or "Não identificado"
-        valor_cct = (item.get("valor_cct") or "").strip() or "Não identificado"
+        valor_sch = str(item.get("valor_sch") or "").strip() or "Não identificado"
+        valor_cct = str(item.get("valor_cct") or "").strip() or "Não identificado"
         status = item.get("status", "")
 
+        status_para_celula = status
+
         if status == "ok":
-            status_txt = "OK"
-        elif status == "divergente":
-            status_txt = "Divergente"
-        elif status == "ausente_em_um_dos_lados":
-            status_txt = "Ausente em um dos lados"
-        elif status == "ausente_nos_dois":
-            status_txt = "Ausente nos dois"
-        elif status == "não_comparado":
-            status_txt = "Não comparado"
-        else:
-            status_txt = status or "Não identificado"
+            status_para_celula = "C"
+        elif status in {"divergente", "ausente_em_um_dos_lados"}:
+            status_para_celula = "NC"
+        elif status in {
+            "ausente_nos_dois",
+            "não_comparado",
+            "nao_comparado",
+            "não comparado",
+            "nao comparado",
+        }:
+            status_para_celula = "N/A"
 
         linhas.append(
             "<tr>"
             f"<td>{escape(campo)}</td>"
             f"<td>{escape(valor_sch)}</td>"
             f"<td>{escape(valor_cct)}</td>"
-            f"<td>{escape(status_txt)}</td>"
+            f"{_td_status_conferencia(status_para_celula)}"
             "</tr>"
         )
 
     linhas.append("</tbody></table>")
     return "".join(linhas)
-
 
 def _html_conferencia_bloco(resultado):
     conferencia = _fmt_conferencia(resultado)

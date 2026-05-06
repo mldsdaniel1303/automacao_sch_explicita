@@ -279,6 +279,115 @@ def abrir_sch(driver):
     esperar_tela_carregar(driver, 2)
 
 
+def _normalizar_texto_login(valor):
+    texto = str(valor or "").strip().lower()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def _esta_na_tela_login_sch(driver):
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    try:
+        url = (driver.current_url or "").lower()
+    except Exception:
+        url = ""
+
+    sinais_url_login = [
+        "login",
+        "sso",
+        "cas",
+        "autentic",
+        "oauth",
+        "openid",
+    ]
+
+    if any(sinal in url for sinal in sinais_url_login):
+        return True
+
+    try:
+        campos_senha = driver.find_elements(By.XPATH, "//input[@type='password']")
+        if any(campo.is_displayed() for campo in campos_senha):
+            return True
+    except Exception:
+        pass
+
+    try:
+        body = driver.find_element(By.TAG_NAME, "body")
+        texto = _normalizar_texto_login(body.text)
+
+        sinais_texto_login = [
+            "usuario",
+            "senha",
+            "entrar",
+            "acessar",
+            "login",
+            "gov.br",
+            "certificado digital",
+            "autenticacao",
+        ]
+
+        qtd_sinais = sum(1 for sinal in sinais_texto_login if sinal in texto)
+
+        if qtd_sinais >= 2 and "requerimento" not in texto:
+            return True
+
+    except Exception:
+        pass
+
+    return False
+
+
+def garantir_sessao_ativa_sch(driver, wait, contexto="", reabrir_fila=True):
+    """
+    Verifica se o SCH caiu na tela de login.
+    Se caiu, pausa para o usuário logar novamente e reabre a fila Em Análise.
+    Retorna True quando precisou refazer login.
+    Retorna False quando a sessão já estava ativa.
+    """
+    if not _esta_na_tela_login_sch(driver):
+        return False
+
+    print("=" * 90)
+    print("[SCH][LOGIN] A sessão do SCH parece ter expirado ou voltou para a tela de login.")
+    if contexto:
+        print(f"[SCH][LOGIN] Contexto: {contexto}")
+    print("[SCH][LOGIN] Faça o login novamente no navegador.")
+    print("[SCH][LOGIN] Depois de concluir o login, volte ao terminal.")
+    print("=" * 90)
+
+    for tentativa in range(1, 4):
+        input(f"[SCH][LOGIN] Tentativa {tentativa}/3 - pressione Enter após refazer o login...")
+
+        esperar_tela_carregar(driver, 1.5)
+
+        if reabrir_fila:
+            try:
+                abrir_sch(driver)
+                esperar_tela_carregar(driver, 1.5)
+            except Exception as e:
+                print(f"[SCH][WARN] Não foi possível reabrir a página principal do SCH: {e}")
+
+        if not _esta_na_tela_login_sch(driver):
+            if reabrir_fila:
+                try:
+                    clicar_fila_em_analise(driver, wait)
+                except Exception as e:
+                    print(f"[SCH][WARN] Login refeito, mas não foi possível clicar na fila Em Análise automaticamente: {e}")
+
+            print("[SCH][LOGIN] Sessão restaurada. Continuando fluxo.")
+            return True
+
+        print("[SCH][WARN] A tela ainda parece estar no login.")
+
+    raise Exception("Sessão SCH expirada. Não foi possível restaurar o login após 3 tentativas.")
+
+
 def clicar_fila_em_analise(driver, wait):
     xpath_fila = "//a[normalize-space()='Em Análise' or contains(normalize-space(), 'Em Análise')]"
 
@@ -362,47 +471,176 @@ def coletar_requerimentos(driver, wait, regras):
     return requerimentos
 
 
+
+def _localizar_linha_requerimento_na_fila(driver, req):
+    numero_alvo = _somente_digitos(req.get("requerimento", ""))
+
+    tabela = _aguardar_tabela_fila(driver, timeout=8)
+    linhas = tabela.find_elements(By.XPATH, ".//tbody/tr[td]")
+
+    if numero_alvo:
+        for linha in linhas:
+            try:
+                celulas = linha.find_elements(By.XPATH, "./td")
+                numero_linha = _extrair_numero_requerimento_de_linha(
+                    linha.text,
+                    celulas,
+                )
+
+                if _somente_digitos(numero_linha) == numero_alvo:
+                    return linha
+
+            except StaleElementReferenceException:
+                raise
+            except Exception:
+                continue
+
+    linha_idx = int(req.get("row_index"))
+    return tabela.find_element(By.XPATH, f"(.//tbody/tr[td])[{linha_idx}]")
+
+
 def abrir_requerimento(driver, wait, req):
     numero = req.get("requerimento", "")
-    linha_idx = int(req.get("row_index"))
-
-    xpath_linha = f"(.//tbody/tr[td])[{linha_idx}]"
+    ultimo_erro = None
 
     print(f"[SCH] Abrindo requerimento {numero}...")
 
-    tabela = _aguardar_tabela_fila(driver, timeout=8)
-    linha = tabela.find_element(By.XPATH, xpath_linha)
-
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", linha)
-
-    candidatos = linha.find_elements(
-        By.XPATH,
-        ".//a[img] | .//img/ancestor::a[1] | .//button | .//*[@role='button']"
-    )
-
-    ultimo_erro = None
-    for el in candidatos:
+    for tentativa in range(1, 5):
         try:
-            if el.is_displayed() and el.is_enabled():
-                _clicar_com_fallback(driver, el)
-                esperar_tela_carregar(driver, 0.04)
-                _aguardar_iframe_detalhe(driver, timeout=4)
-                print("[SCH] Requerimento aberto. Tela de detalhes pronta.")
+            refez_login = garantir_sessao_ativa_sch(
+                driver,
+                wait,
+                contexto=f"antes de abrir o requerimento {numero}",
+                reabrir_fila=True,
+            )
+
+            if refez_login:
+                print(
+                    f"[SCH][LOGIN] Login refeito antes de abrir o requerimento {numero}. "
+                    "Refazendo busca na fila..."
+                )
+
+            esperar_tela_carregar(driver, 0.2)
+
+            linha = _localizar_linha_requerimento_na_fila(driver, req)
+
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});",
+                linha,
+            )
+
+            candidatos = linha.find_elements(
+                By.XPATH,
+                ".//a[img] | .//img/ancestor::a[1] | .//button | .//*[@role='button']",
+            )
+
+            for el in candidatos:
+                try:
+                    if el.is_displayed() and el.is_enabled():
+                        _clicar_com_fallback(driver, el)
+                        esperar_tela_carregar(driver, 0.15)
+
+                        refez_login = garantir_sessao_ativa_sch(
+                            driver,
+                            wait,
+                            contexto=f"após clicar no requerimento {numero}",
+                            reabrir_fila=True,
+                        )
+
+                        if refez_login:
+                            print(
+                                f"[SCH][LOGIN] Login refeito após clique no requerimento {numero}. "
+                                "Refazendo abertura do requerimento..."
+                            )
+                            raise StaleElementReferenceException(
+                                "Sessão restaurada após clique. Refazer busca da linha."
+                            )
+
+                        _aguardar_iframe_detalhe(driver, timeout=5)
+                        print("[SCH] Requerimento aberto. Tela de detalhes pronta.")
+                        return
+
+                except StaleElementReferenceException as e:
+                    ultimo_erro = e
+                    print(
+                        f"[SCH][WARN] Elemento antigo ao clicar no requerimento {numero}. "
+                        f"Refazendo busca da linha... tentativa {tentativa}/4"
+                    )
+                    raise
+
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+            try:
+                _clicar_com_fallback(driver, linha)
+                esperar_tela_carregar(driver, 0.15)
+
+                refez_login = garantir_sessao_ativa_sch(
+                    driver,
+                    wait,
+                    contexto=f"após clicar na linha do requerimento {numero}",
+                    reabrir_fila=True,
+                )
+
+                if refez_login:
+                    print(
+                        f"[SCH][LOGIN] Login refeito após clique na linha do requerimento {numero}. "
+                        "Refazendo abertura do requerimento..."
+                    )
+                    raise StaleElementReferenceException(
+                        "Sessão restaurada após clique na linha. Refazer busca da linha."
+                    )
+
+                _aguardar_iframe_detalhe(driver, timeout=5)
+                print("[SCH] Requerimento aberto por clique na linha. Tela de detalhes pronta.")
                 return
-        except Exception as e:
+
+            except StaleElementReferenceException as e:
+                ultimo_erro = e
+                print(
+                    f"[SCH][WARN] Linha ficou antiga ao abrir requerimento {numero}. "
+                    f"Refazendo busca... tentativa {tentativa}/4"
+                )
+                raise
+
+            except Exception as e:
+                ultimo_erro = e
+
+        except StaleElementReferenceException as e:
             ultimo_erro = e
+            esperar_tela_carregar(driver, 0.6)
             continue
 
-    try:
-        _clicar_com_fallback(driver, linha)
-        esperar_tela_carregar(driver, 0.04)
-        _aguardar_iframe_detalhe(driver, timeout=4)
-        print("[SCH] Requerimento aberto por clique na linha. Tela de detalhes pronta.")
-        return
-    except Exception as e:
-        ultimo_erro = e
+        except Exception as e:
+            ultimo_erro = e
 
-    raise Exception(f"Não foi possível abrir o requerimento {numero}. Último erro: {ultimo_erro}")
+            texto_erro = str(e).lower()
+
+            if "stale element reference" in texto_erro:
+                print(
+                    f"[SCH][WARN] Elemento antigo detectado no requerimento {numero}. "
+                    f"Nova tentativa {tentativa}/4."
+                )
+                esperar_tela_carregar(driver, 0.6)
+                continue
+
+            if _esta_na_tela_login_sch(driver):
+                garantir_sessao_ativa_sch(
+                    driver,
+                    wait,
+                    contexto=f"erro ao abrir requerimento {numero}",
+                    reabrir_fila=True,
+                )
+                esperar_tela_carregar(driver, 0.6)
+                continue
+
+            esperar_tela_carregar(driver, 0.4)
+
+    raise Exception(
+        f"Não foi possível abrir o requerimento {numero}. Último erro: {ultimo_erro}"
+    )
+
 
 def entrar_iframe_detalhe_analise(driver, wait=None):
     driver.switch_to.default_content()
@@ -1711,6 +1949,232 @@ def preencher_observacao_caracteristicas(driver, wait, texto):
     )
 
 
+
+def escolher_titulo_caracteristicas_secundarias(req=None, dados_pdf=None):
+    """
+    Decide qual frase preencher no campo:
+    'Título/Descrição para Características Técnicas Secundárias'.
+
+    Retorna "" quando não houver segurança para preencher.
+    """
+    req = req or {}
+    dados_pdf = dados_pdf or {}
+
+    texto_base = " ".join(
+        [
+            _texto_total_dados_pdf(req),
+            _texto_total_dados_pdf(dados_pdf),
+        ]
+    )
+
+    texto = _normalizar_texto_comparacao(texto_base)
+
+    regras = [
+        (
+            ["carregador indutivo", "wireless charger"],
+            "O produto incorpora um módulo “Carregador Indutivo para Telefone Celular” com as seguintes características técnicas:",
+        ),
+        (
+            ["dispositivo de operacao periodica", "periodic operation device"],
+            "O produto incorpora um módulo “Dispositivo de Operação Periódica” com as seguintes características técnicas:",
+        ),
+        (
+            ["estacao terminal de acesso", "terminal de acesso", "access terminal"],
+            'O produto incorpora um módulo "Estação Terminal de Acesso" com as seguintes características:',
+        ),
+        (
+            ["sistema de identificacao por radiofrequencias", "identificacao por radiofrequencias", "rfid"],
+            "O produto incorpora Sistema de Identificação por Radiofrequências com as seguintes características:",
+        ),
+        (
+            ["ultra larga", "uwb", "ultra wideband"],
+            "O produto incorpora Sistemas Operando nas Faixas de RF Ultra Larga com as seguintes características:",
+        ),
+        (
+            ["transceptor mpo", "mpo"],
+            "O produto incorpora Transceptor Mpo com as seguintes características:",
+        ),
+        (
+            ["sistema automatico de identificacao de navios", "ais", "navios"],
+            "O produto incorpora Transceptor para Sistema Automático de Identificação de Navios com as seguintes características:",
+        ),
+        (
+            ["transceptor movel por satelite", "movel por satelite", "satellite"],
+            "O produto incorpora Transceptor Móvel por Satélite com as seguintes características:",
+        ),
+        (
+            ["aplicacoes medicas", "aplicacao medica", "medical"],
+            "O produto incorpora Sistema de Aplicações Médicas com as seguintes características:",
+        ),
+        (
+            ["transceptor de radiacao restrita", "transceptor"],
+            "O produto incorpora Transceptor de Radiação Restrita com as seguintes características:",
+        ),
+        (
+            [
+                "equipamento de radiocomunicacao de radiacao restrita",
+                "radiocomunicacao de radiacao restrita",
+                "radiacao restrita",
+            ],
+            "O produto incorpora Equipamento de Radiocomunicação de Radiação Restrita com as seguintes características:",
+        ),
+    ]
+
+    for termos, frase in regras:
+        if any(termo in texto for termo in termos):
+            return frase
+
+    return ""
+
+
+def _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5):
+    """
+    Localiza o campo opcional:
+    'Título/Descrição para Características Técnicas Secundárias'.
+    Se não existir, retorna None.
+    """
+    xpaths = [
+        "//*[contains(normalize-space(), 'Título/Descrição para Características Técnicas Secundárias')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Titulo/Descricao para Caracteristicas Tecnicas Secundarias')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Características Técnicas Secundárias')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Caracteristicas Tecnicas Secundarias')]/following::textarea[1]",
+
+        "//*[contains(normalize-space(), 'Título/Descrição para Características Técnicas Secundárias')]/following::input[not(@type='hidden')][1]",
+        "//*[contains(normalize-space(), 'Titulo/Descricao para Caracteristicas Tecnicas Secundarias')]/following::input[not(@type='hidden')][1]",
+        "//*[contains(normalize-space(), 'Características Técnicas Secundárias')]/following::input[not(@type='hidden')][1]",
+        "//*[contains(normalize-space(), 'Caracteristicas Tecnicas Secundarias')]/following::input[not(@type='hidden')][1]",
+    ]
+
+    entrar_iframe_detalhe_analise(driver, None)
+
+    for xpath in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for campo in elementos:
+                try:
+                    if campo.is_displayed() and campo.is_enabled():
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});",
+                            campo,
+                        )
+                        return campo
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    return None
+
+
+def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
+    texto = str(texto or "").strip()
+
+    if not texto:
+        return {
+            "preenchido": False,
+            "motivo": "texto_vazio",
+        }
+
+    try:
+        valor_atual = driver.execute_script(
+            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+            campo,
+        ) or ""
+    except Exception:
+        valor_atual = ""
+
+    if str(valor_atual or "").strip():
+        return {
+            "preenchido": False,
+            "motivo": "campo_ja_preenchido",
+            "valor_atual": valor_atual,
+        }
+
+    tag = (campo.tag_name or "").lower()
+
+    if tag in {"textarea", "input"}:
+        driver.execute_script("arguments[0].value = arguments[1];", campo, texto)
+    else:
+        driver.execute_script("arguments[0].innerHTML = arguments[1];", campo, texto)
+
+    driver.execute_script(
+        """
+        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+        """,
+        campo,
+    )
+
+    try:
+        campo.send_keys(Keys.TAB)
+    except Exception:
+        pass
+
+    return {
+        "preenchido": True,
+        "motivo": "preenchido",
+        "texto": texto,
+    }
+
+
+def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=None, dados_pdf=None):
+    """
+    Preenche o campo opcional 'Título/Descrição para Características Técnicas Secundárias'
+    apenas quando ele existir na tela.
+    """
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.04)
+
+    campo = _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5)
+
+    if not campo:
+        return {
+            "campo_encontrado": False,
+            "preenchido": False,
+            "status": "nao_aplicavel",
+            "motivo": "Campo de características técnicas secundárias não encontrado na tela.",
+        }
+
+    titulo = escolher_titulo_caracteristicas_secundarias(
+        req=req,
+        dados_pdf=dados_pdf,
+    )
+
+    if not titulo:
+        print("[SCH][WARN] Campo de características secundárias encontrado, mas sem frase segura para preencher.")
+
+        return {
+            "campo_encontrado": True,
+            "preenchido": False,
+            "status": "revisar",
+            "motivo": "Campo encontrado, mas a automação não identificou frase segura para preenchimento.",
+        }
+
+    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, titulo)
+
+    if resultado.get("preenchido"):
+        print(f"[SCH] Título de Características Técnicas Secundárias preenchido: {titulo}")
+    else:
+        print(
+            "[SCH] Título de Características Técnicas Secundárias não preenchido: "
+            f"{resultado.get('motivo')}"
+        )
+
+    resultado.update(
+        {
+            "campo_encontrado": True,
+            "status": "preenchido" if resultado.get("preenchido") else "nao_alterado",
+        }
+    )
+
+    return resultado
+
+
+
+
 def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.08)
@@ -1823,17 +2287,65 @@ def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
 
 FRASE_SAR_NAO_APLICAVEL = "Ensaio de SAR não aplicável."
 
-
-def analisar_sar_cct(dados_pdf):
+def _dados_pdf_tem_ato_1630(dados_pdf):
     texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
 
-    termos_nao_aplicavel = [
-        "ensaio de sar nao aplicavel",
-        "sar nao aplicavel",
-        "ensaio sar nao aplicavel",
-        "nao se aplica sar",
-        "sar nao se aplica",
+    padroes = [
+        r"\bato\s*(?:n|no|numero)?\s*1630\b",
     ]
+
+    return any(re.search(padrao, texto, flags=re.I) for padrao in padroes)
+
+
+def _dados_pdf_indica_produto_nao_acabado(dados_pdf):
+    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
+
+    termos = [
+        "produto nao acabado",
+        "uso interno",
+        "integracao em outros equipamentos",
+        "pode requerer nova avaliacao",
+        "modulo",
+        "module",
+        "oem",
+    ]
+
+    return any(termo in texto for termo in termos)
+
+
+def _dados_pdf_tem_coluna_sar(dados_pdf):
+    """
+    Verifica se a tabela técnica do CCT possui coluna/cabeçalho de SAR.
+    """
+    tabela = (dados_pdf or {}).get("tabela_tecnica_cct", {}) or {}
+    cabecalho = tabela.get("cabecalho", []) or []
+
+    texto_cabecalho = _normalizar_texto_comparacao(
+        " ".join(str(c or "") for c in cabecalho)
+    )
+
+    termos_coluna_sar = [
+        "sar",
+        "sar cabeca",
+        "sar corpo",
+        "sar head",
+        "sar body",
+        "taxa de absorcao especifica",
+    ]
+
+    return any(termo in texto_cabecalho for termo in termos_coluna_sar)
+
+
+def _dados_pdf_tem_dados_sar(dados_pdf):
+    """
+    Verifica sinais de SAR no CCT.
+    Primeiro olha a coluna/cabeçalho da tabela técnica.
+    Depois usa fallback pelo texto total.
+    """
+    if _dados_pdf_tem_coluna_sar(dados_pdf):
+        return True
+
+    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
 
     termos_dados_sar = [
         "sar cabeca",
@@ -1847,42 +2359,98 @@ def analisar_sar_cct(dados_pdf):
         "w/kg",
     ]
 
+    return any(t in texto for t in termos_dados_sar)
+
+
+def analisar_sar_cct(dados_pdf):
+    dados_pdf = dados_pdf or {}
+    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf))
+
+    termos_nao_aplicavel = [
+        "ensaio de sar nao aplicavel",
+        "sar nao aplicavel",
+        "ensaio sar nao aplicavel",
+        "nao se aplica sar",
+        "sar nao se aplica",
+    ]
+
     tem_nao_aplicavel = any(t in texto for t in termos_nao_aplicavel)
-    tem_dados_sar = any(t in texto for t in termos_dados_sar)
+    tem_dados_sar = _dados_pdf_tem_dados_sar(dados_pdf)
+    tem_ato_1630 = _dados_pdf_tem_ato_1630(dados_pdf)
+    produto_nao_acabado = _dados_pdf_indica_produto_nao_acabado(dados_pdf)
 
     if tem_nao_aplicavel and tem_dados_sar:
         return {
             "status": "conflito",
             "sar_aplicavel": None,
+            "ato_1630_presente": tem_ato_1630,
             "preencher_frase": False,
             "frase": "",
-            "mensagem": "Foram encontrados sinais de SAR não aplicável e também dados de SAR. Conferir manualmente.",
+            "mensagem": (
+                "Foram encontrados sinais de SAR não aplicável e também dados/coluna de SAR. "
+                "Conferir manualmente."
+            ),
         }
 
-    if tem_dados_sar:
+    if tem_dados_sar and tem_ato_1630:
         return {
-            "status": "sar_aplicavel",
+            "status": "sar_aplicavel_com_ato_1630",
             "sar_aplicavel": True,
+            "ato_1630_presente": True,
             "preencher_frase": False,
             "frase": "",
-            "mensagem": "Foram encontrados dados/colunas de SAR no CCT. A frase não será inserida.",
+            "mensagem": (
+                "Foram encontrados dados/coluna de SAR no CCT e o Ato nº 1630 está presente. "
+                "A frase de SAR não aplicável não será inserida."
+            ),
+        }
+
+    if tem_dados_sar and not tem_ato_1630:
+        return {
+            "status": "sar_aplicavel_sem_ato_1630",
+            "sar_aplicavel": True,
+            "ato_1630_presente": False,
+            "preencher_frase": False,
+            "frase": "",
+            "mensagem": (
+                "Foram encontrados dados/coluna de SAR no CCT, mas o Ato nº 1630 não consta. "
+                "Não preencher 'SAR não aplicável'; gerar alerta para revisão/NC."
+            ),
         }
 
     if tem_nao_aplicavel:
         return {
             "status": "sar_nao_aplicavel",
             "sar_aplicavel": False,
+            "ato_1630_presente": tem_ato_1630,
             "preencher_frase": True,
             "frase": FRASE_SAR_NAO_APLICAVEL,
             "mensagem": "Foi identificado no CCT que o ensaio de SAR não é aplicável.",
         }
 
+    if produto_nao_acabado:
+        return {
+            "status": "sar_nao_aplicavel_produto_nao_acabado",
+            "sar_aplicavel": False,
+            "ato_1630_presente": tem_ato_1630,
+            "preencher_frase": True,
+            "frase": FRASE_SAR_NAO_APLICAVEL,
+            "mensagem": (
+                "Produto não acabado/uso interno identificado. "
+                "SAR tratado como não aplicável."
+            ),
+        }
+
     return {
-        "status": "nao_identificado",
-        "sar_aplicavel": None,
-        "preencher_frase": False,
-        "frase": "",
-        "mensagem": "Não foi possível determinar automaticamente a aplicabilidade de SAR.",
+        "status": "sar_nao_aplicavel_sem_coluna",
+        "sar_aplicavel": False,
+        "ato_1630_presente": tem_ato_1630,
+        "preencher_frase": True,
+        "frase": FRASE_SAR_NAO_APLICAVEL,
+        "mensagem": (
+            "Não foram encontrados dados/coluna de SAR no CCT. "
+            "SAR tratado como não aplicável."
+        ),
     }
 
 
@@ -2215,6 +2783,13 @@ def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_bai
         analise["texto"],
     )
 
+    titulo_secundario = preencher_titulo_caracteristicas_secundarias_se_existir(
+        driver=driver,
+        wait=wait,
+        req=req,
+        dados_pdf=dados_pdf,
+    )
+
     resultado_salvamento = salvar_caracteristicas_tecnicas(
         driver,
         wait,
@@ -2222,6 +2797,7 @@ def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_bai
     )
 
     analise["preenchido_automaticamente"] = bool(preenchido)
+    analise["titulo_caracteristicas_secundarias"] = titulo_secundario
     analise["salvo"] = bool(resultado_salvamento.get("salvo"))
     analise["confirmado_apos_salvar"] = bool(
         resultado_salvamento.get("confirmado_apos_salvar")
@@ -2513,6 +3089,15 @@ def preencher_informacoes_adicionais_com_analise(
 def voltar_para_fila(driver, wait):
     print("[SCH] Voltando para a fila...")
 
+    if garantir_sessao_ativa_sch(
+        driver,
+        wait,
+        contexto="ao tentar voltar para a fila",
+        reabrir_fila=True,
+    ):
+        print("[SCH] Retorno para a fila concluído após refazer login.")
+        return
+
     candidatos = [
         "//a[contains(., 'Voltar')]",
         "//button[contains(., 'Voltar')]",
@@ -2534,7 +3119,7 @@ def voltar_para_fila(driver, wait):
             print("[SCH] Retorno para a fila concluído por botão.")
             return
         except Exception:
-            pass
+            continue
 
     try:
         driver.switch_to.default_content()
@@ -2547,5 +3132,14 @@ def voltar_para_fila(driver, wait):
         return
     except Exception:
         pass
+
+    if garantir_sessao_ativa_sch(
+        driver,
+        wait,
+        contexto="após falha ao voltar para a fila",
+        reabrir_fila=True,
+    ):
+        print("[SCH] Retorno para a fila concluído após refazer login.")
+        return
 
     raise Exception("Não foi possível voltar para a fila.")

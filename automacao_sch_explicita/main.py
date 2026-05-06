@@ -217,7 +217,7 @@ def main():
 
             if opcao == "0":
                 print("[INFO] Encerrando programa.")
-                return
+                return 0
 
             if opcao == "1":
                 opcoes = coletar_opcoes_fluxo_completo()
@@ -238,7 +238,8 @@ def main():
                     executar_fluxo_sch(**opcoes)
                 else:
                     print("[INFO] Execução cancelada pelo usuário.")
-                return
+
+                return 0
 
             if opcao == "2":
                 opcoes = coletar_opcoes_analise_local()
@@ -255,15 +256,42 @@ def main():
                     executar_modo_analise_local(**opcoes)
                 else:
                     print("[INFO] Execução cancelada pelo usuário.")
-                return
+
+                return 0
 
     except KeyboardInterrupt:
         print("\n[INFO] Execução interrompida pelo usuário.")
-        sys.exit(1)
+        return 1
+
     except Exception as e:
-        print(f"[ERRO] Falha geral no programa: {type(e).__name__}: {e}")
-        sys.exit(1)
+        print("\n" + "=" * 90)
+        print("[ERRO FATAL] Falha geral no programa.")
+        print("=" * 90)
+        print(f"Tipo: {type(e).__name__}")
+        print(f"Mensagem: {e}")
+        print("=" * 90)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    codigo_saida = 0
+
+    try:
+        codigo_saida = main() or 0
+
+    except Exception as e:
+        codigo_saida = 1
+        print("\n" + "=" * 90)
+        print("[ERRO FATAL NÃO TRATADO]")
+        print("=" * 90)
+        print(f"Tipo: {type(e).__name__}")
+        print(f"Mensagem: {e}")
+        print("=" * 90)
+
+    finally:
+        try:
+            input("\nPressione Enter para encerrar...")
+        except Exception:
+            pass
+
+    sys.exit(codigo_saida)

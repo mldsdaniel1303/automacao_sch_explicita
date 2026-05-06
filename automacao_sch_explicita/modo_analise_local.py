@@ -7,9 +7,12 @@ from utils import salvar_json
 from pdf_parser import parsear_certificado_pdf
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
-from funcoes_sch import localizar_pdf_cct_do_requerimento
+from funcoes_sch import (
+    localizar_pdf_cct_do_requerimento,
+    avaliar_validade_cct,
+)
 
-VERSAO_SCRIPT = "0.6.2"
+VERSAO_SCRIPT = "0.6.9"
 
 
 def contar_arquivos_requerimento(pasta_req):
@@ -64,6 +67,29 @@ def _normalizar_req_local(pasta_req, resumo_existente):
         req_existente["requerimento"] = numero_pasta
 
     return req_existente
+
+
+def _completar_req_com_dados_pdf(req, dados_pdf):
+    req = dict(req or {})
+    dados_pdf = dados_pdf or {}
+
+    preenchimentos = {
+        "modelo": dados_pdf.get("modelo", ""),
+        "fabricante": dados_pdf.get("fabricante", ""),
+        "solicitante": dados_pdf.get("solicitante", ""),
+        "tipo_produto": dados_pdf.get("tipo_produto", ""),
+        "certificado": dados_pdf.get("numero_certificado", ""),
+        "homologacao": dados_pdf.get("homologacao", ""),
+    }
+
+    for campo, valor in preenchimentos.items():
+        valor_atual = str(req.get(campo, "") or "").strip()
+        valor_novo = str(valor or "").strip()
+
+        if not valor_atual and valor_novo:
+            req[campo] = valor_novo
+
+    return req
 
 
 def _parece_pasta_de_requerimento(pasta):
@@ -175,6 +201,7 @@ def _filtrar_pendentes(pastas_req):
     return filtrados
 
 
+
 def executar_modo_analise_local(
     pasta_base,
     limite_requerimentos=None,
@@ -184,7 +211,6 @@ def executar_modo_analise_local(
     info_pastas = _resolver_pasta_requerimentos(pasta_escolhida)
 
     pasta_base_real = info_pastas["pasta_base"]
-
     requerimentos_dirs = _listar_requerimentos(info_pastas)
 
     if processar_somente_pendentes:
@@ -237,6 +263,18 @@ def executar_modo_analise_local(
                 dados_pdf = {}
 
             resumo["dados_pdf"] = dados_pdf
+
+            validade_cct = avaliar_validade_cct(dados_pdf)
+            resumo["validade_cct"] = validade_cct
+
+            if validade_cct.get("status") == "alerta":
+                print(f"[LOCAL][WARN] CCT: {validade_cct.get('mensagem')}")
+            else:
+                print(f"[LOCAL] CCT: {validade_cct.get('mensagem')}")
+
+            req = _completar_req_com_dados_pdf(req, dados_pdf)
+            resumo["requerimento"] = req
+
             resumo["downloads_realizados"] = contar_arquivos_requerimento(pasta_req)
 
             analise_documental = analisar_requerimento(
@@ -261,7 +299,11 @@ def executar_modo_analise_local(
                 "mensagem": str(e),
                 "repr": repr(e),
             }
-            print(f"[LOCAL][ERRO] Falha no requerimento {numero_extraido}: {type(e).__name__}: {e}")
+
+            print(
+                f"[LOCAL][ERRO] Falha no requerimento {numero_extraido}: "
+                f"{type(e).__name__}: {e}"
+            )
 
         salvar_json(pasta_req / "resumo.json", resumo)
         resultados.append(resumo)
@@ -269,16 +311,26 @@ def executar_modo_analise_local(
     fim_execucao = datetime.now()
 
     caminho_relatorio = pasta_base_real / "relatorio_execucao_local.json"
+
     salvar_json(
         caminho_relatorio,
         {
             "modo_execucao": "analise_local",
             "inicio_execucao": inicio_execucao.isoformat(),
             "fim_execucao": fim_execucao.isoformat(),
-            "tempo_total_segundos": round((fim_execucao - inicio_execucao).total_seconds(), 2),
+            "tempo_total_segundos": round(
+                (fim_execucao - inicio_execucao).total_seconds(),
+                2,
+            ),
             "total_processados": len(resultados),
-            "sucessos": sum(1 for x in resultados if x.get("status") == "analise_local_sucesso"),
-            "erros": sum(1 for x in resultados if x.get("status") == "analise_local_erro"),
+            "sucessos": sum(
+                1 for x in resultados
+                if x.get("status") == "analise_local_sucesso"
+            ),
+            "erros": sum(
+                1 for x in resultados
+                if x.get("status") == "analise_local_erro"
+            ),
             "itens": resultados,
             "versao_script": VERSAO_SCRIPT,
             "pasta_base": str(pasta_base_real),
@@ -286,6 +338,7 @@ def executar_modo_analise_local(
             "modo_detectado": info_pastas["modo"],
         },
     )
+
     print(f"[LOCAL] Relatório local salvo em: {caminho_relatorio}")
 
     caminho_req_report = gerar_req_report(
@@ -295,4 +348,17 @@ def executar_modo_analise_local(
         inicio_execucao=inicio_execucao,
         fim_execucao=fim_execucao,
     )
+
     print(f"[LOCAL] Pasta req_report gerada em: {caminho_req_report}")
+
+    try:
+        arquivos_req_report = sorted(
+            p.name for p in Path(caminho_req_report).iterdir() if p.is_file()
+        )
+
+        print("[LOCAL] Arquivos gerados no req_report:")
+        for arquivo in arquivos_req_report:
+            print(f"[LOCAL] - {arquivo}")
+
+    except Exception as e:
+        print(f"[LOCAL][WARN] Não foi possível listar os arquivos do req_report: {e}")

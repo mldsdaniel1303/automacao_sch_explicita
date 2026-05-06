@@ -21,6 +21,7 @@ from funcoes_sch import (
     preencher_informacoes_adicionais_com_analise,
     avaliar_validade_cct,
     preencher_minuta_sar_se_necessario,
+    garantir_sessao_ativa_sch,
     voltar_para_fila,
 )
 from analise_requerimentos import analisar_requerimento
@@ -32,25 +33,34 @@ VERSAO_SCRIPT = "0.6.8"
 def _normalizar_texto(valor):
     if valor is None:
         return ""
+
     texto = str(valor).strip().lower()
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
     texto = re.sub(r"\s+", " ", texto)
+
     return texto.strip()
 
 
 def _texto_requerimento(req):
     if not isinstance(req, dict):
         return ""
+
     partes = []
+
     for _, valor in req.items():
         if valor is None:
             continue
+
         partes.append(str(valor))
+
     return _normalizar_texto(" | ".join(partes))
 
 
 def _eh_radiacao_restrita(req):
+    if not isinstance(req, dict):
+        return False
+
     tipo_produto = _normalizar_texto(req.get("tipo_produto", ""))
     texto_total = _texto_requerimento(req)
 
@@ -68,6 +78,22 @@ def _eh_radiacao_restrita(req):
         return True
 
     return False
+
+
+def _numero_requerimento(req):
+    if isinstance(req, dict):
+        numero = req.get("requerimento", "sem_numero")
+
+        if not numero or str(numero).strip().lower().startswith("sem_numero"):
+            numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
+
+        return str(numero)
+
+    if req is None:
+        return "sem_numero"
+
+    texto = str(req).strip()
+    return texto or "sem_numero"
 
 
 def _dados_normativos_radiacao_restrita():
@@ -98,6 +124,16 @@ def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
     ignorados = []
 
     for req in requerimentos:
+        if not isinstance(req, dict):
+            ignorados.append(
+                {
+                    "requerimento": str(req),
+                    "tipo_produto": "",
+                    "motivo": "item_invalido_na_fila",
+                }
+            )
+            continue
+
         if _eh_radiacao_restrita(req):
             selecionados.append(req)
         else:
@@ -106,19 +142,13 @@ def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
     return selecionados, ignorados
 
 
-def _numero_requerimento(req):
-    numero = req.get("requerimento", "sem_numero")
-    if not numero or str(numero).strip().lower().startswith("sem_numero"):
-        numero = f"req_linha_{req.get('row_index', 'sem_indice')}"
-    return str(numero)
-
-
 def preparar_pastas_requerimentos(pasta_base, requerimentos):
     pasta_base = Path(pasta_base)
     pasta_requerimentos = pasta_base / "requerimentos"
     pasta_requerimentos.mkdir(parents=True, exist_ok=True)
 
     mapeados = []
+
     for req in requerimentos:
         numero = _numero_requerimento(req)
         pasta_req = pasta_requerimentos / nome_seguro(numero)
@@ -154,13 +184,26 @@ def salvar_manifesto_requerimentos(pasta_base, mapeados, ignorados=None):
             "ignorados": ignorados,
         },
     )
+
     return caminho
 
 
 def contar_arquivos_requerimento(pasta_req):
     pasta_req = Path(pasta_req)
-    ignorar = {"resumo.json", "controle_downloads.json", "analise_requerimento.json"}
-    return len([p for p in pasta_req.rglob("*") if p.is_file() and p.name not in ignorar])
+
+    ignorar = {
+        "resumo.json",
+        "controle_downloads.json",
+        "analise_requerimento.json",
+    }
+
+    return len(
+        [
+            p
+            for p in pasta_req.rglob("*")
+            if p.is_file() and p.name not in ignorar
+        ]
+    )
 
 
 def _criar_driver_com_pasta(pasta_base):
@@ -189,11 +232,38 @@ def _criar_driver_com_pasta(pasta_base):
 def perguntar_se_fecha_navegador():
     while True:
         resposta = input("[SCH] Deseja fechar o navegador ao final do fluxo? (s/n): ").strip().lower()
+
         if resposta in {"s", "sim"}:
             return True
+
         if resposta in {"n", "nao", "não"}:
             return False
+
         print("[SCH][WARN] Resposta inválida. Digite 's' para sim ou 'n' para não.")
+
+
+def _montar_ignorados_resumidos(requerimentos_ignorados):
+    ignorados_resumidos = []
+
+    for req in requerimentos_ignorados:
+        if isinstance(req, dict):
+            ignorados_resumidos.append(
+                {
+                    "requerimento": _numero_requerimento(req),
+                    "tipo_produto": req.get("tipo_produto", ""),
+                    "motivo": req.get("motivo", "fora_escopo_radiacao_restrita"),
+                }
+            )
+        else:
+            ignorados_resumidos.append(
+                {
+                    "requerimento": str(req),
+                    "tipo_produto": "",
+                    "motivo": "item_invalido_na_fila",
+                }
+            )
+
+    return ignorados_resumidos
 
 
 def executar_fluxo_sch(
@@ -226,6 +296,12 @@ def executar_fluxo_sch(
     if fechar_navegador_ao_final is None:
         fechar_navegador_ao_final = perguntar_se_fecha_navegador()
 
+    inicio_execucao = datetime.now()
+    requerimentos = []
+    requerimentos_processaveis = []
+    requerimentos_ignorados = []
+    ignorados_resumidos = []
+
     try:
         abrir_sch(driver)
         aguardar_enter("[SCH] Faça o login manualmente no sistema e pressione Enter para continuar.")
@@ -235,7 +311,6 @@ def executar_fluxo_sch(
         clicar_fila_em_analise(driver, wait)
         requerimentos = coletar_requerimentos(driver, wait, regras)
 
-        # Processa do mais antigo para o mais novo (de baixo para cima na fila)
         requerimentos = list(reversed(requerimentos))
 
         if limite_requerimentos:
@@ -257,19 +332,14 @@ def executar_fluxo_sch(
                 for item in mapeados
                 if item["status"] == "pendente"
             }
+
             requerimentos_processaveis = [
-                req for req in requerimentos_processaveis
+                req
+                for req in requerimentos_processaveis
                 if _numero_requerimento(req) in pendentes
             ]
 
-        ignorados_resumidos = [
-            {
-                "requerimento": _numero_requerimento(req),
-                "tipo_produto": req.get("tipo_produto", ""),
-                "motivo": "fora_escopo_radiacao_restrita",
-            }
-            for req in requerimentos_ignorados
-        ]
+        ignorados_resumidos = _montar_ignorados_resumidos(requerimentos_ignorados)
 
         print("[SCH] Mapeando requerimentos...")
         print(f"[SCH] Total coletado na fila: {len(requerimentos)}")
@@ -289,6 +359,13 @@ def executar_fluxo_sch(
             return
 
         for req in requerimentos_processaveis:
+            if not isinstance(req, dict):
+                print(
+                    f"[SCH][WARN] Item inválido em requerimentos_processaveis: "
+                    f"{type(req).__name__} -> {req}"
+                )
+                continue
+
             numero = _numero_requerimento(req)
             pasta_req = pasta_requerimentos / nome_seguro(numero)
 
@@ -326,6 +403,13 @@ def executar_fluxo_sch(
             }
 
             try:
+                garantir_sessao_ativa_sch(
+                    driver,
+                    wait,
+                    contexto=f"antes de iniciar o requerimento {numero}",
+                    reabrir_fila=True,
+                )
+
                 abrir_requerimento(driver, wait, req)
 
                 clicar_aba_anexos(driver, wait)
@@ -430,12 +514,11 @@ def executar_fluxo_sch(
                     "status": sar_minuta.get("status", ""),
                     "mensagem": sar_minuta.get("mensagem", ""),
                     "frase": sar_minuta.get("frase", ""),
-                }   
+                }
 
                 resumo["preenchimento_sch"]["minuta"] = bool(
                     sar_minuta.get("preenchido_automaticamente")
                 )
-
 
                 if preencher_informacoes_adicionais:
                     info_adicionais = preencher_informacoes_adicionais_com_analise(
@@ -508,6 +591,7 @@ def executar_fluxo_sch(
                     "mensagem": str(e),
                     "repr": repr(e),
                 }
+
                 print(f"[SCH][ERRO] Falha no requerimento {numero}: {type(e).__name__}: {repr(e)}")
 
             finally:
