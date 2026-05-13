@@ -42,8 +42,37 @@ OBS_PRODUTO_NAO_ACABADO = (
 )
 
 
+def _valor_vazio_ou_traco(valor):
+    texto = str(valor or "").strip()
+    texto = re.sub(r"\s+", " ", texto)
+
+    vazios = {
+        "",
+        "-",
+        "--",
+        "---",
+        "–",
+        "—",
+        "n/a",
+        "N/A",
+        "na",
+        "NA",
+        "não informado",
+        "nao informado",
+        "não identificado",
+        "nao identificado",
+    }
+
+    return texto in vazios
+
+
 def _texto_limpo(valor):
-    return re.sub(r"\s+", " ", (valor or "")).strip()
+    texto = re.sub(r"\s+", " ", str(valor or "")).strip()
+
+    if _valor_vazio_ou_traco(texto):
+        return ""
+
+    return texto
 
 
 def _somente_digitos(valor):
@@ -107,6 +136,78 @@ def _capturar_novas_abas(driver, handles_antes, timeout=1.0, poll=0.08):
             return novas
         time.sleep(poll)
     return []
+
+
+def fechar_abas_extras_sem_travar(driver, aba_principal=None, abas_para_fechar=None):
+    """
+    Fecha abas extras abertas durante o download sem derrubar o fluxo.
+
+    Em alguns casos, Edge/Chrome trava ao executar driver.close().
+    Quando isso acontecer, a automação apenas registra o aviso e tenta
+    voltar para a aba principal.
+    """
+    try:
+        handles_atuais = list(driver.window_handles)
+    except Exception as e:
+        print(f"[SCH][WARN] Não foi possível listar abas abertas: {e}")
+        return False
+
+    if not handles_atuais:
+        return False
+
+    if not aba_principal:
+        try:
+            aba_principal = driver.current_window_handle
+        except Exception:
+            aba_principal = handles_atuais[0]
+
+    if abas_para_fechar is None:
+        abas_para_fechar = [
+            h for h in handles_atuais
+            if h != aba_principal
+        ]
+
+    fechou_alguma = False
+
+    for handle in list(dict.fromkeys(abas_para_fechar)):
+        try:
+            handles_atuais = list(driver.window_handles)
+
+            if handle not in handles_atuais:
+                continue
+
+            if handle == aba_principal:
+                continue
+
+            driver.switch_to.window(handle)
+            esperar_tela_carregar(driver, 0.1)
+
+            try:
+                driver.close()
+                fechou_alguma = True
+            except Exception as e:
+                print(
+                    "[SCH][WARN] Não foi possível fechar aba extra. "
+                    f"Ignorando e tentando continuar: {e}"
+                )
+
+        except Exception as e:
+            print(f"[SCH][WARN] Falha ao tratar aba extra. Ignorando: {e}")
+
+    try:
+        handles_restantes = list(driver.window_handles)
+
+        if aba_principal in handles_restantes:
+            driver.switch_to.window(aba_principal)
+        elif handles_restantes:
+            driver.switch_to.window(handles_restantes[0])
+
+        esperar_tela_carregar(driver, 0.1)
+        return True
+
+    except Exception as e:
+        print(f"[SCH][WARN] Não foi possível retornar para aba principal: {e}")
+        return fechou_alguma
 
 
 def _classe_ativa(elemento):
@@ -962,11 +1063,12 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             novas_abas = _capturar_novas_abas(driver, handles_antes, timeout=0.8)
 
             if novas_abas:
-                for nova_aba in novas_abas:
-                    driver.switch_to.window(nova_aba)
-                    driver.close()
+                fechar_abas_extras_sem_travar(
+                    driver=driver,
+                    aba_principal=janela_principal,
+                    abas_para_fechar=novas_abas,
+                )
 
-                driver.switch_to.window(janela_principal)
                 entrar_iframe_detalhe_analise(driver, wait)
 
             novo_arquivo = esperar_novo_arquivo_baixado(
@@ -1335,36 +1437,53 @@ def _cabecalho_canonico(valor):
     mapeamentos = {
         "faixa_freq_tx": [
             "faixa de frequencias tx mhz",
+            "faixa de frequencia tx mhz",
             "faixa de frequencias tx",
+            "faixa de frequencia tx",
             "faixa de frequencias",
-            "faixa de frequencias frequency range mhz",
-            "faixa de frequencias frequency range",
+            "faixa de frequencia",
+            "faixa de frequencia mhz",
+            "faixa de frequencias mhz",
             "frequency range mhz",
             "frequency range",
         ],
         "potencia_max_saida": [
             "potencia maxima de saida w",
+            "potencia maxima saida w",
             "potencia maxima de saida",
+            "potencia maxima saida",
             "saida maximum power w",
             "maximum power w",
             "maximum power",
+            "output power w",
+            "output power",
         ],
         "designacao_emissoes": [
             "designacao de emissoes",
+            "designacao de emissao",
             "designation of emission",
             "designation of emissions",
+            "emissoes",
+            "emission",
         ],
         "tecnologias": [
             "tecnologias",
-            "tecnologia technology",
+            "tecnologia",
+            "tecnologia e espalhamento",
+            "tecnologia espalhamento",
+            "espalhamento espectral",
+            "espalhamento",
             "technology",
             "technologies",
+            "spread spectrum",
+            "technology spread spectrum",
         ],
         "tipo_modulacao": [
             "tipo de modulacao",
-            "type of modulation",
+            "tipo modulacao",
             "modulacao",
             "modulation",
+            "type of modulation",
         ],
     }
 
@@ -1376,6 +1495,87 @@ def _cabecalho_canonico(valor):
     return ""
 
 
+
+def _formatar_float_tabela(numero):
+    try:
+        valor = float(numero)
+    except Exception:
+        return str(numero or "").strip()
+
+    texto = f"{valor:.10f}".rstrip("0").rstrip(".")
+
+    if texto == "-0":
+        texto = "0"
+
+    return texto
+
+
+def _normalizar_decimal_tabela(valor):
+    texto = str(valor or "").strip()
+    texto = texto.replace(" ", "")
+
+    if not texto:
+        return ""
+
+    # Formato brasileiro: 2.400,0 -> 2400.0 / 0,0063 -> 0.0063
+    if "," in texto:
+        texto = texto.replace(".", "")
+        texto = texto.replace(",", ".")
+    else:
+        # Se tiver vários pontos, trata os primeiros como separador de milhar.
+        if texto.count(".") > 1:
+            partes = texto.split(".")
+            texto = "".join(partes[:-1]) + "." + partes[-1]
+
+    texto = re.sub(r"[^0-9.\-]", "", texto)
+
+    if not texto or texto in {"-", ".", "-."}:
+        return ""
+
+    return _formatar_float_tabela(texto)
+
+
+def _normalizar_faixa_frequencia_tabela(valor):
+    texto = _normalizar_texto_tabela(valor)
+
+    if not texto:
+        return ""
+
+    texto = texto.replace("mhz", "")
+    texto = texto.replace("até", "a")
+    texto = texto.replace("ate", "a")
+    texto = texto.replace("–", "-")
+    texto = texto.replace("—", "-")
+    texto = texto.replace("−", "-")
+
+    numeros = re.findall(r"\d[\d.,]*", texto)
+
+    if len(numeros) >= 2:
+        inicio = _normalizar_decimal_tabela(numeros[0])
+        fim = _normalizar_decimal_tabela(numeros[1])
+
+        if inicio and fim:
+            return f"{inicio}-{fim}"
+
+    if len(numeros) == 1:
+        return _normalizar_decimal_tabela(numeros[0])
+
+    return texto.replace(" ", "")
+
+
+def _normalizar_potencia_tabela(valor):
+    texto = _normalizar_texto_tabela(valor)
+    texto = texto.replace("w", "").strip()
+
+    numeros = re.findall(r"\d[\d.,]*", texto)
+
+    if numeros:
+        return _normalizar_decimal_tabela(numeros[0])
+
+    return texto
+
+
+
 def _normalizar_valor_tabela_por_campo(campo, valor):
     texto = _normalizar_texto_tabela(valor)
 
@@ -1383,48 +1583,47 @@ def _normalizar_valor_tabela_por_campo(campo, valor):
         return ""
 
     if campo == "faixa_freq_tx":
-        texto = texto.replace(" ate ", "-")
-        texto = texto.replace(" a ", "-")
-        texto = texto.replace("–", "-")
-        texto = texto.replace("—", "-")
-        texto = texto.replace("mhz", "")
-        texto = texto.replace(" ", "")
-        return texto
+        return _normalizar_faixa_frequencia_tabela(valor)
 
     if campo == "potencia_max_saida":
-        texto = texto.replace("w", "").strip()
-        texto = texto.replace(",", ".")
-        try:
-            return f"{float(texto):.6f}".rstrip("0").rstrip(".")
-        except Exception:
-            return texto
+        return _normalizar_potencia_tabela(valor)
 
     if campo == "designacao_emissoes":
-        return texto.upper().replace(" ", "")
+        texto = texto.upper()
+        texto = re.sub(r"[^A-Z0-9]", "", texto)
+        return texto
 
     if campo == "tecnologias":
-        # equivalências
         texto = texto.replace("fhss", "salto em frequencia")
         texto = texto.replace("dsss", "sequencia direta")
 
-        # reduz descrições longas para a mesma ideia semântica
         if "salto em frequencia" in texto:
             return "salto em frequencia"
 
         if "sequencia direta" in texto:
             return "sequencia direta"
 
-        if "bluetooth low energy" in texto or "bluetooth le" in texto:
+        if "ofdm" in texto:
+            return "ofdm"
+
+        if "ofdma" in texto:
+            return "ofdma"
+
+        if "bluetooth low energy" in texto or "bluetooth le" in texto or "ble" == texto:
             return "bluetooth le"
 
         texto = re.sub(r"\s+", " ", texto).strip()
         return texto
 
     if campo == "tipo_modulacao":
-        return texto.upper().replace(" ", "")
+        texto = texto.upper()
+        texto = texto.replace(" ", "")
+        texto = texto.replace("\\", "/")
+        texto = re.sub(r"/+", "/", texto)
+        texto = texto.strip("/")
+        return texto
 
     return texto
-
 
 def _mapear_colunas_relevantes(cabecalho):
     mapeamento = {}
@@ -2285,7 +2484,9 @@ def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
     }
 
 
-FRASE_SAR_NAO_APLICAVEL = "Ensaio de SAR não aplicável."
+FRASE_SAR_NAO_APLICAVEL = (
+    "Ensaio de SAR não aplicável"
+)
 
 def _dados_pdf_tem_ato_1630(dados_pdf):
     texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
@@ -2313,10 +2514,30 @@ def _dados_pdf_indica_produto_nao_acabado(dados_pdf):
     return any(termo in texto for termo in termos)
 
 
+def _extrair_frase_sar_nao_aplicavel(dados_pdf):
+    """
+    Quando o CCT indicar SAR não aplicável, a frase padrão a preencher
+    na Corrigir Minuta deve ser somente:
+    'Ensaio de SAR não aplicável'
+    """
+    return FRASE_SAR_NAO_APLICAVEL
+
+
+def _dados_pdf_tem_frase_sar_nao_aplicavel(dados_pdf):
+    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
+
+    termos = [
+        "ensaio de sar nao aplicavel",
+        "sar nao aplicavel",
+        "ensaio sar nao aplicavel",
+        "nao se aplica sar",
+        "sar nao se aplica",
+    ]
+
+    return any(t in texto for t in termos)
+
+
 def _dados_pdf_tem_coluna_sar(dados_pdf):
-    """
-    Verifica se a tabela técnica do CCT possui coluna/cabeçalho de SAR.
-    """
     tabela = (dados_pdf or {}).get("tabela_tecnica_cct", {}) or {}
     cabecalho = tabela.get("cabecalho", []) or []
 
@@ -2336,95 +2557,91 @@ def _dados_pdf_tem_coluna_sar(dados_pdf):
     return any(termo in texto_cabecalho for termo in termos_coluna_sar)
 
 
-def _dados_pdf_tem_dados_sar(dados_pdf):
+def _valor_sar_preenchido(valor):
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return False
+
+    texto_norm = _normalizar_texto_comparacao(texto)
+
+    vazios = {
+        "",
+        "-",
+        "--",
+        "---",
+        "na",
+        "n a",
+        "n/a",
+        "nao aplicavel",
+        "nao se aplica",
+    }
+
+    if texto_norm in vazios:
+        return False
+
+    # Procura número real de SAR, por exemplo: 0,123 / 1.23 / 0.45
+    return bool(re.search(r"\d+[,.]?\d*", texto))
+
+
+def _dados_pdf_tem_valor_sar(dados_pdf):
     """
-    Verifica sinais de SAR no CCT.
-    Primeiro olha a coluna/cabeçalho da tabela técnica.
-    Depois usa fallback pelo texto total.
+    Retorna True somente se a tabela tiver valor real de SAR.
+    Coluna SAR com '-' não conta como SAR aplicável.
     """
-    if _dados_pdf_tem_coluna_sar(dados_pdf):
-        return True
+    tabela = (dados_pdf or {}).get("tabela_tecnica_cct", {}) or {}
+    cabecalho = tabela.get("cabecalho", []) or []
+    linhas = tabela.get("linhas", []) or []
 
-    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
+    indices_sar = []
 
-    termos_dados_sar = [
-        "sar cabeca",
-        "sar corpo",
-        "sar head",
-        "sar body",
-        "valor sar",
-        "limite sar",
-        "taxa de absorcao especifica",
-        "w kg",
-        "w/kg",
-    ]
+    for i, col in enumerate(cabecalho):
+        col_norm = _normalizar_texto_comparacao(col)
+        if "sar" in col_norm or "taxa de absorcao especifica" in col_norm:
+            indices_sar.append(i)
 
-    return any(t in texto for t in termos_dados_sar)
+    if not indices_sar:
+        return False
+
+    for linha in linhas:
+        for idx in indices_sar:
+            if idx < len(linha) and _valor_sar_preenchido(linha[idx]):
+                return True
+
+    return False
 
 
 def analisar_sar_cct(dados_pdf):
     dados_pdf = dados_pdf or {}
-    texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf))
 
-    termos_nao_aplicavel = [
-        "ensaio de sar nao aplicavel",
-        "sar nao aplicavel",
-        "ensaio sar nao aplicavel",
-        "nao se aplica sar",
-        "sar nao se aplica",
-    ]
-
-    tem_nao_aplicavel = any(t in texto for t in termos_nao_aplicavel)
-    tem_dados_sar = _dados_pdf_tem_dados_sar(dados_pdf)
+    tem_frase_nao_aplicavel = _dados_pdf_tem_frase_sar_nao_aplicavel(dados_pdf)
+    tem_coluna_sar = _dados_pdf_tem_coluna_sar(dados_pdf)
+    tem_valor_sar = _dados_pdf_tem_valor_sar(dados_pdf)
     tem_ato_1630 = _dados_pdf_tem_ato_1630(dados_pdf)
     produto_nao_acabado = _dados_pdf_indica_produto_nao_acabado(dados_pdf)
 
-    if tem_nao_aplicavel and tem_dados_sar:
+    frase_sar = _extrair_frase_sar_nao_aplicavel(dados_pdf)
+
+    if tem_coluna_sar and not tem_valor_sar:
         return {
-            "status": "conflito",
-            "sar_aplicavel": None,
+            "status": "sar_nao_aplicavel_coluna_sem_valor",
+            "sar_aplicavel": False,
             "ato_1630_presente": tem_ato_1630,
-            "preencher_frase": False,
-            "frase": "",
+            "preencher_frase": True,
+            "frase": frase_sar or FRASE_SAR_NAO_APLICAVEL,
             "mensagem": (
-                "Foram encontrados sinais de SAR não aplicável e também dados/coluna de SAR. "
-                "Conferir manualmente."
-            ),
-        }
+                "A tabela possui coluna SAR, mas os campos de SAR não possuem valor real "
+                "ou estão preenchidos com '-'. SAR tratado como não aplicável."
+        ),
+    }
 
-    if tem_dados_sar and tem_ato_1630:
-        return {
-            "status": "sar_aplicavel_com_ato_1630",
-            "sar_aplicavel": True,
-            "ato_1630_presente": True,
-            "preencher_frase": False,
-            "frase": "",
-            "mensagem": (
-                "Foram encontrados dados/coluna de SAR no CCT e o Ato nº 1630 está presente. "
-                "A frase de SAR não aplicável não será inserida."
-            ),
-        }
-
-    if tem_dados_sar and not tem_ato_1630:
-        return {
-            "status": "sar_aplicavel_sem_ato_1630",
-            "sar_aplicavel": True,
-            "ato_1630_presente": False,
-            "preencher_frase": False,
-            "frase": "",
-            "mensagem": (
-                "Foram encontrados dados/coluna de SAR no CCT, mas o Ato nº 1630 não consta. "
-                "Não preencher 'SAR não aplicável'; gerar alerta para revisão/NC."
-            ),
-        }
-
-    if tem_nao_aplicavel:
+    if tem_frase_nao_aplicavel:
         return {
             "status": "sar_nao_aplicavel",
             "sar_aplicavel": False,
             "ato_1630_presente": tem_ato_1630,
             "preencher_frase": True,
-            "frase": FRASE_SAR_NAO_APLICAVEL,
+            "frase": frase_sar,
             "mensagem": "Foi identificado no CCT que o ensaio de SAR não é aplicável.",
         }
 
@@ -2435,22 +2652,65 @@ def analisar_sar_cct(dados_pdf):
             "ato_1630_presente": tem_ato_1630,
             "preencher_frase": True,
             "frase": FRASE_SAR_NAO_APLICAVEL,
+            "mensagem": "Produto não acabado/uso interno identificado. SAR tratado como não aplicável.",
+        }
+
+    if not tem_coluna_sar:
+        return {
+            "status": "sar_nao_aplicavel_sem_coluna",
+            "sar_aplicavel": False,
+            "ato_1630_presente": tem_ato_1630,
+            "preencher_frase": True,
+            "frase": FRASE_SAR_NAO_APLICAVEL,
+            "mensagem": "Não foi identificada coluna SAR na tabela técnica do CCT. SAR tratado como não aplicável.",
+        }
+
+    if tem_coluna_sar and not tem_valor_sar:
+        return {
+            "status": "sar_coluna_sem_valor_revisar",
+            "sar_aplicavel": None,
+            "ato_1630_presente": tem_ato_1630,
+            "preencher_frase": False,
+            "frase": "",
             "mensagem": (
-                "Produto não acabado/uso interno identificado. "
-                "SAR tratado como não aplicável."
+                "A tabela possui coluna SAR, mas não há valor preenchido. "
+                "Como o CCT não trouxe frase de SAR não aplicável, revisar manualmente."
+            ),
+        }
+
+    if tem_valor_sar and tem_ato_1630:
+        return {
+            "status": "sar_aplicavel_com_ato_1630",
+            "sar_aplicavel": True,
+            "ato_1630_presente": True,
+            "preencher_frase": False,
+            "frase": "",
+            "mensagem": (
+                "Foram encontrados valores de SAR no CCT e o Ato nº 1630 está presente. "
+                "A frase de SAR não aplicável não será inserida."
+            ),
+        }
+
+    if tem_valor_sar and not tem_ato_1630:
+        return {
+            "status": "sar_aplicavel_sem_ato_1630",
+            "sar_aplicavel": True,
+            "ato_1630_presente": False,
+            "preencher_frase": False,
+            "frase": "",
+            "mensagem": (
+                "Foram encontrados valores de SAR no CCT, mas o Ato nº 1630 não consta. "
+                "Não preencher 'SAR não aplicável'; gerar alerta para revisão/NC."
             ),
         }
 
     return {
-        "status": "sar_nao_aplicavel_sem_coluna",
-        "sar_aplicavel": False,
+        "status": "nao_identificado",
+        "sar_aplicavel": None,
         "ato_1630_presente": tem_ato_1630,
-        "preencher_frase": True,
-        "frase": FRASE_SAR_NAO_APLICAVEL,
-        "mensagem": (
-            "Não foram encontrados dados/coluna de SAR no CCT. "
-            "SAR tratado como não aplicável."
-        ),
+        "preencher_frase": False,
+        "frase": "",
+        "mensagem": "Não foi possível determinar automaticamente a aplicabilidade de SAR.",
     }
 
 
@@ -2492,6 +2752,8 @@ def clicar_corrigir_minuta(driver, wait):
         timeout_click=2.0,
         timeout_pronta=2.0,
     )
+
+
 
 
 def _inserir_texto_sem_apagar(driver, wait, texto, descricao, xpaths_input, xpaths_editor=None):
@@ -2599,6 +2861,118 @@ def _inserir_texto_sem_apagar(driver, wait, texto, descricao, xpaths_input, xpat
             continue
 
     raise Exception(f"Não foi possível localizar o campo para inserir texto: {descricao}")
+
+
+def _substituir_texto_campo(driver, wait, texto, descricao, xpaths_input, xpaths_editor=None):
+    """
+    Substitui completamente o conteúdo do campo pelo texto informado.
+
+    Use esta função quando o SCH já deixa uma frase automática no campo
+    e a automação precisa trocar pelo texto correto.
+    """
+    if not texto:
+        print(f"[SCH][WARN] Texto vazio para {descricao}.")
+        return False
+
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
+
+    texto_plano = str(texto).strip()
+    html = texto_plano.replace("\n", "<br>")
+
+    for xpath in xpaths_input:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for campo in elementos:
+                try:
+                    if not campo.is_displayed() or not campo.is_enabled():
+                        continue
+
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});",
+                        campo,
+                    )
+
+                    _clicar_com_fallback(driver, campo)
+
+                    tag = (campo.tag_name or "").lower()
+
+                    if tag in {"textarea", "input"}:
+                        try:
+                            campo.send_keys(Keys.CONTROL, "a")
+                            campo.send_keys(Keys.DELETE)
+                            campo.send_keys(texto_plano)
+                        except Exception:
+                            driver.execute_script(
+                                "arguments[0].value = arguments[1];",
+                                campo,
+                                texto_plano,
+                            )
+                    else:
+                        driver.execute_script(
+                            "arguments[0].innerHTML = arguments[1];",
+                            campo,
+                            html,
+                        )
+
+                    driver.execute_script(
+                        """
+                        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+                        """,
+                        campo,
+                    )
+
+                    try:
+                        campo.send_keys(Keys.TAB)
+                    except Exception:
+                        pass
+
+                    esperar_tela_carregar(driver, 0.08)
+                    print(f"[SCH] Texto substituído em {descricao}.")
+                    return True
+
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    xpaths_editor = xpaths_editor or [
+        "//*[@contenteditable='true']",
+        "//div[contains(@class,'ql-editor')]",
+        "//div[contains(@class,'ui-editor')]//*[@contenteditable='true']",
+    ]
+
+    for xpath in xpaths_editor:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for editor in elementos:
+                try:
+                    if not editor.is_displayed():
+                        continue
+
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});",
+                        editor,
+                    )
+
+                    _preencher_html_em_elemento(driver, editor, html)
+                    esperar_tela_carregar(driver, 0.08)
+
+                    print(f"[SCH] Texto substituído em {descricao}.")
+                    return True
+
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    raise Exception(f"Não foi possível localizar o campo para substituir texto: {descricao}")
 
 
 def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
@@ -2709,63 +3083,297 @@ def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
     }
 
 
-def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
-    analise_sar = analisar_sar_cct(dados_pdf)
+
+def voltar_da_tela_corrigir_minuta(driver, wait):
+    """
+    Sai da tela Corrigir Minuta e volta para a tela principal do requerimento.
+    """
+    print("[SCH] Voltando da tela Corrigir Minuta...")
+
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.15)
+
+    xpaths_voltar = [
+        "//button[normalize-space()='Voltar']",
+        "//a[normalize-space()='Voltar']",
+        "//span[normalize-space()='Voltar']/ancestor::button[1]",
+        "//span[normalize-space()='Voltar']/ancestor::a[1]",
+        "//*[@title='Voltar']",
+        "//*[self::a or self::button][contains(normalize-space(), 'Voltar')]",
+        "//input[@type='button' and contains(@value,'Voltar')]",
+    ]
+
+    ultimo_erro = None
+
+    for xpath in xpaths_voltar:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for botao in elementos:
+                try:
+                    if not botao.is_displayed() or not botao.is_enabled():
+                        continue
+
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});",
+                        botao,
+                    )
+
+                    _clicar_com_fallback(driver, botao)
+                    esperar_tela_carregar(driver, 0.8)
+
+                    print("[SCH] Retorno da tela Corrigir Minuta concluído.")
+                    return True
+
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+        except Exception as e:
+            ultimo_erro = e
+            continue
+
+    print(f"[SCH][WARN] Não foi possível clicar em Voltar na Corrigir Minuta. Último erro: {ultimo_erro}")
+    return False
+
+
+
+def _localizar_campo_especificacoes_complementares_minuta(driver):
+    """
+    Localiza o campo 'Especificações Complementares' dentro da seção 'Especificação'
+    da aba Corrigir Minuta.
+    """
+    xpaths = [
+        "//*[contains(normalize-space(), 'Especificações Complementares')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::textarea[1]",
+
+        "//*[contains(normalize-space(), 'Especificações Complementares')]/following::*[@contenteditable='true'][1]",
+        "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::*[@contenteditable='true'][1]",
+
+        "//*[contains(normalize-space(), 'Especificações Complementares')]/following::div[contains(@class,'ql-editor')][1]",
+        "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::div[contains(@class,'ql-editor')][1]",
+    ]
+
+    for xpath in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for campo in elementos:
+                try:
+                    if campo.is_displayed() and campo.is_enabled():
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});",
+                            campo,
+                        )
+                        return campo
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    return None
+
+
+def abrir_secao_especificacao_minuta(driver, wait):
+    """
+    Na aba Corrigir Minuta, abre a seção 'Especificação'
+    para acessar 'Especificações Complementares'.
+    """
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
+
+    campo = _localizar_campo_especificacoes_complementares_minuta(driver)
+    if campo:
+        return True
+
+    xpaths_rotulo = [
+        "//*[normalize-space()='Especificação']",
+        "//*[normalize-space()='Especificacao']",
+        "//*[contains(normalize-space(), 'Especificação')]",
+        "//*[contains(normalize-space(), 'Especificacao')]",
+    ]
+
+    ultimo_erro = None
+
+    for xpath in xpaths_rotulo:
+        try:
+            rotulos = driver.find_elements(By.XPATH, xpath)
+
+            for rotulo in rotulos:
+                try:
+                    if not rotulo.is_displayed():
+                        continue
+
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});",
+                        rotulo,
+                    )
+
+                    esperar_tela_carregar(driver, 0.05)
+
+                    try:
+                        _clicar_com_fallback(driver, rotulo)
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", rotulo)
+
+                    esperar_tela_carregar(driver, 0.25)
+
+                    campo = _localizar_campo_especificacoes_complementares_minuta(driver)
+                    if campo:
+                        print("[SCH] Seção 'Especificação' da minuta aberta.")
+                        return True
+
+                    try:
+                        linha = rotulo.find_element(
+                            By.XPATH,
+                            "./ancestor::*[self::tr or self::div or self::li][1]"
+                        )
+                    except Exception:
+                        linha = rotulo
+
+                    candidatos = linha.find_elements(
+                        By.XPATH,
+                        ".//*[self::a or self::button or self::span or self::input][not(@disabled)]"
+                    )
+
+                    for candidato in candidatos:
+                        try:
+                            if not candidato.is_displayed():
+                                continue
+
+                            texto_candidato = " ".join(
+                                [
+                                    candidato.text or "",
+                                    candidato.get_attribute("title") or "",
+                                    candidato.get_attribute("class") or "",
+                                    candidato.get_attribute("value") or "",
+                                ]
+                            ).lower()
+
+                            if (
+                                "+"
+                                in texto_candidato
+                                or "plus" in texto_candidato
+                                or "expand" in texto_candidato
+                                or "ui-icon" in texto_candidato
+                            ):
+                                _clicar_com_fallback(driver, candidato)
+                                esperar_tela_carregar(driver, 0.25)
+
+                                campo = _localizar_campo_especificacoes_complementares_minuta(driver)
+                                if campo:
+                                    print("[SCH] Seção 'Especificação' da minuta aberta pelo botão '+'.")
+                                    return True
+
+                        except Exception as e:
+                            ultimo_erro = e
+                            continue
+
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+        except Exception as e:
+            ultimo_erro = e
+            continue
 
     print(
-        f"[SCH] Análise SAR: {analise_sar.get('status')} | "
-        f"{analise_sar.get('mensagem')}"
+        "[SCH][WARN] Não foi possível abrir a seção 'Especificação' da minuta. "
+        f"Último erro: {ultimo_erro}"
     )
 
-    if not analise_sar.get("preencher_frase"):
-        analise_sar["preenchido_automaticamente"] = False
-        analise_sar["salvo"] = False
-        analise_sar["confirmado_apos_salvar"] = False
-        return analise_sar
+    return False
+
+
+
+def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
+    analise = analisar_sar_cct(dados_pdf)
+
+    print(
+        f"[SCH] Análise SAR: {analise.get('status')} | "
+        f"{analise.get('mensagem')}"
+    )
+
+    if not analise.get("preencher_frase") or not analise.get("frase"):
+        analise["preenchido_automaticamente"] = False
+        analise["salvo"] = False
+        analise["confirmado_apos_salvar"] = False
+        analise["retornou_para_requerimento"] = False
+        return analise
 
     try:
         clicar_corrigir_minuta(driver, wait)
 
+        secao_aberta = abrir_secao_especificacao_minuta(driver, wait)
+
+        if not secao_aberta:
+            raise Exception(
+                "Não foi possível abrir o caminho: "
+                "Corrigir Minuta > Especificação > Especificações Complementares."
+            )
+
         xpaths_minuta = [
-            "//textarea[not(@disabled)]",
-            "//*[@contenteditable='true']",
-            "//div[contains(@class,'ql-editor')]",
-            "//input[not(@disabled)]",
+            "//*[contains(normalize-space(), 'Especificações Complementares')]/following::textarea[1]",
+            "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::textarea[1]",
+
+            "//*[contains(normalize-space(), 'Especificações Complementares')]/following::input[not(@type='hidden')][1]",
+            "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::input[not(@type='hidden')][1]",
+
+            "//*[contains(normalize-space(), 'Especificações Complementares')]/following::*[@contenteditable='true'][1]",
+            "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::*[@contenteditable='true'][1]",
+
+            "//*[contains(normalize-space(), 'Especificações Complementares')]/following::div[contains(@class,'ql-editor')][1]",
+            "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::div[contains(@class,'ql-editor')][1]",
         ]
 
-        preenchido = _inserir_texto_sem_apagar(
+        preenchido = _substituir_texto_campo(
             driver=driver,
             wait=wait,
-            texto=analise_sar["frase"],
-            descricao="Corrigir Minuta",
+            texto=analise["frase"],
+            descricao="Corrigir Minuta > Especificação > Especificações Complementares",
             xpaths_input=xpaths_minuta,
         )
 
         resultado_salvar = salvar_minuta_corrigida(
             driver=driver,
             wait=wait,
-            texto_esperado=analise_sar["frase"],
+            texto_esperado=analise["frase"],
         )
 
-        analise_sar["preenchido_automaticamente"] = bool(preenchido)
-        analise_sar["salvo"] = bool(resultado_salvar.get("salvo"))
-        analise_sar["confirmado_apos_salvar"] = bool(
+        retornou_minuta = voltar_da_tela_corrigir_minuta(driver, wait)
+
+        analise["status"] = "preenchido"
+        analise["preenchido_automaticamente"] = bool(preenchido)
+        analise["salvo"] = bool(resultado_salvar.get("salvo"))
+        analise["confirmado_apos_salvar"] = bool(
             resultado_salvar.get("confirmado_apos_salvar")
         )
-        analise_sar["resultado_salvamento"] = resultado_salvar
+        analise["retornou_para_requerimento"] = bool(retornou_minuta)
+        analise["resultado_salvamento"] = resultado_salvar
 
-        return analise_sar
+        return analise
 
     except Exception as e:
         print(f"[SCH][WARN] Não foi possível preencher a frase de SAR na minuta: {e}")
 
-        analise_sar["preenchido_automaticamente"] = False
-        analise_sar["salvo"] = False
-        analise_sar["confirmado_apos_salvar"] = False
-        analise_sar["erro"] = str(e)
+        try:
+            voltou = voltar_da_tela_corrigir_minuta(driver, wait)
+        except Exception:
+            voltou = False
 
-        return analise_sar
+        analise["status"] = "erro"
+        analise["erro"] = str(e)
+        analise["preenchido_automaticamente"] = False
+        analise["salvo"] = False
+        analise["confirmado_apos_salvar"] = False
+        analise["retornou_para_requerimento"] = bool(voltou)
+        analise["mensagem"] = (
+            "Não foi possível preencher automaticamente a frase de SAR no caminho "
+            "Corrigir Minuta > Especificação > Especificações Complementares."
+        )
 
+        return analise
 
 def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_baixados, dados_pdf):
     analise = decidir_texto_observacao_por_cct(dados_pdf)

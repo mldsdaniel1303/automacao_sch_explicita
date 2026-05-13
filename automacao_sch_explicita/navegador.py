@@ -138,18 +138,54 @@ def _aplicar_configuracoes_comuns(options, download_dir):
 
 def _criar_opcoes_chrome(download_dir):
     options = webdriver.ChromeOptions()
-    return _aplicar_configuracoes_comuns(options, download_dir)
 
+    prefs = {
+        "download.default_directory": str(download_dir),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True,
+        "plugins.always_open_pdf_externally": True,
+        "profile.default_content_settings.popups": 0,
+    }
+
+    options.add_experimental_option("prefs", prefs)
+
+    # Mantém o navegador aberto mesmo quando o Python/Selenium termina.
+    options.add_experimental_option("detach", True)
+
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+
+    return options
 
 def _criar_opcoes_edge(download_dir):
     options = webdriver.EdgeOptions()
+    options.use_chromium = True
 
-    try:
-        options.use_chromium = True
-    except Exception:
-        pass
+    prefs = {
+        "download.default_directory": str(download_dir),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True,
+        "plugins.always_open_pdf_externally": True,
+        "profile.default_content_settings.popups": 0,
+    }
 
-    return _aplicar_configuracoes_comuns(options, download_dir)
+    options.add_experimental_option("prefs", prefs)
+
+    # Mantém o navegador aberto mesmo quando o Python/Selenium termina.
+    options.add_experimental_option("detach", True)
+
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+
+    return options
 
 
 def _criar_driver_chrome(options):

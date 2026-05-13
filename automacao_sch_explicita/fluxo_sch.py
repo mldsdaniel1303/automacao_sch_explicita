@@ -272,8 +272,10 @@ def executar_fluxo_sch(
     processar_somente_pendentes=False,
     processar_apenas_radiacao_restrita=True,
     preencher_caracteristicas=True,
+    preencher_minuta=True,
     preencher_informacoes_adicionais=False,
     pausar_antes_anexos=False,
+    categorias_anexos=None,
     fechar_navegador_ao_final=None,
 ):
     pasta_base = Path(pasta_base).resolve()
@@ -281,6 +283,15 @@ def executar_fluxo_sch(
 
     regras = carregar_regras()
     regras["pausar_antes_anexos"] = pausar_antes_anexos
+
+    categorias_anexos_ativas = list(
+        categorias_anexos
+        or regras.get("categorias_anexos", [])
+        or []
+    )
+
+    if categorias_anexos_ativas:
+        regras["categorias_anexos"] = categorias_anexos_ativas
 
     if limite_requerimentos:
         regras["limite_requerimentos"] = int(limite_requerimentos)
@@ -346,6 +357,7 @@ def executar_fluxo_sch(
         print(f"[SCH] Dentro do escopo: {len(requerimentos_processaveis)}")
         print(f"[SCH] Fora do escopo: {len(requerimentos_ignorados)}")
         print(f"[SCH] Pasta base da execução: {pasta_base}")
+        print(f"[SCH] Categorias de anexos configuradas: {', '.join(categorias_anexos_ativas) if categorias_anexos_ativas else 'padrão do sistema'}")
 
         caminho_manifesto = salvar_manifesto_requerimentos(
             pasta_base,
@@ -391,14 +403,24 @@ def executar_fluxo_sch(
                 "versao_script": VERSAO_SCRIPT,
                 "escopo_processamento": "radiacao_restrita" if processar_apenas_radiacao_restrita else "todos",
                 "escopo_normativo": _dados_normativos_radiacao_restrita(),
+                "categorias_anexos_configuradas": categorias_anexos_ativas,
                 "preenchimento_sch": {
                     "minuta": False,
+                    "minuta_habilitada": preencher_minuta,
                     "caracteristicas": preencher_caracteristicas,
                     "informacoes_adicionais": preencher_informacoes_adicionais,
                 },
                 "minuta": {
                     "preenchida": False,
-                    "motivo": "desabilitada",
+                    "salvo": False,
+                    "confirmado_apos_salvar": False,
+                    "status": "pendente" if preencher_minuta else "desabilitado_pelo_usuario",
+                    "mensagem": (
+                        "Preenchimento de Corrigir Minuta habilitado."
+                        if preencher_minuta
+                        else "Preenchimento de Corrigir Minuta desabilitado pelo usuário."
+                    ),
+                    "frase": "",
                 },
             }
 
@@ -500,11 +522,22 @@ def executar_fluxo_sch(
                 resumo["analise_rapida"] = analise_rapida
                 resumo["observacao_caracteristicas"] = analise_rapida.get("texto", "")
 
-                sar_minuta = preencher_minuta_sar_se_necessario(
-                    driver=driver,
-                    wait=wait,
-                    dados_pdf=dados_pdf,
-                )
+                if preencher_minuta:
+                    sar_minuta = preencher_minuta_sar_se_necessario(
+                        driver=driver,
+                        wait=wait,
+                        dados_pdf=dados_pdf,
+                    )
+                else:
+                    sar_minuta = {
+                        "status": "desabilitado_pelo_usuario",
+                        "mensagem": "Preenchimento de Corrigir Minuta desabilitado pelo usuário.",
+                        "frase": "",
+                        "preencher_frase": False,
+                        "preenchido_automaticamente": False,
+                        "salvo": False,
+                        "confirmado_apos_salvar": False,
+                    }
 
                 resumo["sar_minuta"] = sar_minuta
                 resumo["minuta"] = {
@@ -546,6 +579,7 @@ def executar_fluxo_sch(
                 controle = {
                     "requerimento": numero,
                     "downloads_realizados": qtd_downloads,
+                    "categorias_configuradas": categorias_anexos_ativas,
                     "categorias_processadas": sorted(
                         list(
                             {
@@ -623,6 +657,7 @@ def executar_fluxo_sch(
                 "ignorados_fora_escopo": ignorados_resumidos,
                 "versao_script": VERSAO_SCRIPT,
                 "pasta_base": str(pasta_base),
+                "categorias_anexos_configuradas": categorias_anexos_ativas,
             },
         )
         print(f"[SCH] Relatório consolidado salvo em: {caminho_relatorio}")

@@ -145,8 +145,39 @@ def _dados_pdf_tem_coluna_sar(dados_pdf):
     return any(termo in texto_cabecalho for termo in termos)
 
 
+def _dados_pdf_tem_valor_sar(dados_pdf):
+    dados_pdf = dados_pdf or {}
+    tabela = dados_pdf.get("tabela_tecnica_cct", {}) or {}
+    cabecalho = tabela.get("cabecalho", []) or []
+    linhas = tabela.get("linhas", []) or []
+
+    indices_sar = []
+
+    for i, col in enumerate(cabecalho):
+        col_norm = _normalizar_comparacao(col)
+        if "sar" in col_norm or "taxa de absorcao especifica" in col_norm:
+            indices_sar.append(i)
+
+    if not indices_sar:
+        return False
+
+    for linha in linhas:
+        for idx in indices_sar:
+            if idx < len(linha):
+                valor = str(linha[idx] or "").strip()
+                valor_norm = _normalizar_comparacao(valor)
+
+                if valor_norm in {"", "-", "n a", "n/a", "nao aplicavel", "nao se aplica"}:
+                    continue
+
+                if re.search(r"\d+[,.]?\d*", valor):
+                    return True
+
+    return False
+
+
 def _tem_sar_no_cct(texto_cct, dados_pdf=None):
-    if _dados_pdf_tem_coluna_sar(dados_pdf):
+    if _dados_pdf_tem_valor_sar(dados_pdf):
         return True
 
     return _texto_tem_dados_sar(texto_cct)
@@ -189,6 +220,11 @@ def _valor_generico_ou_invalido(valor):
         "produto",
         "product",
         "type of product",
+        "-",
+        "--",
+        "---",
+        "–",
+        "—",
     }
 
     if texto in genericos:

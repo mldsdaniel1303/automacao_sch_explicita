@@ -689,6 +689,51 @@ def _html_conferencia_bloco(resultado):
     return "".join(blocos)
 
 
+
+def _html_situacao_sar(resultado):
+    minuta = resultado.get("minuta") or {}
+    sar_minuta = resultado.get("sar_minuta") or {}
+
+    status = (
+        sar_minuta.get("status")
+        or minuta.get("status")
+        or "Não identificado"
+    )
+
+    mensagem = (
+        sar_minuta.get("mensagem")
+        or minuta.get("mensagem")
+        or ""
+    )
+
+    frase = (
+        sar_minuta.get("frase")
+        or minuta.get("frase")
+        or ""
+    )
+
+    preencher_frase = sar_minuta.get("preencher_frase", False)
+    preenchida = minuta.get("preenchida", False)
+    salvo = minuta.get("salvo", False)
+    confirmado = minuta.get("confirmado_apos_salvar", False)
+
+    linhas = [
+        "<h2>Situação SAR / Corrigir Minuta</h2>",
+        "<table><thead><tr><th>Item</th><th>Valor</th></tr></thead><tbody>",
+        f"<tr><td>Status</td><td>{escape(str(status))}</td></tr>",
+        f"<tr><td>Mensagem</td><td>{escape(str(mensagem or 'Não informado'))}</td></tr>",
+        f"<tr><td>Frase necessária</td><td>{'Sim' if preencher_frase else 'Não'}</td></tr>",
+        f"<tr><td>Frase aplicada</td><td>{escape(str(frase or 'Nenhuma'))}</td></tr>",
+        f"<tr><td>Preenchida automaticamente</td><td>{'Sim' if preenchida else 'Não'}</td></tr>",
+        f"<tr><td>Salva</td><td>{'Sim' if salvo else 'Não'}</td></tr>",
+        f"<tr><td>Confirmada após salvar</td><td>{'Sim' if confirmado else 'Não'}</td></tr>",
+        "</tbody></table>",
+    ]
+
+    return "".join(linhas)
+
+
+
 def _html_dados_sch(resultado):
     info_adicionais = resultado.get("informacoes_adicionais") or {}
     minuta = _fmt_minuta(resultado)
@@ -756,6 +801,8 @@ def _html_requerimento(resultado):
         <h2>Alertas</h2>
         {alertas_html}
 
+        {_html_situacao_sar(resultado)}
+
         <h2>Dispositivos Normativos</h2>
         <p>Abaixo estão listadas as normas aplicáveis identificadas neste requerimento.</p>
 
@@ -776,7 +823,6 @@ def _html_requerimento(resultado):
     </body>
     </html>
     """
-
 
 def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
     total = len(resultados)

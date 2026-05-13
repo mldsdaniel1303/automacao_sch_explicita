@@ -110,6 +110,15 @@ def _extrair_candidatos_certificado(texto):
 
         # ICC 09.104-2025-I
         r"\b(?:ICC|NCC)\s*[-_]?\s*\d{1,5}(?:\.\d{1,5})?\s*[-_]\s*\d{2,4}(?:\s*[-_]\s*[A-Z0-9]+)?\b",
+
+        # ABCP-25-0154
+        r"\b[A-Z]{2,12}\s*[-_]\s*\d{2,6}\s*[-_]\s*\d{2,8}\b",
+
+        # ABCP-25/0154 ou similares
+        r"\b[A-Z]{2,12}\s*[-_]\s*\d{2,6}\s*/\s*\d{2,8}\b",
+
+        # ABCP25-0154 ou similares
+        r"\b[A-Z]{2,12}\s*\d{2,6}\s*[-_]\s*\d{2,8}\b",
     ]
 
     candidatos = []
@@ -133,10 +142,14 @@ def extrair_numero_certificado_cct(texto):
     texto = texto or ""
 
     padroes_rotulo = [
-        r"n[uú]mero\s+do\s+certificado\s*/?\s*certificate\s*#?",
-        r"certificate\s*#?",
-        r"certificate\s+number",
-        r"certificado\s*#?",
+    r"n[uú]mero\s+do\s+certificado\s*/?\s*certificate\s*#?",
+    r"n[º°o]\s*do\s*certificado\s*/?\s*certificate\s*no\.?",
+    r"n[º°o]\s*do\s*certificado\s*/?\s*certificate\s*number",
+    r"certificate\s*no\.?",
+    r"certificate\s*#?",
+    r"certificate\s+number",
+    r"certificado\s*#?",
+    
     ]
 
     for rotulo in padroes_rotulo:

@@ -34,6 +34,71 @@ def perguntar_sim_nao(mensagem, padrao=True):
     return valor in {"s", "sim", "y", "yes", "1"}
 
 
+def escolher_categorias_anexos():
+    categorias_disponiveis = [
+        "Certificado de Conformidade Técnica - CCT",
+        "Relatório de Avaliação da Conformidade - RACT",
+        "Relatório de Ensaio",
+        "Manual do Produto",
+        "Fotos do produto",
+        "Fotos internas",
+        "Selo ANATEL",
+        "ART",
+        "Contrato Social",
+        "Outros",
+    ]
+
+    print("\nQuais categorias de anexos deseja baixar?")
+    print("1. Todas as categorias")
+    print("2. Somente CCT e RACT")
+    print("3. Escolher manualmente")
+
+    while True:
+        opcao = input("Opção [1/2/3]: ").strip() or "1"
+
+        if opcao == "1":
+            return categorias_disponiveis
+
+        if opcao == "2":
+            return [
+                "Certificado de Conformidade Técnica - CCT",
+                "Relatório de Avaliação da Conformidade - RACT",
+            ]
+
+        if opcao == "3":
+            print("\nCategorias disponíveis:")
+            for i, categoria in enumerate(categorias_disponiveis, start=1):
+                print(f"{i}. {categoria}")
+
+            escolha = input(
+                "Digite os números separados por vírgula. Exemplo: 1,2,3: "
+            ).strip()
+
+            indices = []
+
+            for parte in escolha.split(","):
+                parte = parte.strip()
+
+                if parte.isdigit():
+                    indices.append(int(parte))
+
+            selecionadas = [
+                categorias_disponiveis[i - 1]
+                for i in indices
+                if 1 <= i <= len(categorias_disponiveis)
+            ]
+
+            selecionadas = list(dict.fromkeys(selecionadas))
+
+            if selecionadas:
+                return selecionadas
+
+            print("[ERRO] Nenhuma categoria válida selecionada.")
+
+        else:
+            print("[ERRO] Opção inválida. Escolha 1, 2 ou 3.")
+
+
 def escolher_pasta(titulo, pasta_padrao):
     pasta_padrao = Path(pasta_padrao).expanduser().resolve()
 
@@ -153,6 +218,11 @@ def coletar_opcoes_fluxo_completo():
         padrao=True,
     )
 
+    preencher_minuta = preencher_sch and perguntar_sim_nao(
+        "Deseja preencher Corrigir Minuta quando aplicável?",
+        padrao=True,
+    )
+
     preencher_informacoes_adicionais = preencher_sch and perguntar_sim_nao(
         "Deseja preencher Informações Adicionais?",
         padrao=False,
@@ -163,14 +233,18 @@ def coletar_opcoes_fluxo_completo():
         padrao=False,
     )
 
+    categorias_anexos = escolher_categorias_anexos()
+
     return {
         "pasta_base": pasta_base,
         "limite_requerimentos": limite,
         "processar_somente_pendentes": processar_somente_pendentes,
         "processar_apenas_radiacao_restrita": processar_apenas_radiacao_restrita,
         "preencher_caracteristicas": preencher_caracteristicas,
+        "preencher_minuta": preencher_minuta,
         "preencher_informacoes_adicionais": preencher_informacoes_adicionais,
         "pausar_antes_anexos": pausar_antes_anexos,
+        "categorias_anexos": categorias_anexos,
     }
 
 
@@ -230,8 +304,10 @@ def main():
                 print(f"Somente pendentes: {'sim' if opcoes['processar_somente_pendentes'] else 'não'}")
                 print(f"Filtro radiação restrita: {'sim' if opcoes['processar_apenas_radiacao_restrita'] else 'não'}")
                 print(f"Preencher Características Técnicas: {'sim' if opcoes['preencher_caracteristicas'] else 'não'}")
+                print(f"Preencher Corrigir Minuta: {'sim' if opcoes['preencher_minuta'] else 'não'}")
                 print(f"Preencher Informações Adicionais: {'sim' if opcoes['preencher_informacoes_adicionais'] else 'não'}")
                 print(f"Pausa antes de anexos: {'sim' if opcoes['pausar_antes_anexos'] else 'não'}")
+                print(f"Categorias de anexos: {', '.join(opcoes['categorias_anexos'])}")
                 print("=" * 90)
 
                 if perguntar_sim_nao("Deseja iniciar agora?", padrao=True):
