@@ -89,15 +89,24 @@ ATOS_REVISAR_SE_AUSENTES_RAD_RESTRITA = [
     "Ato nº 17087",
 ]
 
-TERMOS_ATO_77 = [
-    "wifi",
-    "wi fi",
-    "wireless",
-    "802 11",
-    "wlan",
-    "ofdm",
-    "ofdma",
-    "dsss",
+# Termos fortes que realmente indicam aplicabilidade do Ato nº 77.
+# DSSS e "wireless" sozinhos NÃO devem acionar a regra, porque podem aparecer
+# em CCTs de Bluetooth/proprietário/espalhamento espectral sem Wi-Fi.
+PADROES_FORTES_ATO_77 = [
+    ("Wi-Fi", r"(?:^|\s)(?:wifi|wi\s+fi)(?:\s|$)"),
+    ("802.11", r"(?:^|\s)(?:ieee\s+)?802\s+11[a-z0-9]*(?:\s|$)"),
+    ("WLAN", r"(?:^|\s)wlan(?:\s|$)"),
+    ("OFDMA", r"(?:^|\s)ofdma(?:\s|$)"),
+    ("OFDM", r"(?:^|\s)ofdm(?:\s|$)"),
+]
+
+# Termos fracos/ambíguos: registrar quando aparecerem, mas ignorar para NC
+# quando não houver nenhum termo forte acima.
+PADROES_FRACOS_ATO_77 = [
+    ("DSSS", r"(?:^|\s)dsss(?:\s|$)"),
+    ("Sequência Direta", r"(?:^|\s)sequencia\s+direta(?:\s|$)"),
+    ("Direct Sequence", r"(?:^|\s)direct\s+sequence(?:\s|$)"),
+    ("Wireless", r"(?:^|\s)wireless(?:\s|$)"),
 ]
 
 DOCUMENTOS_OBRIGATORIOS_RAD_RESTRITA = [
@@ -145,14 +154,14 @@ BASE_REGRAS: List[RegraProduto] = [
             "Resolução nº 680/2017",
             "Ato nº 1120/2018 quando aplicável",
             "Ato nº 17087/2022 quando aplicável",
-            "Ato nº 77/2021 quando houver Wi-Fi/OFDM/802.11/WLAN/wireless/OFDMA/DSSS",
+            "Ato nº 77/2021 quando houver Wi-Fi/OFDM/802.11/WLAN/OFDMA. DSSS ou wireless sozinhos não acionam a regra.",
         ],
         observacao_padrao=OBS_RADIACAO_RESTRITA,
         observacao_produto_nao_acabado=OBS_PRODUTO_NAO_ACABADO,
         notas=[
             "Ato nº 14448 e Resolução nº 680 são obrigatórios para radiação restrita.",
             "Ato nº 1120 e Ato nº 17087, se ausentes, devem gerar alerta para revisão manual.",
-            "Ato nº 77 é aplicável quando houver ao menos uma ocorrência de Wi-Fi/WIFI/OFDM/OFDMA/802.11/WLAN/wireless/DSSS.",
+            "Ato nº 77 é aplicável quando houver Wi-Fi/WIFI/OFDM/OFDMA/802.11/WLAN. DSSS ou wireless sozinhos não acionam a regra.",
             "Pequenas diferenças de escrita em modelo ou nome de empresa devem ser classificadas como REVISAR.",
             "Verificar PADFF e Regulamento sobre Canalização e Condições de Uso quando aplicável.",
         ],
@@ -189,7 +198,7 @@ BASE_REGRAS: List[RegraProduto] = [
             "Resolução nº 680/2017",
             "Ato nº 1120/2018 quando aplicável",
             "Ato nº 17087/2022 quando aplicável",
-            "Ato nº 77/2021 quando houver Wi-Fi/OFDM/802.11/WLAN/wireless/OFDMA/DSSS",
+            "Ato nº 77/2021 quando houver Wi-Fi/OFDM/802.11/WLAN/OFDMA. DSSS ou wireless sozinhos não acionam a regra.",
         ],
         observacao_padrao=OBS_RADIACAO_RESTRITA,
         observacao_produto_nao_acabado=OBS_PRODUTO_NAO_ACABADO,
@@ -197,7 +206,7 @@ BASE_REGRAS: List[RegraProduto] = [
             "Ensaios de Bluetooth EDR devem considerar modulação mais simples e mais complexa.",
             "Ato nº 14448 e Resolução nº 680 são obrigatórios para radiação restrita.",
             "Ato nº 1120 e Ato nº 17087, se ausentes, devem gerar alerta para revisão manual.",
-            "Ato nº 77 é aplicável quando houver ao menos uma ocorrência de Wi-Fi/WIFI/OFDM/OFDMA/802.11/WLAN/wireless/DSSS.",
+            "Ato nº 77 é aplicável quando houver Wi-Fi/WIFI/OFDM/OFDMA/802.11/WLAN. DSSS ou wireless sozinhos não acionam a regra.",
             "Pequenas diferenças de escrita em modelo ou nome de empresa devem ser classificadas como REVISAR.",
             "Verificar PADFF e Regulamento sobre Canalização e Condições de Uso quando aplicável.",
         ],
@@ -449,9 +458,46 @@ def comparar_campos_cct_sch(
     return comparacao
 
 
-def _texto_tem_termos_ato_77(texto: str) -> bool:
+def _nomes_encontrados_por_padroes(universo: str, padroes: List[tuple[str, str]]) -> List[str]:
+    encontrados: List[str] = []
+
+    for nome, padrao in padroes:
+        if re.search(padrao, universo):
+            if nome not in encontrados:
+                encontrados.append(nome)
+
+    return encontrados
+
+
+def _detalhar_termos_ato_77(texto: str) -> Dict[str, Any]:
+    """
+    Identifica a aplicabilidade do Ato nº 77 sem falso positivo por DSSS.
+
+    Regra:
+    - Wi-Fi/WIFI/802.11/WLAN/OFDM/OFDMA => aplicável.
+    - DSSS, Sequência Direta, Direct Sequence ou Wireless sozinhos => ignorar.
+    """
     universo = normalizar_texto(texto)
-    return any(termo in universo for termo in TERMOS_ATO_77)
+
+    termos_fortes = _nomes_encontrados_por_padroes(
+        universo,
+        PADROES_FORTES_ATO_77,
+    )
+    termos_fracos = _nomes_encontrados_por_padroes(
+        universo,
+        PADROES_FRACOS_ATO_77,
+    )
+
+    return {
+        "aplicavel": bool(termos_fortes),
+        "termos_fortes": termos_fortes,
+        "termos_fracos_encontrados": termos_fracos,
+        "termos_ignorados_sozinhos": [] if termos_fortes else termos_fracos,
+    }
+
+
+def _texto_tem_termos_ato_77(texto: str) -> bool:
+    return bool(_detalhar_termos_ato_77(texto).get("aplicavel"))
 
 
 def _ato_presente(ato: str, atos_encontrados: List[str]) -> bool:
@@ -551,25 +597,35 @@ def validar_atos_esperados(
         if not presente:
             faltantes_revisar.append(ato)
 
-    ato_77_aplicavel = _texto_tem_termos_ato_77(texto_cct)
+    detalhe_ato_77 = _detalhar_termos_ato_77(texto_cct)
+    ato_77_aplicavel = detalhe_ato_77.get("aplicavel", False)
     ato_77_presente = _ato_presente("Ato nº 77", atos_encontrados)
+    termos_fortes_77 = detalhe_ato_77.get("termos_fortes", []) or []
+    termos_ignorados_77 = detalhe_ato_77.get("termos_ignorados_sozinhos", []) or []
 
     if ato_77_aplicavel and ato_77_presente:
         status_77 = "C"
         motivo_77 = (
-            "Termos de Wi-Fi/OFDM/802.11/WLAN/wireless/OFDMA/DSSS encontrados "
-            "e Ato nº 77 presente no CCT."
+            "Termos fortes de Wi-Fi/802.11/WLAN/OFDM/OFDMA encontrados "
+            f"({', '.join(termos_fortes_77)}) e Ato nº 77 presente no CCT."
         )
     elif ato_77_aplicavel and not ato_77_presente:
         status_77 = "NC"
         motivo_77 = (
-            "Termos de Wi-Fi/OFDM/802.11/WLAN/wireless/OFDMA/DSSS encontrados, "
-            "mas Ato nº 77 não consta no CCT."
+            "Termos fortes de Wi-Fi/802.11/WLAN/OFDM/OFDMA encontrados "
+            f"({', '.join(termos_fortes_77)}), mas Ato nº 77 não consta no CCT."
         )
         faltantes_nc.append("Ato nº 77")
     else:
         status_77 = "N/A"
-        motivo_77 = "Sem termos que indiquem aplicabilidade do Ato nº 77."
+        if termos_ignorados_77:
+            motivo_77 = (
+                "Sem termos fortes de Wi-Fi/802.11/WLAN/OFDM/OFDMA. "
+                "Termos ambíguos encontrados e ignorados para esta regra: "
+                f"{', '.join(termos_ignorados_77)}."
+            )
+        else:
+            motivo_77 = "Sem termos fortes que indiquem aplicabilidade do Ato nº 77."
 
     itens.append(
         {
@@ -577,6 +633,8 @@ def validar_atos_esperados(
             "status": status_77,
             "motivo": motivo_77,
             "aplicavel": ato_77_aplicavel,
+            "termos_fortes": termos_fortes_77,
+            "termos_ignorados_sozinhos": termos_ignorados_77,
         }
     )
 

@@ -1603,11 +1603,11 @@ def _normalizar_valor_tabela_por_campo(campo, valor):
         if "sequencia direta" in texto:
             return "sequencia direta"
 
-        if "ofdm" in texto:
-            return "ofdm"
-
         if "ofdma" in texto:
             return "ofdma"
+
+        if "ofdm" in texto:
+            return "ofdm"
 
         if "bluetooth low energy" in texto or "bluetooth le" in texto or "ble" == texto:
             return "bluetooth le"
