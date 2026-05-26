@@ -79,6 +79,146 @@ def _somente_digitos(valor):
     return re.sub(r"\D+", "", valor or "")
 
 
+def _parece_requerimento(valor):
+    texto = str(valor or "").strip()
+    return bool(re.search(r"\b\d{4,6}\s*/\s*\d{2,4}\b", texto))
+
+
+def _parece_homologacao_anatel(valor):
+    texto = str(valor or "").strip()
+
+    # Exemplo: 03645-26-12388 / 14956-22-10459
+    if re.search(r"\b\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6}\b", texto):
+        return True
+
+    # Exemplo: 036452612388, quando vem sem hífen
+    digitos = _somente_digitos(texto)
+    if len(digitos) == 12:
+        return True
+
+    return False
+
+
+def _parece_certificado(valor):
+    texto = str(valor or "").strip()
+    texto_norm = _normalizar_texto_comparacao(texto)
+
+    if not texto_norm:
+        return False
+
+    # Evita classificar homologação ou requerimento como certificado
+    if _parece_homologacao_anatel(texto) or _parece_requerimento(texto):
+        return False
+
+    sinais_certificado = [
+        "ocp",
+        "icc",
+        "ncc",
+        "abcp",
+        "certificate",
+        "certificado",
+        "versys",
+        "cpqd",
+        "dekra",
+        "tuv",
+        "ul",
+    ]
+
+    return any(sinal in texto_norm for sinal in sinais_certificado)
+
+
+def _formatar_requerimento(valor):
+    texto = str(valor or "").strip()
+    m = re.search(r"\b(\d{4,6})\s*/\s*(\d{2,4})\b", texto)
+
+    if not m:
+        return texto
+
+    numero = _somente_digitos(m.group(1))
+    ano = _somente_digitos(m.group(2))
+
+    if len(numero) < 5:
+        numero = numero.zfill(5)
+
+    if len(ano) == 4:
+        ano = ano[-2:]
+
+    return f"{numero}/{ano}"
+
+
+def _formatar_homologacao_anatel(valor):
+    texto = str(valor or "").strip()
+    texto = texto.replace("–", "-").replace("—", "-")
+
+    m = re.search(r"\b(\d{4,6})\s*-\s*(\d{2})\s*-\s*(\d{4,6})\b", texto)
+    if m:
+        p1 = _somente_digitos(m.group(1)).zfill(5)
+        p2 = _somente_digitos(m.group(2))
+        p3 = _somente_digitos(m.group(3)).zfill(5)
+        return f"{p1}-{p2}-{p3}"
+
+    digitos = _somente_digitos(texto)
+    if len(digitos) == 12:
+        return f"{digitos[:5]}-{digitos[5:7]}-{digitos[7:]}"
+
+    return texto
+
+
+def _corrigir_campos_fila_por_padrao(dados):
+    """
+    Corrige inversões comuns entre requerimento, homologação e certificado
+    usando o formato do valor, não apenas a posição da coluna.
+    """
+    dados = dados or {}
+
+    valores = []
+
+    for chave in [
+        "requerimento",
+        "homologacao",
+        "certificado",
+        "tipo_produto",
+        "modelo",
+        "texto_linha",
+    ]:
+        valor = str(dados.get(chave, "") or "").strip()
+        if valor:
+            valores.append(valor)
+
+    texto_linha = str(dados.get("texto_linha", "") or "")
+    partes_linha = [p.strip() for p in re.split(r"\s*\|\s*", texto_linha) if p.strip()]
+    valores.extend(partes_linha)
+
+    # Requerimento
+    for valor in valores:
+        if _parece_requerimento(valor):
+            dados["requerimento"] = _formatar_requerimento(valor)
+            break
+
+    # Homologação
+    for valor in valores:
+        if _parece_homologacao_anatel(valor):
+            dados["homologacao"] = _formatar_homologacao_anatel(valor)
+            break
+
+    # Certificado
+    for valor in valores:
+        if _parece_certificado(valor):
+            dados["certificado"] = _texto_limpo(valor)
+            break
+
+    # Evita certificado receber homologação ANATEL
+    if _parece_homologacao_anatel(dados.get("certificado", "")):
+        dados["certificado"] = ""
+
+    # Evita homologação receber número de requerimento
+    if _parece_requerimento(dados.get("homologacao", "")):
+        dados["homologacao"] = ""
+
+    return dados
+
+
+
 def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
     """
     Extrai o número do requerimento preservando o ano quando vier no formato 04334/26.
@@ -650,6 +790,8 @@ def coletar_requerimentos(driver, wait, regras):
                 "data_conclusao": valor_coluna(idx_data_conclusao),
                 "texto_linha": texto_linha,
             }
+
+            dados = _corrigir_campos_fila_por_padrao(dados)
 
             requerimentos.append(dados)
 
@@ -1960,19 +2102,55 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
     req = req or {}
     dados_pdf = dados_pdf or {}
 
+    homologacao_sch = req.get("homologacao", "")
+    homologacao_cct = dados_pdf.get("homologacao", "")
+
+    homologacoes_vinculadas = dados_pdf.get("homologacoes_vinculadas", []) or []
+
+    codigos_vinculados = {
+        item.get("codigo_anatel")
+        for item in homologacoes_vinculadas
+        if isinstance(item, dict) and item.get("codigo_anatel")
+    }
+
+    homologacao_sch_norm = _normalizar_numero_comparacao(homologacao_sch)
+
+    homologacao_sch_esta_em_vinculadas = any(
+        homologacao_sch_norm == _normalizar_numero_comparacao(codigo)
+        for codigo in codigos_vinculados
+    )
+
+    if homologacao_sch_esta_em_vinculadas and not homologacao_cct:
+        comparacao_homologacao = {
+            "campo": "homologacao",
+            "status": "homologacao_vinculada_no_cct",
+            "valor_sch": homologacao_sch,
+            "valor_cct": "",
+            "valor_sch_normalizado": homologacao_sch_norm,
+            "valor_cct_normalizado": "",
+            "diverge": False,
+            "observacao": (
+                "A homologação informada no SCH foi encontrada no CCT apenas como "
+                "homologação vinculada/informativa, não como homologação principal."
+            ),
+            "homologacoes_vinculadas": homologacoes_vinculadas,
+        }
+    else:
+        comparacao_homologacao = _comparar_valores(
+            homologacao_sch,
+            homologacao_cct,
+            "homologacao",
+            modo="numero",
+        )
+
     comparacoes = [
         _comparar_valores(
             req.get("certificado", ""),
             dados_pdf.get("numero_certificado", ""),
             "certificado",
-            modo="numero",
+            modo="texto_flex",
         ),
-        _comparar_valores(
-            req.get("homologacao", ""),
-            dados_pdf.get("homologacao", ""),
-            "homologacao",
-            modo="numero",
-        ),
+        comparacao_homologacao,
         _comparar_valores(
             req.get("modelo", ""),
             dados_pdf.get("modelo", ""),
@@ -1993,10 +2171,11 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         ),
     ]
 
-    divergencias = [item for item in comparacoes if item["diverge"]]
+    divergencias = [item for item in comparacoes if item.get("diverge")]
+
     campos_ausentes = [
         item for item in comparacoes
-        if item["status"] in {"ausente_nos_dois", "ausente_em_um_dos_lados"}
+        if item.get("status") in {"ausente_nos_dois", "ausente_em_um_dos_lados"}
     ]
 
     comparacao_tabela = comparar_tabelas_tecnicas_sch_cct(
@@ -2030,8 +2209,8 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         "campos_ausentes": campos_ausentes,
         "comparacao_tabela_tecnica": comparacao_tabela,
         "requerimento": req.get("requerimento", ""),
+        "homologacoes_vinculadas_cct": homologacoes_vinculadas,
     }
-
 
 def avisar_resultado_conferencia_sch_cct(resultado):
     resultado = resultado or {}

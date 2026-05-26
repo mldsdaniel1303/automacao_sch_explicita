@@ -99,6 +99,45 @@ def _eh_cep(valor):
     return bool(re.fullmatch(r"\d{2}\.?\d{3}-?\d{3}", texto))
 
 
+
+def _somente_digitos(valor):
+    return re.sub(r"\D+", "", str(valor or ""))
+
+
+def _parece_homologacao_anatel(valor):
+    """
+    Reconhece homologação ANATEL no padrão 03645-26-12388
+    ou no padrão numérico equivalente com 12 dígitos.
+    """
+    texto = str(valor or "").strip()
+
+    if re.search(r"\b\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6}\b", texto):
+        return True
+
+    digitos = _somente_digitos(texto)
+    return len(digitos) == 12
+
+
+def _formatar_homologacao_anatel(valor):
+    """
+    Normaliza homologação ANATEL para 00000-00-00000.
+    """
+    texto = str(valor or "").strip()
+    texto = texto.replace("–", "-").replace("—", "-").replace("−", "-")
+
+    m = re.search(r"\b(\d{4,6})\s*-\s*(\d{2})\s*-\s*(\d{4,6})\b", texto)
+    if m:
+        parte1 = _somente_digitos(m.group(1)).zfill(5)
+        parte2 = _somente_digitos(m.group(2))
+        parte3 = _somente_digitos(m.group(3)).zfill(5)
+        return f"{parte1}-{parte2}-{parte3}"
+
+    digitos = _somente_digitos(texto)
+    if len(digitos) == 12:
+        return f"{digitos[:5]}-{digitos[5:7]}-{digitos[7:]}"
+
+    return texto
+
 def _candidato_certificado_valido(candidato):
     """
     Evita que dados de histórico/processo/descrição sejam confundidos com
@@ -108,6 +147,15 @@ def _candidato_certificado_valido(candidato):
     cand_norm = _normalizar_texto(cand)
 
     if not cand or _eh_cep(cand):
+        return False
+
+    # Homologação ANATEL não é número de certificado.
+    if _parece_homologacao_anatel(cand):
+        return False
+
+    # Código do OCP no selo, por exemplo OCP 0186, não é certificado.
+    # Número de certificado como "Versys OCP 5200" continua válido.
+    if re.fullmatch(r"OCP\s*0\d{3}", cand, flags=re.I):
         return False
 
     prefixos_ruins = {
@@ -280,6 +328,140 @@ def _extrair_data_por_rotulo(texto, rotulos):
     return ""
 
 
+
+def _linhas_relevantes_por_palavras(texto, palavras, janela=2):
+    """
+    Procura linhas que contenham palavras-chave e retorna a linha encontrada
+    mais algumas linhas seguintes. Útil quando o rótulo fica em uma linha
+    e o valor na próxima.
+    """
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    resultado = []
+    palavras_norm = [_normalizar_texto(p) for p in (palavras or [])]
+
+    for idx, linha in enumerate(linhas):
+        linha_norm = _normalizar_texto(linha)
+
+        if any(p and p in linha_norm for p in palavras_norm):
+            bloco_linhas = linhas[idx: idx + janela + 1]
+            resultado.append(
+                {
+                    "indice": idx,
+                    "linha": linha,
+                    "linhas": bloco_linhas,
+                    "bloco": " ".join(bloco_linhas),
+                }
+            )
+
+    return resultado
+
+
+def _contexto_indica_homologacao_vinculada(texto):
+    """
+    Retorna True quando o código ANATEL parece pertencer a acessório/dongle/módulo
+    mencionado no CCT, não à homologação principal do produto.
+    """
+    texto_norm = _normalizar_texto(texto)
+
+    sinais_vinculado = [
+        "dongle",
+        "acessorio",
+        "acessório",
+        "modulo",
+        "módulo",
+        "module",
+        "comercializado com",
+        "sera comercializado com",
+        "será comercializado com",
+        "integrado",
+        "incorporado",
+        "homologado sob codigo anatel",
+        "homologado sob código anatel",
+    ]
+
+    return any(s in texto_norm for s in sinais_vinculado)
+
+
+def extrair_numero_certificado_por_contexto(texto):
+    """
+    Extrai número do certificado somente perto de rótulos fortes:
+    Número do Certificado / Certificate Number / Certificate No.
+    Evita pegar Description, Processo, Histórico etc.
+    """
+    palavras = [
+        "Número do Certificado",
+        "Numero do Certificado",
+        "Nº do Certificado",
+        "No do Certificado",
+        "Certificate Number",
+        "Certificate No",
+    ]
+
+    blocos = _linhas_relevantes_por_palavras(texto, palavras, janela=2)
+
+    for item in blocos:
+        bloco = item["bloco"]
+
+        m = re.search(
+            r"(?:n[uú]mero\s+do\s+certificado|numero\s+do\s+certificado|n[ºo]\s+do\s+certificado|certificate\s+number|certificate\s+no\.?)"
+            r".{0,120}?"
+            r"((?:[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9]{1,30}\s+)?OCP\s*\d{2,8}|ICC\s*[-_]?\s*[\w./-]+|NCC\s*[-_]?\s*[\w./-]+|[A-Z]{2,12}\s*[-_]\s*\d{2,6}\s*[-_/]\s*\d{2,8})",
+            bloco,
+            flags=re.I,
+        )
+
+        if m:
+            valor = _limpar_valor_certificado_extraido(m.group(1))
+            if _candidato_certificado_valido(valor):
+                return valor
+
+        candidatos = _extrair_candidatos_certificado(bloco)
+        for candidato in candidatos:
+            if _candidato_certificado_valido(candidato):
+                return candidato
+
+    return ""
+
+
+def extrair_homologacao_por_contexto(texto):
+    """
+    Extrai homologação ANATEL principal usando contexto e formato.
+    Não retorna códigos vinculados a dongle/acessório/módulo.
+    """
+    palavras = [
+        "Número de Homologação",
+        "Numero de Homologacao",
+        "Homologação",
+        "Homologacao",
+        "Código ANATEL",
+        "Codigo ANATEL",
+        "ANATEL code",
+    ]
+
+    blocos = _linhas_relevantes_por_palavras(texto, palavras, janela=2)
+
+    for item in blocos:
+        bloco = item["bloco"]
+
+        # Se o contexto indica acessório/dongle, não tratar como homologação principal.
+        if _contexto_indica_homologacao_vinculada(bloco):
+            continue
+
+        m = re.search(
+            r"\b\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6}\b",
+            bloco,
+            flags=re.I,
+        )
+
+        if m:
+            return _formatar_homologacao_anatel(m.group(0))
+
+        for digitos in re.findall(r"\b\d{12}\b", bloco):
+            if _parece_homologacao_anatel(digitos):
+                return _formatar_homologacao_anatel(digitos)
+
+    return ""
+
 def _limpar_valor_tabela_rotulada(valor):
     valor = _limpar_texto(valor)
     valor = re.sub(r"\s+", " ", valor)
@@ -435,7 +617,7 @@ def _extrair_codigo_ocp(texto):
 
     # Código do OCP costuma aparecer como OCP 0186 no selo/credencial.
     # Não confundir com número de certificado, por exemplo "Versys OCP 5200".
-    m = re.search(r"OCP\s*0\d{3}", texto, flags=re.I)
+    m = re.search(r"\bOCP\s*0\d{3}\b", texto, flags=re.I)
     if not m:
         return ""
 
@@ -547,31 +729,67 @@ def _extrair_nome_empresa_apos_rotulo(linhas, rotulos):
     return ""
 
 
+
 def _extrair_homologacoes_vinculadas(texto):
+    """
+    Extrai homologações informativas/vinculadas, como dongle, acessório ou módulo
+    comercializado junto com o produto.
+    """
     texto = texto or ""
     vinculadas = []
+    vistos = set()
 
+    def _adicionar_vinculada(modelo, codigo, contexto):
+        chave = (str(modelo or "").strip().upper(), str(codigo or "").strip())
+        if chave in vistos:
+            return
+        vistos.add(chave)
+        vinculadas.append(
+            {
+                "modelo": modelo or "",
+                "codigo_anatel": codigo,
+                "contexto": contexto,
+            }
+        )
+
+    padrao = re.compile(
+        r"(?P<contexto>.{0,220}?"
+        r"(?:dongle|m[oó]dulo|module|acess[oó]rio|comercializado|homologado)"
+        r".{0,220}?"
+        r"(?P<codigo>\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6})"
+        r".{0,120})",
+        flags=re.I | re.S,
+    )
+
+    for m in padrao.finditer(texto):
+        contexto = _limpar_texto(m.group("contexto"))
+        codigo = _formatar_homologacao_anatel(m.group("codigo"))
+
+        modelo = ""
+        modelos = re.findall(r"\bmodelo\s+([A-Z0-9._/-]{2,40})", contexto, flags=re.I)
+        if modelos:
+            modelo = _limpar_modelo(modelos[-1])
+
+        _adicionar_vinculada(modelo, codigo, contexto)
+
+    # Fallback para frase direta "Código ANATEL: 00000-00-00000" em contexto vinculado.
     padrao_codigo = re.compile(
         r"(?:c[oó]digo\s+ANATEL|homologa(?:do|ção)\s+sob\s+c[oó]digo\s+ANATEL)\s*[:\-]?\s*"
-        r"(\d{4,6}\s*-\s*\d{2}\s*-\s*\d{4,6})",
+        r"(\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6})",
         flags=re.I,
     )
 
     for m in padrao_codigo.finditer(texto):
-        codigo = re.sub(r"\s+", "", m.group(1))
-        antes = texto[max(0, m.start() - 180): m.start()]
-        modelos = re.findall(r"\bmodelo\s+([A-Z0-9._/-]{2,40})", antes, flags=re.I)
+        contexto = _limpar_texto(texto[max(0, m.start() - 180): m.end() + 120])
+
+        if not _contexto_indica_homologacao_vinculada(contexto):
+            continue
+
+        codigo = _formatar_homologacao_anatel(m.group(1))
+        modelos = re.findall(r"\bmodelo\s+([A-Z0-9._/-]{2,40})", contexto, flags=re.I)
         modelo = _limpar_modelo(modelos[-1]) if modelos else ""
-        trecho = _limpar_texto(texto[max(0, m.start() - 160): m.end() + 80])
 
-        item = {
-            "modelo": modelo,
-            "codigo_anatel": codigo,
-            "contexto": trecho,
-        }
-
-        if item not in vinculadas:
-            vinculadas.append(item)
+        _adicionar_vinculada(modelo, codigo, contexto)
 
     return vinculadas
 
@@ -777,8 +995,10 @@ def parsear_certificado_pdf(caminho_pdf):
         "data_emissao": "",
         "data_validade": "",
         "ocd": "",
+        "ocp_codigo": "",
         "regulamentos": "",
         "texto_completo": "",
+        "homologacoes_vinculadas": [],
         "tabela_tecnica_cct": {
             "cabecalho": [],
             "linhas": [],
@@ -820,20 +1040,28 @@ def parsear_certificado_pdf(caminho_pdf):
 
     campos_tabela = _extrair_campos_cct_de_tabelas(tabelas_brutas)
 
-    resultado["numero_certificado"] = extrair_numero_certificado_cct(texto)
+    resultado["numero_certificado"] = extrair_numero_certificado_por_contexto(texto)
+
+    if not resultado["numero_certificado"]:
+        resultado["numero_certificado"] = extrair_numero_certificado_cct(texto)
 
     if not resultado["numero_certificado"]:
         resultado["numero_certificado"] = _extrair_numero_certificado_do_nome(caminho_pdf)
 
-    padroes_homologacao = [
-        r"HOMOLOGA[CÇ][AÃ]O(?:\s+ANATEL)?\s*[:\-]?\s*([0-9./-]{4,})",
-        r"N[ÚU]MERO\s+DE\s+HOMOLOGA[CÇ][AÃ]O\s*[:\-]?\s*([0-9./-]{4,})",
-    ]
+    resultado["homologacoes_vinculadas"] = _extrair_homologacoes_vinculadas(texto)
+    resultado["homologacao"] = extrair_homologacao_por_contexto(texto)
 
-    resultado["homologacao"] = _extrair_primeiro(texto_limpo, padroes_homologacao)
+    codigos_vinculados = {
+        item.get("codigo_anatel")
+        for item in resultado["homologacoes_vinculadas"]
+        if item.get("codigo_anatel")
+    }
+
+    if resultado["homologacao"] in codigos_vinculados:
+        resultado["homologacao"] = ""
+
     resultado["ocp_codigo"] = _extrair_codigo_ocp(texto)
     resultado["ocd"] = _extrair_ocd_do_texto(texto, linhas)
-    resultado["homologacoes_vinculadas"] = _extrair_homologacoes_vinculadas(texto)
 
     resultado["modelo"] = _limpar_modelo(
         campos_tabela.get("modelo") or _extrair_modelo_do_texto(linhas) or _extrair_valor_por_rotulo(
@@ -904,7 +1132,7 @@ def parsear_certificado_pdf(caminho_pdf):
         texto,
         [
             "data de emiss[aã]o",
-            "emiss[aã]o",
+            "data emiss[aã]o",
             "issue date",
             "emission date",
             "emitido em",
@@ -914,22 +1142,21 @@ def parsear_certificado_pdf(caminho_pdf):
     resultado["data_validade"] = _extrair_data_por_rotulo(
         texto,
         [
-            "data de validade",
-            "validade",
-            "expiry date",
-            "expiration date",
             "v[aá]lido at[eé]",
             "valid until",
+            "expiry date",
+            "validade",
+            "data de validade",
+            "data validade",
         ],
     )
 
-    if not resultado["homologacao"]:
-        for linha in linhas:
-            m = re.search(r"HOMOLOGA[CÇ][AÃ]O(?:\s+ANATEL)?\s*[:\-]\s*([0-9./-]{4,})", linha, re.I)
-
-            if m:
-                resultado["homologacao"] = _limpar_texto(m.group(1))
-                break
+    if resultado["homologacao"] in {
+        item.get("codigo_anatel")
+        for item in resultado.get("homologacoes_vinculadas", [])
+        if item.get("codigo_anatel")
+    }:
+        resultado["homologacao"] = ""
 
     if not resultado["ocd"]:
         resultado["ocd"] = _extrair_ocd_do_texto(texto, linhas)

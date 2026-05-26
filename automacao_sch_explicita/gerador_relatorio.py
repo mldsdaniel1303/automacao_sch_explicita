@@ -81,6 +81,19 @@ def _fmt_homologacao(resultado):
     return (_fmt_dados_pdf(resultado).get("homologacao") or "").strip() or "Não identificado"
 
 
+def _fmt_homologacoes_vinculadas(resultado):
+    dados_pdf = _fmt_dados_pdf(resultado)
+    vinculadas = dados_pdf.get("homologacoes_vinculadas", []) or []
+
+    if not isinstance(vinculadas, list):
+        return []
+
+    return [
+        item for item in vinculadas
+        if isinstance(item, dict)
+    ]
+
+
 def _fmt_modelo(resultado):
     return (_fmt_dados_pdf(resultado).get("modelo") or "").strip() or "Não identificado"
 
@@ -571,16 +584,21 @@ def _linhas_tabela_sch(resultado):
 
 def _linhas_tabela_cct(resultado):
     dados_pdf = _fmt_dados_pdf(resultado)
+
     return [
         ("Número do certificado", dados_pdf.get("numero_certificado", "")),
-        ("Homologação", dados_pdf.get("homologacao", "")),
+        ("Homologação principal", dados_pdf.get("homologacao", "")),
+        ("Data de emissão", dados_pdf.get("data_emissao", "")),
+        ("Data de validade", dados_pdf.get("data_validade", "")),
         ("Tipo do produto", dados_pdf.get("tipo_produto", "")),
         ("Modelo", dados_pdf.get("modelo", "")),
         ("Fabricante", dados_pdf.get("fabricante", "")),
-        ("OCD", dados_pdf.get("ocd", "")),
+        ("Solicitante", dados_pdf.get("solicitante", "")),
+        ("OCD/OCP", dados_pdf.get("ocd", "")),
+        ("Código OCP", dados_pdf.get("ocp_codigo", "")),
+        ("Regulamentos/Normas", dados_pdf.get("regulamentos", "")),
         ("Classificação da observação", dados_pdf.get("observacao_classificacao", "")),
     ]
-
 
 def _criar_tabela_comparacao(resultado):
     conferencia = _fmt_conferencia(resultado)
@@ -633,7 +651,19 @@ def _criar_tabela_comparacao(resultado):
     linhas = [
         "<h3>Tabela comparativa SCH x CCT</h3>",
         _legenda_status_conferencia(),
-        "<table><thead><tr><th>Campo</th><th>SCH</th><th>CCT</th><th>Status</th></tr></thead><tbody>",
+        (
+            "<table>"
+            "<thead>"
+            "<tr>"
+            "<th>Campo</th>"
+            "<th>SCH</th>"
+            "<th>CCT</th>"
+            "<th>Status</th>"
+            "<th>Observação</th>"
+            "</tr>"
+            "</thead>"
+            "<tbody>"
+        ),
     ]
 
     for item in itens:
@@ -642,12 +672,21 @@ def _criar_tabela_comparacao(resultado):
         valor_cct = str(item.get("valor_cct") or "").strip() or "Não identificado"
         status = item.get("status", "")
 
+        observacao = (
+            item.get("observacao")
+            or item.get("motivo")
+            or item.get("mensagem")
+            or ""
+        )
+
         status_para_celula = status
 
         if status == "ok":
             status_para_celula = "C"
+
         elif status in {"divergente", "ausente_em_um_dos_lados"}:
             status_para_celula = "NC"
+
         elif status in {
             "ausente_nos_dois",
             "não_comparado",
@@ -657,12 +696,26 @@ def _criar_tabela_comparacao(resultado):
         }:
             status_para_celula = "N/A"
 
+        elif status == "homologacao_vinculada_no_cct":
+            status_para_celula = "REVISAR"
+
+            if not observacao:
+                observacao = (
+                    "A homologação do SCH foi encontrada no CCT apenas como "
+                    "homologação vinculada/informativa. Conferir manualmente se "
+                    "ela pertence ao produto principal ou a acessório/dongle/módulo."
+                )
+
+            if valor_cct == "Não identificado":
+                valor_cct = "Encontrada como homologação vinculada/informativa"
+
         linhas.append(
             "<tr>"
             f"<td>{escape(campo)}</td>"
             f"<td>{escape(valor_sch)}</td>"
             f"<td>{escape(valor_cct)}</td>"
             f"{_td_status_conferencia(status_para_celula)}"
+            f"<td>{escape(str(observacao or ''))}</td>"
             "</tr>"
         )
 
@@ -816,6 +869,54 @@ def _html_validade_cct(resultado):
     return "".join(linhas)
 
 
+def _html_homologacoes_vinculadas(resultado):
+    vinculadas = _fmt_homologacoes_vinculadas(resultado)
+
+    if not vinculadas:
+        return (
+            "<h2>Homologações vinculadas/informativas no CCT</h2>"
+            "<div class='ok'>Nenhuma homologação vinculada/informativa identificada no CCT.</div>"
+        )
+
+    linhas = [
+        "<h2>Homologações vinculadas/informativas no CCT</h2>",
+        (
+            "<div class='alerta'>"
+            "Foram identificadas homologações no CCT que parecem estar vinculadas "
+            "a acessório, dongle, módulo ou item informativo. Conferir se não se trata "
+            "da homologação principal do produto."
+            "</div>"
+        ),
+        (
+            "<table>"
+            "<thead>"
+            "<tr>"
+            "<th>Modelo vinculado</th>"
+            "<th>Código ANATEL</th>"
+            "<th>Contexto extraído do CCT</th>"
+            "</tr>"
+            "</thead>"
+            "<tbody>"
+        ),
+    ]
+
+    for item in vinculadas:
+        modelo = item.get("modelo", "") or "Não identificado"
+        codigo = item.get("codigo_anatel", "") or "Não identificado"
+        contexto = item.get("contexto", "") or "Não informado"
+
+        linhas.append(
+            "<tr>"
+            f"<td>{escape(str(modelo))}</td>"
+            f"<td>{escape(str(codigo))}</td>"
+            f"<td>{escape(str(contexto))}</td>"
+            "</tr>"
+        )
+
+    linhas.append("</tbody></table>")
+
+    return "".join(linhas)
+
 
 
 def _html_requerimento(resultado):
@@ -857,6 +958,8 @@ def _html_requerimento(resultado):
         {alertas_html}
 
         {_html_validade_cct(resultado)}
+
+        {_html_homologacoes_vinculadas(resultado)}
 
         {_html_situacao_sar(resultado)}
 
@@ -928,6 +1031,8 @@ def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
             {"".join([f"<div class='alerta'>{escape(a)}</div>" for a in _fmt_alertas(resultado)]) or "<div class='ok'>Nenhum alerta identificado.</div>"}
 
             {_html_validade_cct(resultado)}
+
+            {_html_homologacoes_vinculadas(resultado)}
 
             {_html_conferencia_bloco(resultado)}
             
