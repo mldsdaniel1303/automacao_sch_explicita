@@ -763,6 +763,61 @@ def _html_dados_sch(resultado):
     return "".join(linhas)
 
 
+
+def _html_validade_cct(resultado):
+    validade = resultado.get("validade_cct") or {}
+    dados_pdf = _fmt_dados_pdf(resultado)
+
+    data_emissao = (
+        validade.get("data_emissao_bruta")
+        or dados_pdf.get("data_emissao")
+        or "Não identificada"
+    )
+
+    data_validade = (
+        validade.get("data_validade_bruta")
+        or dados_pdf.get("data_validade")
+        or "Não identificada"
+    )
+
+    status = validade.get("status") or "nao_verificado"
+    mensagem = validade.get("mensagem") or "Validade do CCT não verificada."
+
+    dias = validade.get("dias_entre_emissao_validade", "")
+    limite_2_anos = validade.get("limite_2_anos", "")
+
+    classe = "ok" if status == "ok" else "alerta"
+
+    linhas = [
+        "<h2>Validade do CCT</h2>",
+        f"<div class='{classe}'>{escape(str(mensagem))}</div>",
+        "<table><thead><tr><th>Item</th><th>Valor</th></tr></thead><tbody>",
+        f"<tr><td>Data de emissão</td><td>{escape(str(data_emissao))}</td></tr>",
+        f"<tr><td>Data de validade</td><td>{escape(str(data_validade))}</td></tr>",
+    ]
+
+    if dias != "":
+        linhas.append(
+            f"<tr><td>Dias entre emissão e validade</td><td>{escape(str(dias))}</td></tr>"
+        )
+
+    if limite_2_anos:
+        linhas.append(
+            f"<tr><td>Limite de 2 anos após emissão</td><td>{escape(str(limite_2_anos))}</td></tr>"
+        )
+
+    linhas.extend(
+        [
+            f"<tr><td>Status</td><td>{escape(str(status))}</td></tr>",
+            "</tbody></table>",
+        ]
+    )
+
+    return "".join(linhas)
+
+
+
+
 def _html_requerimento(resultado):
     req_numero = _fmt_req(resultado)
     palavras = _fmt_palavras(resultado)
@@ -800,6 +855,8 @@ def _html_requerimento(resultado):
 
         <h2>Alertas</h2>
         {alertas_html}
+
+        {_html_validade_cct(resultado)}
 
         {_html_situacao_sar(resultado)}
 
@@ -870,7 +927,10 @@ def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
             <h2>Alertas</h2>
             {"".join([f"<div class='alerta'>{escape(a)}</div>" for a in _fmt_alertas(resultado)]) or "<div class='ok'>Nenhum alerta identificado.</div>"}
 
+            {_html_validade_cct(resultado)}
+
             {_html_conferencia_bloco(resultado)}
+            
 
             {_html_dados_sch(resultado)}
             """

@@ -26,6 +26,9 @@ from funcoes_sch import (
 )
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
+from caracteristicas_secundarias import (
+    inferir_caracteristicas_secundarias
+)
 
 VERSAO_SCRIPT = "0.6.8"
 
@@ -357,7 +360,10 @@ def executar_fluxo_sch(
         print(f"[SCH] Dentro do escopo: {len(requerimentos_processaveis)}")
         print(f"[SCH] Fora do escopo: {len(requerimentos_ignorados)}")
         print(f"[SCH] Pasta base da execução: {pasta_base}")
-        print(f"[SCH] Categorias de anexos configuradas: {', '.join(categorias_anexos_ativas) if categorias_anexos_ativas else 'padrão do sistema'}")
+        print(
+            "[SCH] Categorias de anexos configuradas: "
+            f"{', '.join(categorias_anexos_ativas) if categorias_anexos_ativas else 'padrão do sistema'}"
+        )
 
         caminho_manifesto = salvar_manifesto_requerimentos(
             pasta_base,
@@ -394,6 +400,7 @@ def executar_fluxo_sch(
                 "pdf_cct": "",
                 "validade_cct": {},
                 "sar_minuta": {},
+                "caracteristicas_secundarias": {},
                 "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
                 "downloads_realizados": 0,
@@ -452,9 +459,47 @@ def executar_fluxo_sch(
                 if pdf_cct:
                     print(f"[SCH] PDF CCT localizado: {pdf_cct}")
                     dados_pdf = parsear_certificado_pdf(pdf_cct)
+                    dados_pdf = dados_pdf or {}
                 else:
                     print("[SCH][WARN] Nenhum PDF CCT localizado na pasta do requerimento.")
                     dados_pdf = {}
+
+                try:
+                    caracteristicas_sec = inferir_caracteristicas_secundarias(dados_pdf)
+
+                    dados_pdf["caracteristicas_secundarias"] = caracteristicas_sec
+                    dados_pdf["titulo_caracteristicas_secundarias"] = (
+                        caracteristicas_sec.get("titulo", "")
+                    )
+
+                    resumo["caracteristicas_secundarias"] = caracteristicas_sec
+
+                    print(
+                        "[SCH] Categoria secundária detectada:",
+                        caracteristicas_sec.get("categoria") or "não identificada",
+                    )
+                    print(
+                        "[SCH] Título de características secundárias:",
+                        caracteristicas_sec.get("titulo") or "não aplicável",
+                    )
+                    print(
+                        "[SCH] Características secundárias detectadas:",
+                        caracteristicas_sec.get("caracteristicas", {}),
+                    )
+
+                except Exception as e:
+                    print(f"[SCH][WARN] Falha ao inferir características secundárias: {e}")
+
+                    resumo["caracteristicas_secundarias"] = {
+                        "categoria": "",
+                        "titulo": "",
+                        "caracteristicas": {},
+                        "preencher_titulo": False,
+                        "erro": str(e),
+                    }
+
+                    dados_pdf["caracteristicas_secundarias"] = resumo["caracteristicas_secundarias"]
+                    dados_pdf["titulo_caracteristicas_secundarias"] = ""
 
                 resumo["dados_pdf"] = dados_pdf
 

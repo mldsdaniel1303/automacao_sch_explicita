@@ -80,6 +80,15 @@ def _somente_digitos(valor):
 
 
 def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
+    """
+    Extrai o número do requerimento preservando o ano quando vier no formato 04334/26.
+
+    Exemplos:
+    - 04334/26  -> 04334/26
+    - 4334/26   -> 04334/26
+    - 04334     -> 04334
+    """
+
     candidatos = []
 
     texto_linha = _texto_limpo(texto_linha)
@@ -87,26 +96,59 @@ def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
         candidatos.append(texto_linha)
 
     for cel in celulas or []:
-        txt = _texto_limpo(cel.text)
-        if txt:
-            candidatos.append(txt)
+        try:
+            txt = _texto_limpo(cel.text)
+            if txt:
+                candidatos.append(txt)
+        except Exception:
+            continue
 
-    padroes = [
-        r"requerimento\s*[:#\-]?\s*(\d{4,})",
-        r"^\s*(\d{4,})\s*$",
-        r"\b(\d{5,})\b",
+    # 1. Prioridade: formato com ano, exemplo 04334/26
+    padroes_com_ano = [
+        r"\b(\d{4,6})\s*/\s*(\d{2,4})\b",
+        r"requerimento\s*[:#\-]?\s*(\d{4,6})\s*/\s*(\d{2,4})\b",
     ]
 
     for texto in candidatos:
-        for padrao in padroes:
+        for padrao in padroes_com_ano:
             m = re.search(padrao, texto, re.I)
             if m:
                 numero = _somente_digitos(m.group(1))
+                ano = _somente_digitos(m.group(2))
+
+                if not numero or not ano:
+                    continue
+
+                # Garante 5 dígitos no número principal: 4334 -> 04334
+                if len(numero) < 5:
+                    numero = numero.zfill(5)
+
+                # Ano com 4 dígitos vira 2 dígitos: 2026 -> 26
+                if len(ano) == 4:
+                    ano = ano[-2:]
+
+                return f"{numero}/{ano}"
+
+    # 2. Fallback: formato antigo, somente número
+    padroes_sem_ano = [
+        r"requerimento\s*[:#\-]?\s*(\d{4,6})",
+        r"^\s*(\d{4,6})\s*$",
+        r"\b(\d{5,6})\b",
+    ]
+
+    for texto in candidatos:
+        for padrao in padroes_sem_ano:
+            m = re.search(padrao, texto, re.I)
+            if m:
+                numero = _somente_digitos(m.group(1))
+
                 if len(numero) >= 4:
+                    if len(numero) < 5:
+                        numero = numero.zfill(5)
+
                     return numero
 
     return ""
-
 
 def _clicar_com_fallback(driver, elemento):
     try:
@@ -116,15 +158,46 @@ def _clicar_com_fallback(driver, elemento):
 
 
 def _aguardar_iframe_detalhe(driver, timeout=8):
-    return WebDriverWait(driver, timeout).until(
+    return WebDriverWait(driver, timeout, poll_frequency=0.05).until(
         EC.presence_of_element_located((By.XPATH, XPATH_IFRAME_DETALHE))
     )
 
 
 def _aguardar_tabela_fila(driver, timeout=6):
-    return WebDriverWait(driver, timeout).until(
+    return WebDriverWait(driver, timeout, poll_frequency=0.05).until(
         EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
     )
+
+
+def _tabela_fila_pronta(driver):
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    try:
+        tabelas = driver.find_elements(By.XPATH, XPATH_TABELA_FILA)
+
+        for tabela in tabelas:
+            try:
+                if not tabela.is_displayed():
+                    continue
+
+                linhas = tabela.find_elements(By.XPATH, ".//tbody/tr[td]")
+                if linhas:
+                    return True
+
+                # Mesmo sem linha, se a tabela está visível, já considera carregada.
+                return True
+
+            except Exception:
+                continue
+
+    except Exception:
+        pass
+
+    return False
+
 
 
 def _capturar_novas_abas(driver, handles_antes, timeout=1.0, poll=0.08):
@@ -376,8 +449,17 @@ def _tentar_preencher_editor_rico(driver, xpaths_editor, html):
 def abrir_sch(driver):
     url = "https://sistemasnet.anatel.gov.br/mosaico/sch/worklist/visualizar"
     print(f"[SCH] Abrindo {url}")
+
     driver.get(url)
-    esperar_tela_carregar(driver, 2)
+
+    try:
+        WebDriverWait(driver, 8, poll_frequency=0.08).until(
+            lambda d: d.execute_script("return document.readyState") in {"interactive", "complete"}
+        )
+    except Exception:
+        pass
+
+    esperar_tela_carregar(driver, 0.05)
 
 
 def _normalizar_texto_login(valor):
@@ -493,11 +575,25 @@ def clicar_fila_em_analise(driver, wait):
     xpath_fila = "//a[normalize-space()='Em Análise' or contains(normalize-space(), 'Em Análise')]"
 
     print("[SCH] Clicando na fila Em Análise...")
-    fila = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_fila)))
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    fila = WebDriverWait(driver, 4, poll_frequency=0.05).until(
+        EC.element_to_be_clickable((By.XPATH, xpath_fila))
+    )
+
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", fila)
     driver.execute_script("arguments[0].click();", fila)
 
-    esperar_tela_carregar(driver, 1.2)
+    WebDriverWait(driver, 5, poll_frequency=0.05).until(
+        lambda d: _tabela_fila_pronta(d)
+    )
+
+    esperar_tela_carregar(driver, 0.03)
+
     print("[SCH] Fila aberta.")
 
 
@@ -562,12 +658,14 @@ def coletar_requerimentos(driver, wait, regras):
 
     print(f"[SCH] {len(requerimentos)} requerimentos encontrados.")
     for item in requerimentos:
-        print(
-            f"[SCH] Linha {item['row_index']}: "
-            f"requerimento={item.get('requerimento', '')} | "
-            f"homologacao={item.get('homologacao', '')} | "
-            f"certificado={item.get('certificado', '')}"
-        )
+       print(
+        f"[SCH] Linha {item['row_index']}: "
+        f"requerimento={item.get('requerimento', '')} | "
+        f"homologacao={item.get('homologacao', '')} | "
+        f"certificado={item.get('certificado', '')} | "
+        f"tipo_produto={item.get('tipo_produto', '')} | "
+        f"modelo={item.get('modelo', '')}"
+    )
 
     return requerimentos
 
@@ -2158,6 +2256,18 @@ def escolher_titulo_caracteristicas_secundarias(req=None, dados_pdf=None):
     """
     req = req or {}
     dados_pdf = dados_pdf or {}
+    
+    
+    caracteristicas_sec = dados_pdf.get("caracteristicas_secundarias") or {}
+    titulo_detectado = str(caracteristicas_sec.get("titulo") or "").strip()
+
+    if titulo_detectado:
+        return titulo_detectado
+
+    titulo_direto = str(dados_pdf.get("titulo_caracteristicas_secundarias") or "").strip()
+
+    if titulo_direto:
+        return titulo_direto
 
     texto_base = " ".join(
         [
@@ -2557,12 +2667,73 @@ def _dados_pdf_tem_coluna_sar(dados_pdf):
     return any(termo in texto_cabecalho for termo in termos_coluna_sar)
 
 
+def _cabecalho_eh_coluna_sar_para_valor(cabecalho):
+    """
+    Identifica coluna de SAR de forma restritiva.
+
+    Evita confundir:
+    - Taxa de Transmissão / Transmission Rate
+    - Mbit/s
+    - Rate
+    - Bit rate
+
+    com SAR.
+    """
+    texto = _normalizar_texto_comparacao(cabecalho)
+
+    if not texto:
+        return False
+
+    termos_bloqueio = [
+        "taxa de transmissao",
+        "transmission rate",
+        "rate mbit",
+        "mbit",
+        "mbit s",
+        "mbps",
+        "bit rate",
+        "data rate",
+        "taxa maxima de transmissao",
+    ]
+
+    if any(termo in texto for termo in termos_bloqueio):
+        return False
+
+    termos_sar_fortes = [
+        "sar cabeca",
+        "sar corpo",
+        "sar head",
+        "sar body",
+        "taxa de absorcao especifica",
+    ]
+
+    if any(termo in texto for termo in termos_sar_fortes):
+        return True
+
+    # Aceita SAR apenas se vier com unidade W/kg.
+    if "sar" in texto and ("w kg" in texto or "wkg" in texto):
+        return True
+
+    return False
+
+
 def _valor_sar_preenchido(valor):
+    """
+    Retorna True somente para valor real de SAR.
+
+    Não aceita:
+    - "-"
+    - "---"
+    - "1"
+    - "2"
+    - valores inteiros típicos de taxa de transmissão
+    """
     texto = str(valor or "").strip()
 
     if not texto:
         return False
 
+    texto = texto.replace("–", "-").replace("—", "-")
     texto_norm = _normalizar_texto_comparacao(texto)
 
     vazios = {
@@ -2570,24 +2741,56 @@ def _valor_sar_preenchido(valor):
         "-",
         "--",
         "---",
+        "----",
         "na",
         "n a",
         "n/a",
         "nao aplicavel",
         "nao se aplica",
+        "not applicable",
     }
 
     if texto_norm in vazios:
         return False
 
-    # Procura número real de SAR, por exemplo: 0,123 / 1.23 / 0.45
-    return bool(re.search(r"\d+[,.]?\d*", texto))
+    if re.fullmatch(r"[-\s./]+", texto):
+        return False
+
+    termos_bloqueio = [
+        "mbit",
+        "mbps",
+        "kbps",
+        "taxa",
+        "transmissao",
+        "transmission",
+        "rate",
+    ]
+
+    if any(termo in texto_norm for termo in termos_bloqueio):
+        return False
+
+    # SAR real normalmente vem como decimal: 0,123 / 1,23 / 0.45.
+    # Não aceitar inteiro puro como "1" ou "2", pois isso costuma ser taxa de bits.
+    m = re.search(r"(?<!\d)(\d+[,.]\d+)(?!\d)", texto)
+
+    if not m:
+        return False
+
+    try:
+        valor_float = float(m.group(1).replace(",", "."))
+    except Exception:
+        return False
+
+    # Faixa ampla apenas para eliminar lixo absurdo.
+    return 0 < valor_float <= 20
 
 
 def _dados_pdf_tem_valor_sar(dados_pdf):
     """
-    Retorna True somente se a tabela tiver valor real de SAR.
-    Coluna SAR com '-' não conta como SAR aplicável.
+    Retorna True somente se houver valor real de SAR nas colunas corretas de SAR.
+
+    Coluna SAR com "-", "---" ou vazia não conta.
+    Coluna de taxa de transmissão depois de SAR não conta.
     """
     tabela = (dados_pdf or {}).get("tabela_tecnica_cct", {}) or {}
     cabecalho = tabela.get("cabecalho", []) or []
@@ -2596,8 +2799,7 @@ def _dados_pdf_tem_valor_sar(dados_pdf):
     indices_sar = []
 
     for i, col in enumerate(cabecalho):
-        col_norm = _normalizar_texto_comparacao(col)
-        if "sar" in col_norm or "taxa de absorcao especifica" in col_norm:
+        if _cabecalho_eh_coluna_sar_para_valor(col):
             indices_sar.append(i)
 
     if not indices_sar:
@@ -2605,8 +2807,11 @@ def _dados_pdf_tem_valor_sar(dados_pdf):
 
     for linha in linhas:
         for idx in indices_sar:
-            if idx < len(linha) and _valor_sar_preenchido(linha[idx]):
-                return True
+            if idx < len(linha):
+                valor = linha[idx]
+
+                if _valor_sar_preenchido(valor):
+                    return True
 
     return False
 
@@ -3434,12 +3639,13 @@ TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES = (
 )
 
 
-def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=4):
+def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=2):
     for xpath in xpaths:
         try:
-            elementos = WebDriverWait(driver, timeout).until(
+            elementos = WebDriverWait(driver, timeout, poll_frequency=0.05).until(
                 EC.presence_of_all_elements_located((By.XPATH, xpath))
             )
+
             for el in elementos:
                 try:
                     if el.is_displayed() and el.is_enabled():
@@ -3450,6 +3656,7 @@ def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=4):
                         return el
                 except Exception:
                     continue
+
         except Exception:
             continue
 
@@ -3546,6 +3753,167 @@ def marcar_acompanhar_processo(driver, wait):
     return False
 
 
+
+def _localizar_campo_acompanhar_processo(driver, timeout=4):
+    """
+    Localiza o campo de texto do bloco 'Acompanhar Processo',
+    evitando confundir com o campo '*Descrição' de Informações Adicionais.
+    """
+
+    def _buscar_por_js(d):
+        script = """
+        function visivel(el) {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (!st) return false;
+            if (st.display === 'none') return false;
+            if (st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        }
+
+        const todos = Array.from(document.querySelectorAll('body *'));
+
+        const blocoAcompanhar = todos.find(el => {
+            const txt = (el.innerText || el.textContent || '').trim();
+            return visivel(el) && txt.includes('Acompanhar Processo');
+        });
+
+        const blocoInfo = todos.find(el => {
+            const txt = (el.innerText || el.textContent || '').trim();
+            return visivel(el) && txt.includes('Informações Adicionais');
+        });
+
+        const textareas = Array.from(document.querySelectorAll('textarea'))
+            .filter(el => visivel(el) && !el.disabled && !el.readOnly);
+
+        if (!textareas.length) return null;
+
+        if (blocoAcompanhar) {
+            const rAcomp = blocoAcompanhar.getBoundingClientRect();
+            const rInfo = blocoInfo ? blocoInfo.getBoundingClientRect() : null;
+
+            const candidatos = textareas.filter(t => {
+                const r = t.getBoundingClientRect();
+                const abaixoAcompanhar = r.top >= rAcomp.bottom - 5;
+                const acimaInfo = !rInfo || r.top < rInfo.top;
+                return abaixoAcompanhar && acimaInfo;
+            });
+
+            if (candidatos.length) {
+                candidatos.sort((a, b) => {
+                    return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+                });
+                return candidatos[0];
+            }
+        }
+
+        return textareas[0];
+        """
+
+        try:
+            return d.execute_script(script)
+        except Exception:
+            return None
+
+    try:
+        entrar_iframe_detalhe_analise(driver, None)
+    except Exception:
+        pass
+
+    try:
+        campo = WebDriverWait(driver, timeout, poll_frequency=0.05).until(
+            lambda d: _buscar_por_js(d)
+        )
+        if campo:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});",
+                campo,
+            )
+            return campo
+    except Exception:
+        pass
+
+    xpaths = [
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
+        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+    ]
+
+    for xpath in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for campo in elementos:
+                try:
+                    if campo.is_displayed() and campo.is_enabled():
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});",
+                            campo,
+                        )
+                        return campo
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    return None
+
+
+
+def _preencher_campo_textarea_js(driver, campo, texto):
+    texto = str(texto or "").strip()
+
+    if not texto:
+        return False
+
+    driver.execute_script(
+        """
+        const el = arguments[0];
+        const valor = arguments[1];
+
+        el.focus();
+
+        if ('value' in el) {
+            const proto = Object.getPrototypeOf(el);
+            const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+
+            if (desc && desc.set) {
+                desc.set.call(el, valor);
+            } else {
+                el.value = valor;
+            }
+        } else {
+            el.textContent = valor;
+            el.innerText = valor;
+        }
+
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+        el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
+        el.dispatchEvent(new Event('blur', {bubbles: true}));
+        """,
+        campo,
+        texto,
+    )
+
+    try:
+        campo.send_keys(Keys.TAB)
+    except Exception:
+        pass
+
+    valor = driver.execute_script(
+        "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+        campo,
+    ) or ""
+
+    return texto in valor
+
+
+
+
 def preencher_acompanhar_processo(driver, wait, texto):
     if not texto:
         print("[SCH][WARN] Texto vazio para Acompanhar Processo.")
@@ -3554,65 +3922,53 @@ def preencher_acompanhar_processo(driver, wait, texto):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
-    marcar_acompanhar_processo(driver, wait)
+    marcado = marcar_acompanhar_processo(driver, wait)
 
-    xpaths_texto = [
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
-        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "(//textarea[not(@disabled)])[1]",
-    ]
+    if not marcado:
+        print("[SCH][WARN] Não foi possível marcar 'Desejo acompanhar este processo'.")
+        return False
 
-    campo = _achar_primeiro_elemento_visivel(
-        driver,
-        xpaths_texto,
-        "campo Acompanhar Processo",
-        timeout=4,
-    )
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
 
-    _clicar_com_fallback(driver, campo)
+    campo = _localizar_campo_acompanhar_processo(driver, timeout=4)
 
+    if not campo:
+        print("[SCH][WARN] Campo de texto do Acompanhar Processo não encontrado.")
+        return False
+
+    print("[SCH] Preenchendo campo 'Acompanhar Processo'...")
+
+    # Primeiro tenta por JS, que é mais confiável nesse tipo de tela.
+    preenchido = _preencher_campo_textarea_js(driver, campo, texto)
+
+    if preenchido:
+        print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
+        return True
+
+    # Fallback com teclado.
     try:
+        _clicar_com_fallback(driver, campo)
         campo.send_keys(Keys.CONTROL, "a")
         campo.send_keys(Keys.DELETE)
         campo.send_keys(texto)
-    except Exception:
-        driver.execute_script(
-            """
-            arguments[0].value = arguments[1];
-            arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
-            arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-            arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
-            """,
+
+        esperar_tela_carregar(driver, 0.05)
+
+        valor = driver.execute_script(
+            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
             campo,
-            texto,
-        )
+        ) or ""
 
-    esperar_tela_carregar(driver, 0.04)
-
-    try:
-        valor = (campo.get_attribute("value") or "").strip()
         if texto.strip() in valor:
-            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
+            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso via teclado.")
             return True
-    except Exception:
-        pass
 
-    try:
-        valor_js = driver.execute_script(
-            "return (arguments[0].value || arguments[0].textContent || '').trim();",
-            campo,
-        )
-        if texto.strip() in (valor_js or ""):
-            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
-            return True
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[SCH][WARN] Falha no fallback por teclado do Acompanhar Processo: {e}")
 
-    print("[SCH][WARN] O campo de acompanhamento foi preenchido, mas não foi possível validar o valor.")
+    print("[SCH][WARN] O campo de acompanhamento não confirmou o texto após preenchimento.")
     return False
-
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
@@ -3666,8 +4022,32 @@ def preencher_informacoes_adicionais_com_analise(
 
     try:
         clicar_aba_informacoes_adicionais(driver, wait)
+
         acompanhar_marcado = marcar_acompanhar_processo(driver, wait)
-        preenchido = preencher_texto_informacoes_adicionais(driver, wait, texto)
+
+        preenchido = preencher_texto_informacoes_adicionais(
+            driver,
+            wait,
+            texto,
+        )
+
+        if not preenchido:
+            print(
+                "[SCH][WARN] Informações Adicionais não serão salvas, "
+                "pois o texto não foi confirmado no campo."
+            )
+
+            return {
+                "texto": texto,
+                "classificacao": "analise_simplificada_portaria_2257",
+                "motivos": [],
+                "preenchido_automaticamente": False,
+                "acompanhar_processo_marcado": acompanhar_marcado,
+                "salvo": False,
+                "modo_preenchimento": "acompanhar_processo",
+                "erro": "texto_nao_confirmado_no_campo",
+            }
+
         salvo = salvar_informacoes_adicionais(driver, wait)
 
         return {
@@ -3682,6 +4062,7 @@ def preencher_informacoes_adicionais_com_analise(
 
     except Exception as e:
         print(f"[SCH][WARN] Não foi possível preencher Informações Adicionais automaticamente: {e}")
+
         return {
             "texto": texto,
             "classificacao": "analise_simplificada_portaria_2257",
@@ -3692,7 +4073,6 @@ def preencher_informacoes_adicionais_com_analise(
             "modo_preenchimento": "acompanhar_processo",
             "erro": str(e),
         }
-
 
 def voltar_para_fila(driver, wait):
     print("[SCH] Voltando para a fila...")
@@ -3751,3 +4131,6 @@ def voltar_para_fila(driver, wait):
         return
 
     raise Exception("Não foi possível voltar para a fila.")
+
+
+

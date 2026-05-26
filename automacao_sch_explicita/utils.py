@@ -1,34 +1,130 @@
 import json
+import os
 import time
 from pathlib import Path
 
-from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+
+
+MODO_RAPIDO = os.getenv("AUTOMACAO_SCH_MODO_RAPIDO", "1").strip().lower() not in {
+    "0",
+    "false",
+    "nao",
+    "não",
+    "n",
+}
+
+POLL_RAPIDO = 0.05
+TIMEOUT_CARREGAMENTO_RAPIDO = 1.2
+TIMEOUT_CARREGAMENTO_NORMAL = 4.0
 
 
 def aguardar_enter(mensagem):
     input(f"{mensagem}\nPressione Enter para continuar...")
 
 
-def esperar_tela_carregar(driver, tempo_extra=1.5):
-    candidatos = [
-        "//*[contains(@class,'loading')]",
-        "//*[contains(@class,'spinner')]",
-        "//*[contains(@class,'overlay')]",
-        "//*[contains(., 'Processando')]",
-        "//*[contains(., 'Carregando')]",
-    ]
+def _documento_pronto(driver):
+    try:
+        estado = driver.execute_script("return document.readyState")
+        return estado in {"interactive", "complete"}
+    except Exception:
+        return True
 
-    for xpath in candidatos:
-        try:
-            WebDriverWait(driver, 3).until_not(
-                EC.presence_of_element_located((By.XPATH, xpath))
-            )
-        except Exception:
-            pass
 
-    time.sleep(tempo_extra)
+def _existe_loading_visivel(driver):
+    """
+    Detecta loaders visíveis sem depender de XPath pesado.
+
+    Evita o problema de procurar por:
+    //*[contains(., 'Carregando')]
+    porque esse XPath pode bater no body inteiro e atrasar a automação.
+    """
+    script = """
+    const elementos = Array.from(document.querySelectorAll('body *'));
+
+    function visivel(el) {
+        const st = window.getComputedStyle(el);
+        if (!st) return false;
+        if (st.display === 'none') return false;
+        if (st.visibility === 'hidden') return false;
+        if (parseFloat(st.opacity || '1') === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    for (const el of elementos) {
+        if (!visivel(el)) continue;
+
+        const cls = (el.className || '').toString().toLowerCase();
+        const id = (el.id || '').toString().toLowerCase();
+        const texto = (el.innerText || el.textContent || '').trim().toLowerCase();
+
+        const marcador = cls + ' ' + id;
+
+        if (
+            marcador.includes('loading') ||
+            marcador.includes('spinner') ||
+            marcador.includes('overlay') ||
+            marcador.includes('blockui') ||
+            marcador.includes('ui-widget-overlay') ||
+            marcador.includes('modal-backdrop')
+        ) {
+            return true;
+        }
+
+        if (
+            texto === 'carregando' ||
+            texto === 'processando' ||
+            texto === 'aguarde' ||
+            texto === 'loading' ||
+            texto === 'please wait'
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+    """
+
+    try:
+        return bool(driver.execute_script(script))
+    except Exception:
+        return False
+
+
+def esperar_tela_carregar(driver, tempo_extra=0.0, timeout=None):
+    """
+    Espera inteligente e rápida.
+
+    Antes:
+    - Procurava vários XPaths.
+    - Depois sempre dormia tempo_extra.
+
+    Agora:
+    - Aguarda document.readyState.
+    - Aguarda loader visível sumir.
+    - Em modo rápido, limita o sleep final a no máximo 0.05s.
+    """
+    if timeout is None:
+        timeout = TIMEOUT_CARREGAMENTO_RAPIDO if MODO_RAPIDO else TIMEOUT_CARREGAMENTO_NORMAL
+
+    try:
+        WebDriverWait(driver, timeout, poll_frequency=POLL_RAPIDO).until(
+            lambda d: _documento_pronto(d) and not _existe_loading_visivel(d)
+        )
+    except Exception:
+        pass
+
+    try:
+        tempo = float(tempo_extra or 0)
+    except Exception:
+        tempo = 0
+
+    if MODO_RAPIDO:
+        tempo = min(tempo, 0.05)
+
+    if tempo > 0:
+        time.sleep(tempo)
 
 
 def salvar_json(caminho, dados):

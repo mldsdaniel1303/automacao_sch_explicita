@@ -777,9 +777,8 @@ def parsear_certificado_pdf(caminho_pdf):
         "data_emissao": "",
         "data_validade": "",
         "ocd": "",
-        "ocp_codigo": "",
         "regulamentos": "",
-        "homologacoes_vinculadas": [],
+        "texto_completo": "",
         "tabela_tecnica_cct": {
             "cabecalho": [],
             "linhas": [],
@@ -817,6 +816,7 @@ def parsear_certificado_pdf(caminho_pdf):
     texto = "\n".join(texto_total)
     texto_limpo = _limpar_texto(texto)
     linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
+    resultado["texto_completo"] = texto
 
     campos_tabela = _extrair_campos_cct_de_tabelas(tabelas_brutas)
 
@@ -904,7 +904,7 @@ def parsear_certificado_pdf(caminho_pdf):
         texto,
         [
             "data de emiss[aã]o",
-            "data emiss[aã]o",
+            "emiss[aã]o",
             "issue date",
             "emission date",
             "emitido em",
@@ -914,12 +914,12 @@ def parsear_certificado_pdf(caminho_pdf):
     resultado["data_validade"] = _extrair_data_por_rotulo(
         texto,
         [
+            "data de validade",
+            "validade",
+            "expiry date",
+            "expiration date",
             "v[aá]lido at[eé]",
             "valid until",
-            "expiry date",
-            "validade",
-            "data de validade",
-            "data validade",
         ],
     )
 
