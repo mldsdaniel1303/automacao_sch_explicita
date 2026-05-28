@@ -820,21 +820,48 @@ def _html_dados_sch(resultado):
 def _html_validade_cct(resultado):
     validade = resultado.get("validade_cct") or {}
     dados_pdf = _fmt_dados_pdf(resultado)
+    dados_certificado_sch = resultado.get("dados_certificado_sch") or {}
 
     data_emissao = (
         validade.get("data_emissao_bruta")
         or dados_pdf.get("data_emissao")
+        or dados_pdf.get("data_emissao_sch")
+        or dados_certificado_sch.get("data_certificado")
         or "Não identificada"
     )
 
     data_validade = (
         validade.get("data_validade_bruta")
         or dados_pdf.get("data_validade")
+        or dados_pdf.get("data_validade_sch")
+        or dados_certificado_sch.get("data_validade")
         or "Não identificada"
     )
 
+    origem = (
+        dados_pdf.get("datas_origem")
+        or dados_certificado_sch.get("origem")
+        or "Não informada"
+    )
+
+    data_emissao_cct = (
+        dados_pdf.get("data_emissao_cct")
+        or ""
+    )
+
+    data_validade_cct = (
+        dados_pdf.get("data_validade_cct")
+        or ""
+    )
+
+    numero_certificado_sch = (
+        dados_certificado_sch.get("numero_certificado")
+        or dados_pdf.get("numero_certificado_sch_dados_gerais")
+        or ""
+    )
+
     status = validade.get("status") or "nao_verificado"
-    mensagem = validade.get("mensagem") or "Validade do CCT não verificada."
+    mensagem = validade.get("mensagem") or "Validade do certificado não verificada."
 
     dias = validade.get("dias_entre_emissao_validade", "")
     limite_2_anos = validade.get("limite_2_anos", "")
@@ -842,12 +869,28 @@ def _html_validade_cct(resultado):
     classe = "ok" if status == "ok" else "alerta"
 
     linhas = [
-        "<h2>Validade do CCT</h2>",
+        "<h2>Validade do Certificado</h2>",
         f"<div class='{classe}'>{escape(str(mensagem))}</div>",
         "<table><thead><tr><th>Item</th><th>Valor</th></tr></thead><tbody>",
-        f"<tr><td>Data de emissão</td><td>{escape(str(data_emissao))}</td></tr>",
-        f"<tr><td>Data de validade</td><td>{escape(str(data_validade))}</td></tr>",
+        f"<tr><td>Data de emissão usada na análise</td><td>{escape(str(data_emissao))}</td></tr>",
+        f"<tr><td>Data de validade usada na análise</td><td>{escape(str(data_validade))}</td></tr>",
+        f"<tr><td>Origem das datas</td><td>{escape(str(origem))}</td></tr>",
     ]
+
+    if numero_certificado_sch:
+        linhas.append(
+            f"<tr><td>Nº do certificado no SCH</td><td>{escape(str(numero_certificado_sch))}</td></tr>"
+        )
+
+    if data_emissao_cct:
+        linhas.append(
+            f"<tr><td>Data de emissão extraída do CCT</td><td>{escape(str(data_emissao_cct))}</td></tr>"
+        )
+
+    if data_validade_cct:
+        linhas.append(
+            f"<tr><td>Data de validade extraída do CCT</td><td>{escape(str(data_validade_cct))}</td></tr>"
+        )
 
     if dias != "":
         linhas.append(

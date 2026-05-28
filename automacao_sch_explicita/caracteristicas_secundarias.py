@@ -270,3 +270,142 @@ def inferir_caracteristicas_secundarias(dados_pdf):
         "caracteristicas": caracteristicas,
         "preencher_titulo": bool(titulo),
     }
+
+def _achar_valor_linha_por_coluna(cabecalho, linha, termos):
+    """
+    Busca valor em uma linha da tabela técnica usando termos do cabeçalho.
+    """
+    cabecalho = cabecalho or []
+    linha = linha or []
+
+    termos_norm = [_norm(t) for t in termos]
+
+    for idx, col in enumerate(cabecalho):
+        col_norm = _norm(col)
+
+        if any(t in col_norm for t in termos_norm):
+            if idx < len(linha):
+                valor = str(linha[idx] or "").strip()
+                if valor:
+                    return valor
+
+    return ""
+
+
+def gerar_texto_caracteristicas_secundarias(dados_pdf):
+    """
+    Gera o texto completo para preencher em:
+    'Título/Descrição para Características Técnicas Secundárias'.
+
+    Usa:
+    - título detectado pela categoria;
+    - tabela técnica do CCT.
+    """
+    dados_pdf = dados_pdf or {}
+
+    info = inferir_caracteristicas_secundarias(dados_pdf)
+    titulo = info.get("titulo", "").strip()
+
+    if not titulo:
+        return ""
+
+    tabela = dados_pdf.get("tabela_tecnica_cct") or {}
+    cabecalho = tabela.get("cabecalho") or []
+    linhas = tabela.get("linhas") or []
+
+    if not cabecalho or not linhas:
+        return titulo
+
+    blocos = [titulo, ""]
+
+    for linha in linhas:
+        faixa = _achar_valor_linha_por_coluna(
+            cabecalho,
+            linha,
+            [
+                "faixa de frequencia",
+                "faixa de frequências",
+                "frequency range",
+                "range mhz",
+            ],
+        )
+
+        potencia = _achar_valor_linha_por_coluna(
+            cabecalho,
+            linha,
+            [
+                "potencia maxima",
+                "potência máxima",
+                "maximum output power",
+                "power w",
+            ],
+        )
+
+        emissao = _achar_valor_linha_por_coluna(
+            cabecalho,
+            linha,
+            [
+                "designacao de emissoes",
+                "designação de emissões",
+                "designation of emissions",
+                "emissions",
+            ],
+        )
+
+        tecnologia = _achar_valor_linha_por_coluna(
+            cabecalho,
+            linha,
+            [
+                "tecnologia",
+                "technology",
+            ],
+        )
+
+        modulacao = _achar_valor_linha_por_coluna(
+            cabecalho,
+            linha,
+            [
+                "tipo de modulacao",
+                "tipo de modulação",
+                "modulation",
+            ],
+        )
+
+        taxa = _achar_valor_linha_por_coluna(
+            cabecalho,
+            linha,
+            [
+                "taxa de transmissao",
+                "taxa de transmissão",
+                "transmission rate",
+                "mbit",
+            ],
+        )
+
+        partes = []
+
+        if faixa:
+            partes.append(f"Faixa de Frequências Tx: {faixa} MHz")
+
+        if potencia:
+            partes.append(f"Potência Máxima de Saída: {potencia} W")
+
+        if emissao:
+            partes.append(f"Designação de Emissões: {emissao}")
+
+        if tecnologia:
+            partes.append(f"Tecnologia: {tecnologia}")
+
+        if modulacao:
+            partes.append(f"Tipo de Modulação: {modulacao}")
+
+        if taxa:
+            partes.append(f"Taxa de Transmissão: {taxa}")
+
+        if partes:
+            blocos.append("\n".join(partes))
+            blocos.append("")
+
+    texto_final = "\n".join(blocos).strip()
+
+    return texto_final

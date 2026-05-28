@@ -23,11 +23,13 @@ from funcoes_sch import (
     preencher_minuta_sar_se_necessario,
     garantir_sessao_ativa_sch,
     voltar_para_fila,
+    extrair_dados_certificado_sch,
 )
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
 from caracteristicas_secundarias import (
-    inferir_caracteristicas_secundarias
+    inferir_caracteristicas_secundarias,
+    gerar_texto_caracteristicas_secundarias,
 )
 
 VERSAO_SCRIPT = "0.6.8"
@@ -399,8 +401,10 @@ def executar_fluxo_sch(
                 "dados_pdf": {},
                 "pdf_cct": "",
                 "validade_cct": {},
+                "dados_certificado_sch": {},
                 "sar_minuta": {},
                 "caracteristicas_secundarias": {},
+                "texto_caracteristicas_secundarias": "",
                 "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
                 "downloads_realizados": 0,
@@ -431,6 +435,8 @@ def executar_fluxo_sch(
                 },
             }
 
+            dados_certificado_sch = {}
+
             try:
                 garantir_sessao_ativa_sch(
                     driver,
@@ -440,6 +446,18 @@ def executar_fluxo_sch(
                 )
 
                 abrir_requerimento(driver, wait, req)
+
+                try:
+                    dados_certificado_sch = extrair_dados_certificado_sch(driver, wait)
+                    dados_certificado_sch = dados_certificado_sch or {}
+
+                    resumo["dados_certificado_sch"] = dados_certificado_sch
+                    req["dados_certificado_sch"] = dados_certificado_sch
+
+                except Exception as e:
+                    print(f"[SCH][WARN] Não foi possível extrair dados do certificado no SCH: {e}")
+                    dados_certificado_sch = {}
+                    resumo["dados_certificado_sch"] = {}
 
                 clicar_aba_anexos(driver, wait)
 
@@ -464,15 +482,47 @@ def executar_fluxo_sch(
                     print("[SCH][WARN] Nenhum PDF CCT localizado na pasta do requerimento.")
                     dados_pdf = {}
 
+                if dados_certificado_sch:
+                    dados_pdf["data_emissao_cct"] = dados_pdf.get("data_emissao", "")
+                    dados_pdf["data_validade_cct"] = dados_pdf.get("data_validade", "")
+
+                    dados_pdf["data_emissao_sch"] = dados_certificado_sch.get("data_certificado", "")
+                    dados_pdf["data_validade_sch"] = dados_certificado_sch.get("data_validade", "")
+                    dados_pdf["numero_certificado_sch_dados_gerais"] = dados_certificado_sch.get("numero_certificado", "")
+
+                    if dados_certificado_sch.get("data_certificado"):
+                        dados_pdf["data_emissao"] = dados_certificado_sch.get("data_certificado")
+
+                    if dados_certificado_sch.get("data_validade"):
+                        dados_pdf["data_validade"] = dados_certificado_sch.get("data_validade")
+
+                    dados_pdf["datas_origem"] = "SCH - Dados Gerais - Dados do Certificado"
+
+                    print(
+                        "[SCH] Datas para validação serão usadas do SCH: "
+                        f"emissão={dados_pdf.get('data_emissao', '')} | "
+                        f"validade={dados_pdf.get('data_validade', '')}"
+                    )
+
                 try:
                     caracteristicas_sec = inferir_caracteristicas_secundarias(dados_pdf)
+
+                    texto_caracteristicas_secundarias = gerar_texto_caracteristicas_secundarias(
+                        dados_pdf
+                    )
 
                     dados_pdf["caracteristicas_secundarias"] = caracteristicas_sec
                     dados_pdf["titulo_caracteristicas_secundarias"] = (
                         caracteristicas_sec.get("titulo", "")
                     )
+                    dados_pdf["texto_caracteristicas_secundarias"] = (
+                        texto_caracteristicas_secundarias
+                    )
 
                     resumo["caracteristicas_secundarias"] = caracteristicas_sec
+                    resumo["texto_caracteristicas_secundarias"] = (
+                        texto_caracteristicas_secundarias
+                    )
 
                     print(
                         "[SCH] Categoria secundária detectada:",
@@ -486,6 +536,10 @@ def executar_fluxo_sch(
                         "[SCH] Características secundárias detectadas:",
                         caracteristicas_sec.get("caracteristicas", {}),
                     )
+                    print(
+                        "[SCH] Texto de características secundárias:",
+                        (texto_caracteristicas_secundarias or "")[:500],
+                    )
 
                 except Exception as e:
                     print(f"[SCH][WARN] Falha ao inferir características secundárias: {e}")
@@ -497,9 +551,11 @@ def executar_fluxo_sch(
                         "preencher_titulo": False,
                         "erro": str(e),
                     }
+                    resumo["texto_caracteristicas_secundarias"] = ""
 
                     dados_pdf["caracteristicas_secundarias"] = resumo["caracteristicas_secundarias"]
                     dados_pdf["titulo_caracteristicas_secundarias"] = ""
+                    dados_pdf["texto_caracteristicas_secundarias"] = ""
 
                 resumo["dados_pdf"] = dados_pdf
 

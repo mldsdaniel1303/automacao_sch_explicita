@@ -1053,6 +1053,193 @@ def _clicar_aba_por_rotulo(
 
     raise Exception(f"Não foi possível abrir a aba '{rotulo_principal}'. Último erro: {ultimo_erro}")
 
+
+
+def clicar_aba_dados_gerais(driver, wait):
+    """
+    Abre a aba Dados Gerais dentro do requerimento.
+    """
+    print("[SCH] Abrindo aba Dados Gerais...")
+
+    _clicar_aba_por_rotulo(
+        driver,
+        wait,
+        "Dados Gerais",
+        rotulos_alternativos=[
+            "Dados Gerais",
+            "Dados gerais",
+            "Dados",
+        ],
+        condicao_pronta=lambda d: _ha_bloco_dados_certificado(d),
+        timeout_click=1.5,
+        timeout_pronta=1.5,
+    )
+
+
+def _texto_visivel_sch(driver):
+    """
+    Captura o texto visível da tela atual do SCH.
+    """
+    try:
+        return driver.execute_script(
+            "return document.body.innerText || document.body.textContent || '';"
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _ha_bloco_dados_certificado(driver):
+    """
+    Verifica se a aba Dados Gerais carregou a seção Dados do Certificado.
+    """
+    try:
+        texto = _texto_visivel_sch(driver)
+        texto_norm = _normalizar_texto_comparacao(texto)
+
+        return (
+            "dados do certificado" in texto_norm
+            and (
+                "data do certificado" in texto_norm
+                or "data de validade" in texto_norm
+                or "n do certificado" in texto_norm
+                or "numero do certificado" in texto_norm
+            )
+        )
+    except Exception:
+        return False
+
+
+def _recortar_bloco_dados_certificado(texto):
+    """
+    Recorta somente a seção 'Dados do Certificado',
+    evitando capturar dados do fabricante/produto.
+    """
+    texto = texto or ""
+
+    m = re.search(
+        r"Dados\s+do\s+Certificado(?P<bloco>.*?)(?:\n\s*Produto\b|\n\s*Dados\s+do\s+Produto\b|$)",
+        texto,
+        flags=re.I | re.S,
+    )
+
+    if m:
+        return "Dados do Certificado\n" + m.group("bloco")
+
+    return texto
+
+
+def _extrair_valor_sch_por_rotulo(texto, rotulos):
+    texto = texto or ""
+
+    for rotulo in rotulos:
+        padrao = rf"{rotulo}\s*[:\-]?\s*([^\n\r]+)"
+        m = re.search(padrao, texto, flags=re.I)
+
+        if not m:
+            continue
+
+        valor = str(m.group(1) or "").strip()
+
+        valor = re.split(
+            r"\s+(?:Nome|CNPJ|CPF/CNPJ|N[º°o]\s*do\s*Certificado|Data\s+do\s+Certificado|Data\s+de\s+Validade|Produto)\s*:",
+            valor,
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+
+        valor = re.sub(r"\s+", " ", valor).strip(" :-;")
+
+        if valor:
+            return valor
+
+    return ""
+
+
+def _extrair_data_sch_por_rotulo(texto, rotulos):
+    texto = texto or ""
+
+    for rotulo in rotulos:
+        padrao = rf"{rotulo}[^\d]{{0,80}}(\d{{2}}/\d{{2}}/\d{{4}})"
+        m = re.search(padrao, texto, flags=re.I)
+
+        if m:
+            return m.group(1)
+
+    return ""
+
+
+def extrair_dados_certificado_sch(driver, wait):
+    """
+    Extrai os dados da seção:
+    Dados Gerais > Dados do Certificado
+
+    Campos esperados:
+    - Nome
+    - CNPJ
+    - Nº do Certificado
+    - Data do Certificado
+    - Data de Validade
+    """
+    print("[SCH] Extraindo dados do certificado na aba Dados Gerais...")
+
+    clicar_aba_dados_gerais(driver, wait)
+
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.05)
+
+    texto = _texto_visivel_sch(driver)
+    bloco = _recortar_bloco_dados_certificado(texto)
+
+    dados = {
+        "nome": _extrair_valor_sch_por_rotulo(
+            bloco,
+            [
+                r"Nome",
+            ],
+        ),
+        "cnpj": _extrair_valor_sch_por_rotulo(
+            bloco,
+            [
+                r"CNPJ",
+                r"CPF/CNPJ",
+            ],
+        ),
+        "numero_certificado": _extrair_valor_sch_por_rotulo(
+            bloco,
+            [
+                r"N[º°o]\s*do\s*Certificado",
+                r"N[uú]mero\s+do\s+Certificado",
+            ],
+        ),
+        "data_certificado": _extrair_data_sch_por_rotulo(
+            bloco,
+            [
+                r"Data\s+do\s+Certificado",
+                r"Data\s+de\s+Emiss[aã]o",
+                r"Emiss[aã]o",
+            ],
+        ),
+        "data_validade": _extrair_data_sch_por_rotulo(
+            bloco,
+            [
+                r"Data\s+de\s+Validade",
+                r"Validade",
+            ],
+        ),
+        "origem": "SCH - Dados Gerais - Dados do Certificado",
+        "texto_bloco": bloco,
+    }
+
+    print(
+        "[SCH] Dados do certificado no SCH: "
+        f"certificado={dados.get('numero_certificado', '')} | "
+        f"emissão={dados.get('data_certificado', '')} | "
+        f"validade={dados.get('data_validade', '')}"
+    )
+
+    return dados
+
+
 def clicar_aba_anexos(driver, wait):
     print("[SCH] Abrindo aba Anexos...")
     _clicar_aba_por_rotulo(
@@ -2435,6 +2622,12 @@ def escolher_titulo_caracteristicas_secundarias(req=None, dados_pdf=None):
     """
     req = req or {}
     dados_pdf = dados_pdf or {}
+    texto_completo = str(
+        dados_pdf.get("texto_caracteristicas_secundarias") or ""
+    ).strip()
+
+    if texto_completo:
+        return texto_completo 
     
     
     caracteristicas_sec = dados_pdf.get("caracteristicas_secundarias") or {}
@@ -2557,6 +2750,12 @@ def _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5):
 
 
 def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
+    """
+    Preenche o campo de Características Técnicas Secundárias sempre substituindo
+    qualquer texto existente pelo texto gerado pela automação.
+
+    Mantém o mesmo nome da função para não precisar alterar quem chama.
+    """
     texto = str(texto or "").strip()
 
     if not texto:
@@ -2567,56 +2766,124 @@ def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
 
     try:
         valor_atual = driver.execute_script(
-            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+            """
+            return (
+                arguments[0].value ||
+                arguments[0].innerText ||
+                arguments[0].textContent ||
+                ''
+            ).trim();
+            """,
             campo,
         ) or ""
     except Exception:
         valor_atual = ""
 
-    if str(valor_atual or "").strip():
-        return {
-            "preenchido": False,
-            "motivo": "campo_ja_preenchido",
-            "valor_atual": valor_atual,
-        }
-
     tag = (campo.tag_name or "").lower()
 
-    if tag in {"textarea", "input"}:
-        driver.execute_script("arguments[0].value = arguments[1];", campo, texto)
-    else:
-        driver.execute_script("arguments[0].innerHTML = arguments[1];", campo, texto)
-
     driver.execute_script(
-        """
-        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
-        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
-        """,
+        "arguments[0].scrollIntoView({block:'center'});",
         campo,
     )
+
+    try:
+        _clicar_com_fallback(driver, campo)
+    except Exception:
+        pass
+
+    if tag in {"textarea", "input"}:
+        try:
+            campo.send_keys(Keys.CONTROL, "a")
+            campo.send_keys(Keys.DELETE)
+            campo.send_keys(texto)
+        except Exception:
+            driver.execute_script(
+                """
+                const el = arguments[0];
+                const valor = arguments[1];
+
+                el.focus();
+
+                const proto = Object.getPrototypeOf(el);
+                const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+
+                if (desc && desc.set) {
+                    desc.set.call(el, valor);
+                } else {
+                    el.value = valor;
+                }
+
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                el.dispatchEvent(new Event('blur', {bubbles:true}));
+                """,
+                campo,
+                texto,
+            )
+
+    else:
+        html = texto.replace("\n", "<br>")
+
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            const html = arguments[1];
+
+            el.focus();
+            el.innerHTML = html;
+
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            el.dispatchEvent(new Event('blur', {bubbles:true}));
+            """,
+            campo,
+            html,
+        )
 
     try:
         campo.send_keys(Keys.TAB)
     except Exception:
         pass
 
+    try:
+        valor_final = driver.execute_script(
+            """
+            return (
+                arguments[0].value ||
+                arguments[0].innerText ||
+                arguments[0].textContent ||
+                ''
+            ).trim();
+            """,
+            campo,
+        ) or ""
+    except Exception:
+        valor_final = ""
+
     return {
         "preenchido": True,
-        "motivo": "preenchido",
+        "motivo": "substituido",
         "texto": texto,
+        "valor_anterior": valor_atual,
+        "valor_final": valor_final,
+        "substituiu_texto_existente": bool(str(valor_atual or "").strip()),
     }
 
 
 def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=None, dados_pdf=None):
     """
-    Preenche o campo opcional 'Título/Descrição para Características Técnicas Secundárias'
-    apenas quando ele existir na tela.
+    Preenche o campo opcional:
+    'Título/Descrição para Características Técnicas Secundárias'.
+
+    Se o campo já tiver texto, a automação substitui pelo texto gerado.
     """
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
-    campo = _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5)
+    campo = _localizar_campo_titulo_caracteristicas_secundarias(
+        driver,
+        timeout=1.5,
+    )
 
     if not campo:
         return {
@@ -2626,28 +2893,53 @@ def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=No
             "motivo": "Campo de características técnicas secundárias não encontrado na tela.",
         }
 
-    titulo = escolher_titulo_caracteristicas_secundarias(
+    texto_caracteristicas = escolher_titulo_caracteristicas_secundarias(
         req=req,
         dados_pdf=dados_pdf,
     )
 
-    if not titulo:
-        print("[SCH][WARN] Campo de características secundárias encontrado, mas sem frase segura para preencher.")
+    if not texto_caracteristicas:
+        print(
+            "[SCH][WARN] Campo de características secundárias encontrado, "
+            "mas sem texto seguro para preencher."
+        )
 
         return {
             "campo_encontrado": True,
             "preenchido": False,
             "status": "revisar",
-            "motivo": "Campo encontrado, mas a automação não identificou frase segura para preenchimento.",
+            "motivo": (
+                "Campo encontrado, mas a automação não identificou texto seguro "
+                "para preenchimento."
+            ),
         }
 
-    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, titulo)
+    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(
+        driver,
+        campo,
+        texto_caracteristicas,
+    )
 
     if resultado.get("preenchido"):
-        print(f"[SCH] Título de Características Técnicas Secundárias preenchido: {titulo}")
+        if resultado.get("substituiu_texto_existente"):
+            print(
+                "[SCH] Características Técnicas Secundárias substituídas "
+                "pelo texto da automação."
+            )
+        else:
+            print(
+                "[SCH] Características Técnicas Secundárias preenchidas "
+                "pela automação."
+            )
+
+        print(
+            "[SCH] Texto aplicado em Características Técnicas Secundárias:",
+            texto_caracteristicas[:500],
+        )
+
     else:
         print(
-            "[SCH] Título de Características Técnicas Secundárias não preenchido: "
+            "[SCH] Características Técnicas Secundárias não preenchidas: "
             f"{resultado.get('motivo')}"
         )
 
@@ -2655,6 +2947,7 @@ def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=No
         {
             "campo_encontrado": True,
             "status": "preenchido" if resultado.get("preenchido") else "nao_alterado",
+            "texto_gerado": texto_caracteristicas,
         }
     )
 
@@ -3359,6 +3652,165 @@ def _substituir_texto_campo(driver, wait, texto, descricao, xpaths_input, xpaths
     raise Exception(f"Não foi possível localizar o campo para substituir texto: {descricao}")
 
 
+
+def _capturar_alerta_se_existir(driver, timeout=1.5):
+    try:
+        alert = WebDriverWait(driver, timeout).until(EC.alert_is_present())
+        texto = alert.text or ""
+        print(f"[SCH] Alerta após salvar: {texto}")
+        alert.accept()
+        esperar_tela_carregar(driver, 0.2)
+        return texto
+    except Exception:
+        return ""
+
+
+def _texto_visivel_pagina_e_iframe(driver):
+    textos = []
+
+    try:
+        driver.switch_to.default_content()
+        body = driver.find_element(By.TAG_NAME, "body")
+        textos.append(body.text or "")
+    except Exception:
+        pass
+
+    try:
+        driver.switch_to.default_content()
+        iframe = driver.find_element(By.XPATH, XPATH_IFRAME_DETALHE)
+        driver.switch_to.frame(iframe)
+
+        body = driver.find_element(By.TAG_NAME, "body")
+        textos.append(body.text or "")
+    except Exception:
+        pass
+
+    return "\n".join(textos)
+
+
+def _detectar_resultado_salvamento_minuta(driver, alerta_texto=""):
+    texto_total = "\n".join(
+        [
+            str(alerta_texto or ""),
+            _texto_visivel_pagina_e_iframe(driver),
+        ]
+    )
+
+    texto_norm = _normalizar_texto_comparacao(texto_total)
+
+    termos_sucesso = [
+        "salvo com sucesso",
+        "salva com sucesso",
+        "gravado com sucesso",
+        "alterado com sucesso",
+        "alteracao realizada com sucesso",
+        "alterações realizadas com sucesso",
+        "alteracoes realizadas com sucesso",
+        "operacao realizada com sucesso",
+        "operação realizada com sucesso",
+        "registro salvo com sucesso",
+        "registro alterado com sucesso",
+        "dados salvos com sucesso",
+    ]
+
+    termos_bloqueio = [
+        "erro ao salvar",
+        "falha ao salvar",
+        "nao foi possivel salvar",
+        "não foi possível salvar",
+        "operacao nao realizada",
+        "operação não realizada",
+        "nao permitido",
+        "não permitido",
+        "nao permite",
+        "não permite",
+        "campo obrigatorio",
+        "campo obrigatório",
+        "preenchimento obrigatorio",
+        "preenchimento obrigatório",
+        "corrija",
+        "inconsistencia",
+        "inconsistência",
+        "inconsistente",
+        "data invalida",
+        "data inválida",
+        "periodo invalido",
+        "período inválido",
+        "validade invalida",
+        "validade inválida",
+        "data de validade invalida",
+        "data de validade inválida",
+        "data do certificado invalida",
+        "data do certificado inválida",
+        "data de emissao invalida",
+        "data de emissão inválida",
+        "certificado vencido",
+        "a data",
+        "as datas",
+    ]
+
+    sucesso = any(_normalizar_texto_comparacao(t) in texto_norm for t in termos_sucesso)
+    bloqueio = any(_normalizar_texto_comparacao(t) in texto_norm for t in termos_bloqueio)
+
+    return {
+        "sucesso": sucesso,
+        "bloqueio": bloqueio,
+        "texto_detectado": texto_total[:2000],
+    }
+
+
+def _confirmar_texto_minuta_no_campo(driver, wait, texto_esperado):
+    if not texto_esperado:
+        return False
+
+    texto_esperado_norm = _normalizar_texto_comparacao(texto_esperado)
+
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+    except Exception:
+        pass
+
+    xpaths_validacao = [
+        "//textarea[not(@disabled)]",
+        "//*[@contenteditable='true']",
+        "//div[contains(@class,'ql-editor')]",
+        "//input[not(@disabled)]",
+    ]
+
+    for xpath in xpaths_validacao:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+
+            for el in elementos:
+                try:
+                    if not el.is_displayed():
+                        continue
+
+                    valor = driver.execute_script(
+                        """
+                        return (
+                            arguments[0].value ||
+                            arguments[0].innerText ||
+                            arguments[0].textContent ||
+                            ''
+                        ).trim();
+                        """,
+                        el,
+                    ) or ""
+
+                    if texto_esperado_norm in _normalizar_texto_comparacao(valor):
+                        return True
+
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    return False
+
+
+
 def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.08)
@@ -3398,74 +3850,95 @@ def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
         print("[SCH][WARN] Botão Salvar não encontrado em Corrigir Minuta.")
         return {
             "salvo": False,
-            "motivo": "botao_salvar_nao_encontrado",
+            "confirmado_apos_salvar": False,
+            "status": "botao_salvar_nao_encontrado",
+            "motivo": "Botão Salvar não encontrado em Corrigir Minuta.",
         }
 
     print("[SCH] Salvando Corrigir Minuta...")
 
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao_salvar)
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center'});",
+        botao_salvar,
+    )
+
     _clicar_com_fallback(driver, botao_salvar)
 
-    esperar_tela_carregar(driver, 0.8)
+    esperar_tela_carregar(driver, 0.4)
 
-    try:
-        alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
-        print(f"[SCH] Alerta após salvar Corrigir Minuta: {alert.text}")
-        alert.accept()
-        esperar_tela_carregar(driver, 0.5)
-    except Exception:
-        pass
+    alerta_texto = _capturar_alerta_se_existir(driver, timeout=1.5)
 
-    confirmado = False
+    esperar_tela_carregar(driver, 0.4)
 
-    if texto_esperado:
-        try:
-            entrar_iframe_detalhe_analise(driver, wait)
-            texto_esperado_norm = _normalizar_texto_comparacao(texto_esperado)
+    resultado_sistema = _detectar_resultado_salvamento_minuta(
+        driver,
+        alerta_texto=alerta_texto,
+    )
 
-            xpaths_validacao = [
-                "//textarea[not(@disabled)]",
-                "//*[@contenteditable='true']",
-                "//div[contains(@class,'ql-editor')]",
-                "//input[not(@disabled)]",
-            ]
+    confirmado = _confirmar_texto_minuta_no_campo(
+        driver,
+        wait,
+        texto_esperado,
+    )
 
-            for xpath in xpaths_validacao:
-                elementos = driver.find_elements(By.XPATH, xpath)
+    if resultado_sistema.get("bloqueio"):
+        print(
+            "[SCH][WARN] Corrigir Minuta NÃO foi considerada salva, "
+            "pois o sistema indicou bloqueio/erro no salvamento."
+        )
 
-                for el in elementos:
-                    try:
-                        if not el.is_displayed():
-                            continue
+        return {
+            "salvo": False,
+            "confirmado_apos_salvar": confirmado,
+            "status": "bloqueado_pelo_sistema",
+            "motivo": "O SCH indicou erro/bloqueio ao tentar salvar a Corrigir Minuta.",
+            "alerta": alerta_texto,
+            "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
+        }
 
-                        valor = driver.execute_script(
-                            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
-                            el,
-                        ) or ""
+    if resultado_sistema.get("sucesso") and confirmado:
+        print("[SCH] Corrigir Minuta salva e confirmada com sucesso.")
 
-                        if texto_esperado_norm in _normalizar_texto_comparacao(valor):
-                            confirmado = True
-                            break
+        return {
+            "salvo": True,
+            "confirmado_apos_salvar": True,
+            "status": "salvo_confirmado",
+            "motivo": "O SCH retornou mensagem de sucesso e o texto foi confirmado no campo.",
+            "alerta": alerta_texto,
+            "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
+        }
 
-                    except Exception:
-                        continue
+    if confirmado and not resultado_sistema.get("sucesso"):
+        print(
+            "[SCH][WARN] Texto encontrado no campo, mas o SCH não confirmou "
+            "o salvamento. Não será marcado como salvo."
+        )
 
-                if confirmado:
-                    break
+        return {
+            "salvo": False,
+            "confirmado_apos_salvar": True,
+            "status": "texto_na_tela_sem_confirmacao_de_salvamento",
+            "motivo": (
+                "O texto ficou visível no campo, mas o sistema não retornou "
+                "mensagem confiável de sucesso."
+            ),
+            "alerta": alerta_texto,
+            "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
+        }
 
-        except Exception:
-            confirmado = False
-
-    if confirmado:
-        print("[SCH] Corrigir Minuta salva e conferida com sucesso.")
-    else:
-        print("[SCH][WARN] Corrigir Minuta salva, mas não foi possível confirmar o texto após salvar.")
+    print(
+        "[SCH][WARN] Corrigir Minuta não foi confirmada após salvar. "
+        "Não será marcada como salva."
+    )
 
     return {
-        "salvo": True,
-        "confirmado_apos_salvar": confirmado,
+        "salvo": False,
+        "confirmado_apos_salvar": False,
+        "status": "nao_confirmado",
+        "motivo": "Não houve confirmação confiável de salvamento.",
+        "alerta": alerta_texto,
+        "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
     }
-
 
 
 def voltar_da_tela_corrigir_minuta(driver, wait):
@@ -3684,6 +4157,12 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
         analise["salvo"] = False
         analise["confirmado_apos_salvar"] = False
         analise["retornou_para_requerimento"] = False
+        analise["resultado_salvamento"] = {
+            "salvo": False,
+            "confirmado_apos_salvar": False,
+            "status": "sem_frase_para_preencher",
+            "motivo": "A análise SAR não indicou necessidade de preencher frase na minuta.",
+        }
         return analise
 
     try:
@@ -3723,18 +4202,57 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
             driver=driver,
             wait=wait,
             texto_esperado=analise["frase"],
-        )
+        ) or {}
 
         retornou_minuta = voltar_da_tela_corrigir_minuta(driver, wait)
 
-        analise["status"] = "preenchido"
+        salvo_ok = bool(resultado_salvar.get("salvo"))
+        confirmado_ok = bool(resultado_salvar.get("confirmado_apos_salvar"))
+
+        if salvo_ok and confirmado_ok:
+            status_final = "preenchido"
+
+            mensagem_final = (
+                "A frase de SAR foi preenchida, salva e confirmada na Corrigir Minuta."
+            )
+
+        elif preenchido and not salvo_ok:
+            status_final = "preenchido_na_tela_mas_nao_salvo"
+
+            mensagem_final = (
+                "A frase de SAR foi inserida na tela da Corrigir Minuta, "
+                "mas o SCH não confirmou o salvamento. Verificar manualmente, "
+                "principalmente possíveis bloqueios relacionados a datas do certificado/validade."
+            )
+
+        else:
+            status_final = "nao_salvo"
+
+            mensagem_final = (
+                "A frase de SAR não foi salva na Corrigir Minuta. "
+                "Verificar manualmente."
+            )
+
+        analise["status"] = status_final
         analise["preenchido_automaticamente"] = bool(preenchido)
-        analise["salvo"] = bool(resultado_salvar.get("salvo"))
-        analise["confirmado_apos_salvar"] = bool(
-            resultado_salvar.get("confirmado_apos_salvar")
-        )
+        analise["salvo"] = salvo_ok
+        analise["confirmado_apos_salvar"] = confirmado_ok
         analise["retornou_para_requerimento"] = bool(retornou_minuta)
         analise["resultado_salvamento"] = resultado_salvar
+        analise["mensagem"] = mensagem_final
+
+        if not salvo_ok:
+            analise["erro_salvamento"] = {
+                "status": resultado_salvar.get("status", ""),
+                "motivo": resultado_salvar.get("motivo", ""),
+                "alerta": resultado_salvar.get("alerta", ""),
+                "mensagem_sistema": resultado_salvar.get("mensagem_sistema", ""),
+            }
+
+            print(
+                "[SCH][WARN] Corrigir Minuta não foi marcada como salva. "
+                f"Status do salvamento: {resultado_salvar.get('status', 'não informado')}"
+            )
 
         return analise
 
@@ -3752,6 +4270,12 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
         analise["salvo"] = False
         analise["confirmado_apos_salvar"] = False
         analise["retornou_para_requerimento"] = bool(voltou)
+        analise["resultado_salvamento"] = {
+            "salvo": False,
+            "confirmado_apos_salvar": False,
+            "status": "erro_ao_preencher_minuta",
+            "motivo": str(e),
+        }
         analise["mensagem"] = (
             "Não foi possível preencher automaticamente a frase de SAR no caminho "
             "Corrigir Minuta > Especificação > Especificações Complementares."
