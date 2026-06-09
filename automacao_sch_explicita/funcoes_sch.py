@@ -79,156 +79,15 @@ def _somente_digitos(valor):
     return re.sub(r"\D+", "", valor or "")
 
 
-def _parece_requerimento(valor):
-    texto = str(valor or "").strip()
-    return bool(re.search(r"\b\d{4,6}\s*/\s*\d{2,4}\b", texto))
-
-
-def _parece_homologacao_anatel(valor):
-    texto = str(valor or "").strip()
-
-    # Exemplo: 03645-26-12388 / 14956-22-10459
-    if re.search(r"\b\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6}\b", texto):
-        return True
-
-    # Exemplo: 036452612388, quando vem sem hífen
-    digitos = _somente_digitos(texto)
-    if len(digitos) == 12:
-        return True
-
-    return False
-
-
-def _parece_certificado(valor):
-    texto = str(valor or "").strip()
-    texto_norm = _normalizar_texto_comparacao(texto)
-
-    if not texto_norm:
-        return False
-
-    # Evita classificar homologação ou requerimento como certificado
-    if _parece_homologacao_anatel(texto) or _parece_requerimento(texto):
-        return False
-
-    sinais_certificado = [
-        "ocp",
-        "icc",
-        "ncc",
-        "abcp",
-        "certificate",
-        "certificado",
-        "versys",
-        "cpqd",
-        "dekra",
-        "tuv",
-        "ul",
-    ]
-
-    return any(sinal in texto_norm for sinal in sinais_certificado)
-
-
-def _formatar_requerimento(valor):
-    texto = str(valor or "").strip()
-    m = re.search(r"\b(\d{4,6})\s*/\s*(\d{2,4})\b", texto)
-
-    if not m:
-        return texto
-
-    numero = _somente_digitos(m.group(1))
-    ano = _somente_digitos(m.group(2))
-
-    if len(numero) < 5:
-        numero = numero.zfill(5)
-
-    if len(ano) == 4:
-        ano = ano[-2:]
-
-    return f"{numero}/{ano}"
-
-
-def _formatar_homologacao_anatel(valor):
-    texto = str(valor or "").strip()
-    texto = texto.replace("–", "-").replace("—", "-")
-
-    m = re.search(r"\b(\d{4,6})\s*-\s*(\d{2})\s*-\s*(\d{4,6})\b", texto)
-    if m:
-        p1 = _somente_digitos(m.group(1)).zfill(5)
-        p2 = _somente_digitos(m.group(2))
-        p3 = _somente_digitos(m.group(3)).zfill(5)
-        return f"{p1}-{p2}-{p3}"
-
-    digitos = _somente_digitos(texto)
-    if len(digitos) == 12:
-        return f"{digitos[:5]}-{digitos[5:7]}-{digitos[7:]}"
-
-    return texto
-
-
-def _corrigir_campos_fila_por_padrao(dados):
-    """
-    Corrige inversões comuns entre requerimento, homologação e certificado
-    usando o formato do valor, não apenas a posição da coluna.
-    """
-    dados = dados or {}
-
-    valores = []
-
-    for chave in [
-        "requerimento",
-        "homologacao",
-        "certificado",
-        "tipo_produto",
-        "modelo",
-        "texto_linha",
-    ]:
-        valor = str(dados.get(chave, "") or "").strip()
-        if valor:
-            valores.append(valor)
-
-    texto_linha = str(dados.get("texto_linha", "") or "")
-    partes_linha = [p.strip() for p in re.split(r"\s*\|\s*", texto_linha) if p.strip()]
-    valores.extend(partes_linha)
-
-    # Requerimento
-    for valor in valores:
-        if _parece_requerimento(valor):
-            dados["requerimento"] = _formatar_requerimento(valor)
-            break
-
-    # Homologação
-    for valor in valores:
-        if _parece_homologacao_anatel(valor):
-            dados["homologacao"] = _formatar_homologacao_anatel(valor)
-            break
-
-    # Certificado
-    for valor in valores:
-        if _parece_certificado(valor):
-            dados["certificado"] = _texto_limpo(valor)
-            break
-
-    # Evita certificado receber homologação ANATEL
-    if _parece_homologacao_anatel(dados.get("certificado", "")):
-        dados["certificado"] = ""
-
-    # Evita homologação receber número de requerimento
-    if _parece_requerimento(dados.get("homologacao", "")):
-        dados["homologacao"] = ""
-
-    return dados
-
-
-
 def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
     """
     Extrai o número do requerimento preservando o ano quando vier no formato 04334/26.
 
     Exemplos:
-    - 04334/26  -> 04334/26
-    - 4334/26   -> 04334/26
-    - 04334     -> 04334
+    - 04334/26 -> 04334/26
+    - 4334/26  -> 04334/26
+    - 04334    -> 04334
     """
-
     candidatos = []
 
     texto_linha = _texto_limpo(texto_linha)
@@ -243,33 +102,33 @@ def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
         except Exception:
             continue
 
-    # 1. Prioridade: formato com ano, exemplo 04334/26
+    # Prioridade: requerimento com ano, exemplo 04334/26.
     padroes_com_ano = [
-        r"\b(\d{4,6})\s*/\s*(\d{2,4})\b",
         r"requerimento\s*[:#\-]?\s*(\d{4,6})\s*/\s*(\d{2,4})\b",
+        r"\b(\d{4,6})\s*/\s*(\d{2,4})\b",
     ]
 
     for texto in candidatos:
         for padrao in padroes_com_ano:
             m = re.search(padrao, texto, re.I)
-            if m:
-                numero = _somente_digitos(m.group(1))
-                ano = _somente_digitos(m.group(2))
+            if not m:
+                continue
 
-                if not numero or not ano:
-                    continue
+            numero = _somente_digitos(m.group(1))
+            ano = _somente_digitos(m.group(2))
 
-                # Garante 5 dígitos no número principal: 4334 -> 04334
-                if len(numero) < 5:
-                    numero = numero.zfill(5)
+            if not numero or not ano:
+                continue
 
-                # Ano com 4 dígitos vira 2 dígitos: 2026 -> 26
-                if len(ano) == 4:
-                    ano = ano[-2:]
+            if len(numero) < 5:
+                numero = numero.zfill(5)
 
-                return f"{numero}/{ano}"
+            if len(ano) == 4:
+                ano = ano[-2:]
 
-    # 2. Fallback: formato antigo, somente número
+            return f"{numero}/{ano}"
+
+    # Fallback: somente número.
     padroes_sem_ano = [
         r"requerimento\s*[:#\-]?\s*(\d{4,6})",
         r"^\s*(\d{4,6})\s*$",
@@ -279,16 +138,101 @@ def _extrair_numero_requerimento_de_linha(texto_linha, celulas=None):
     for texto in candidatos:
         for padrao in padroes_sem_ano:
             m = re.search(padrao, texto, re.I)
-            if m:
-                numero = _somente_digitos(m.group(1))
+            if not m:
+                continue
 
-                if len(numero) >= 4:
-                    if len(numero) < 5:
-                        numero = numero.zfill(5)
+            numero = _somente_digitos(m.group(1))
 
-                    return numero
+            if len(numero) >= 4:
+                if len(numero) < 5:
+                    numero = numero.zfill(5)
+
+                return numero
 
     return ""
+
+
+def _extrair_ano_requerimento_por_contexto(dados):
+    """
+    Tenta descobrir o ano do requerimento quando a fila trouxe só 04510.
+
+    Prioridade:
+    1. Homologação: 04225-26-01654 -> 26
+    2. Texto completo da linha
+    3. Data de conclusão: 29/05/2026 -> 26
+    """
+    dados = dados or {}
+
+    candidatos = [
+        dados.get("homologacao", ""),
+        dados.get("texto_linha", ""),
+        dados.get("certificado", ""),
+    ]
+
+    for valor in candidatos:
+        texto = str(valor or "").strip()
+
+        m = re.search(
+            r"\b\d{4,6}\s*[-–—]\s*(\d{2})\s*[-–—]\s*\d{4,6}\b",
+            texto,
+        )
+
+        if m:
+            return m.group(1)
+
+    data_conclusao = str(dados.get("data_conclusao", "") or "").strip()
+    m_data = re.search(r"\b\d{2}/\d{2}/(\d{4})\b", data_conclusao)
+
+    if m_data:
+        return m_data.group(1)[-2:]
+
+    return ""
+
+
+def _garantir_ano_no_requerimento(dados):
+    """
+    Garante que o requerimento fique como 04510/26 quando possível.
+    """
+    dados = dados or {}
+
+    requerimento = str(dados.get("requerimento", "") or "").strip()
+
+    if not requerimento:
+        return dados
+
+    if "/" in requerimento:
+        partes = requerimento.split("/", 1)
+        numero = _somente_digitos(partes[0])
+        ano = _somente_digitos(partes[1])
+
+        if len(numero) < 5:
+            numero = numero.zfill(5)
+
+        if len(ano) == 4:
+            ano = ano[-2:]
+
+        if numero and ano:
+            dados["requerimento"] = f"{numero}/{ano}"
+
+        return dados
+
+    numero = _somente_digitos(requerimento)
+
+    if not numero:
+        return dados
+
+    if len(numero) < 5:
+        numero = numero.zfill(5)
+
+    ano = _extrair_ano_requerimento_por_contexto(dados)
+
+    if ano:
+        dados["requerimento"] = f"{numero}/{ano}"
+    else:
+        dados["requerimento"] = numero
+
+    return dados
+
 
 def _clicar_com_fallback(driver, elemento):
     try:
@@ -298,46 +242,15 @@ def _clicar_com_fallback(driver, elemento):
 
 
 def _aguardar_iframe_detalhe(driver, timeout=8):
-    return WebDriverWait(driver, timeout, poll_frequency=0.05).until(
+    return WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((By.XPATH, XPATH_IFRAME_DETALHE))
     )
 
 
 def _aguardar_tabela_fila(driver, timeout=6):
-    return WebDriverWait(driver, timeout, poll_frequency=0.05).until(
+    return WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
     )
-
-
-def _tabela_fila_pronta(driver):
-    try:
-        driver.switch_to.default_content()
-    except Exception:
-        pass
-
-    try:
-        tabelas = driver.find_elements(By.XPATH, XPATH_TABELA_FILA)
-
-        for tabela in tabelas:
-            try:
-                if not tabela.is_displayed():
-                    continue
-
-                linhas = tabela.find_elements(By.XPATH, ".//tbody/tr[td]")
-                if linhas:
-                    return True
-
-                # Mesmo sem linha, se a tabela está visível, já considera carregada.
-                return True
-
-            except Exception:
-                continue
-
-    except Exception:
-        pass
-
-    return False
-
 
 
 def _capturar_novas_abas(driver, handles_antes, timeout=1.0, poll=0.08):
@@ -589,17 +502,8 @@ def _tentar_preencher_editor_rico(driver, xpaths_editor, html):
 def abrir_sch(driver):
     url = "https://sistemasnet.anatel.gov.br/mosaico/sch/worklist/visualizar"
     print(f"[SCH] Abrindo {url}")
-
     driver.get(url)
-
-    try:
-        WebDriverWait(driver, 8, poll_frequency=0.08).until(
-            lambda d: d.execute_script("return document.readyState") in {"interactive", "complete"}
-        )
-    except Exception:
-        pass
-
-    esperar_tela_carregar(driver, 0.05)
+    esperar_tela_carregar(driver, 2)
 
 
 def _normalizar_texto_login(valor):
@@ -715,25 +619,11 @@ def clicar_fila_em_analise(driver, wait):
     xpath_fila = "//a[normalize-space()='Em Análise' or contains(normalize-space(), 'Em Análise')]"
 
     print("[SCH] Clicando na fila Em Análise...")
-
-    try:
-        driver.switch_to.default_content()
-    except Exception:
-        pass
-
-    fila = WebDriverWait(driver, 4, poll_frequency=0.05).until(
-        EC.element_to_be_clickable((By.XPATH, xpath_fila))
-    )
-
+    fila = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_fila)))
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", fila)
     driver.execute_script("arguments[0].click();", fila)
 
-    WebDriverWait(driver, 5, poll_frequency=0.05).until(
-        lambda d: _tabela_fila_pronta(d)
-    )
-
-    esperar_tela_carregar(driver, 0.03)
-
+    esperar_tela_carregar(driver, 1.2)
     print("[SCH] Fila aberta.")
 
 
@@ -791,23 +681,23 @@ def coletar_requerimentos(driver, wait, regras):
                 "texto_linha": texto_linha,
             }
 
-            dados = _corrigir_campos_fila_por_padrao(dados)
-
+            dados = _garantir_ano_no_requerimento(dados)
+            
             requerimentos.append(dados)
+
+
 
         except Exception as e:
             print(f"[SCH][WARN] Falha ao ler linha {idx}: {e}")
 
     print(f"[SCH] {len(requerimentos)} requerimentos encontrados.")
     for item in requerimentos:
-       print(
-        f"[SCH] Linha {item['row_index']}: "
-        f"requerimento={item.get('requerimento', '')} | "
-        f"homologacao={item.get('homologacao', '')} | "
-        f"certificado={item.get('certificado', '')} | "
-        f"tipo_produto={item.get('tipo_produto', '')} | "
-        f"modelo={item.get('modelo', '')}"
-    )
+        print(
+            f"[SCH] Linha {item['row_index']}: "
+            f"requerimento={item.get('requerimento', '')} | "
+            f"homologacao={item.get('homologacao', '')} | "
+            f"certificado={item.get('certificado', '')}"
+        )
 
     return requerimentos
 
@@ -1238,6 +1128,8 @@ def extrair_dados_certificado_sch(driver, wait):
     )
 
     return dados
+
+
 
 
 def clicar_aba_anexos(driver, wait):
@@ -1763,6 +1655,137 @@ def avaliar_validade_cct(dados_pdf):
     return resultado
 
 
+def comparar_datas_certificado_sch_x_cct(dados_certificado_sch, dados_pdf):
+    """
+    Compara as datas do certificado no SCH com as datas extraídas do CCT.
+
+    A validação de prazo de 2 anos continua usando as datas do SCH.
+    Esta função apenas gera alerta caso o SCH e o CCT estejam divergentes.
+    """
+    dados_certificado_sch = dados_certificado_sch or {}
+    dados_pdf = dados_pdf or {}
+
+    emissao_sch_bruta = (
+        dados_certificado_sch.get("data_certificado")
+        or dados_pdf.get("data_emissao_sch")
+        or ""
+    )
+
+    validade_sch_bruta = (
+        dados_certificado_sch.get("data_validade")
+        or dados_pdf.get("data_validade_sch")
+        or ""
+    )
+
+    emissao_cct_bruta = (
+        dados_pdf.get("data_emissao_cct")
+        or dados_pdf.get("data_emissao")
+        or ""
+    )
+
+    validade_cct_bruta = (
+        dados_pdf.get("data_validade_cct")
+        or dados_pdf.get("data_validade")
+        or ""
+    )
+
+    def comparar_um_campo(nome_campo, valor_sch, valor_cct):
+        data_sch = _converter_data_br(valor_sch)
+        data_cct = _converter_data_br(valor_cct)
+
+        if not data_sch and not data_cct:
+            status = "ausente_nos_dois"
+            diverge = False
+            mensagem = "Data não identificada no SCH nem no CCT."
+
+        elif not data_sch:
+            status = "ausente_no_sch"
+            diverge = True
+            mensagem = "Data identificada no CCT, mas não identificada no SCH."
+
+        elif not data_cct:
+            status = "ausente_no_cct"
+            diverge = False
+            mensagem = (
+                "Data identificada no SCH, mas não identificada no CCT. "
+                "Não gera divergência automática, mas recomenda conferência manual."
+            )
+
+        elif data_sch == data_cct:
+            status = "ok"
+            diverge = False
+            mensagem = "Data do SCH confere com a data do CCT."
+
+        else:
+            status = "divergente"
+            diverge = True
+            mensagem = "Data do SCH difere da data extraída do CCT."
+
+        return {
+            "campo": nome_campo,
+            "valor_sch": valor_sch or "",
+            "valor_cct": valor_cct or "",
+            "data_sch_normalizada": data_sch.isoformat() if data_sch else "",
+            "data_cct_normalizada": data_cct.isoformat() if data_cct else "",
+            "status": status,
+            "diverge": diverge,
+            "mensagem": mensagem,
+        }
+
+    comparacoes = [
+        comparar_um_campo(
+            "data_emissao",
+            emissao_sch_bruta,
+            emissao_cct_bruta,
+        ),
+        comparar_um_campo(
+            "data_validade",
+            validade_sch_bruta,
+            validade_cct_bruta,
+        ),
+    ]
+
+    divergencias = [
+        item for item in comparacoes
+        if item.get("diverge")
+    ]
+
+    ausentes_no_cct = [
+        item for item in comparacoes
+        if item.get("status") == "ausente_no_cct"
+    ]
+
+    if divergencias:
+        status_geral = "divergente"
+        mensagem_geral = (
+            "Há divergência entre as datas do SCH e as datas extraídas do CCT. "
+            "Revisão manual recomendada."
+        )
+
+    elif ausentes_no_cct:
+        status_geral = "parcial"
+        mensagem_geral = (
+            "As datas do SCH foram identificadas, mas uma ou mais datas não foram "
+            "encontradas no CCT. Conferir manualmente se necessário."
+        )
+
+    else:
+        status_geral = "ok"
+        mensagem_geral = "Datas do SCH conferem com as datas extraídas do CCT."
+
+    return {
+        "status_geral": status_geral,
+        "mensagem": mensagem_geral,
+        "comparacoes": comparacoes,
+        "divergencias": divergencias,
+        "origem_sch": dados_certificado_sch.get(
+            "origem",
+            "SCH - Dados Gerais - Dados do Certificado",
+        ),
+        "origem_cct": "CCT extraído pelo parser",
+    }
+
+
 
 def _normalizar_texto_rapido(texto):
     texto = (texto or "").lower()
@@ -1867,23 +1890,46 @@ def _cabecalho_canonico(valor):
             "faixa de frequencia tx mhz",
             "faixa de frequencias tx",
             "faixa de frequencia tx",
+            "faixa de frequencias mhz",
+            "faixa de frequencia mhz",
             "faixa de frequencias",
             "faixa de frequencia",
-            "faixa de frequencia mhz",
-            "faixa de frequencias mhz",
             "frequency range mhz",
             "frequency range",
+            "range mhz",
         ],
         "potencia_max_saida": [
             "potencia maxima de saida w",
             "potencia maxima saida w",
             "potencia maxima de saida",
             "potencia maxima saida",
-            "saida maximum power w",
+            "potencia de saida w",
+            "potencia saida w",
+            "potencia de saida",
+            "potencia saida",
+            "saida w",
+            "maximum output power w",
+            "maximum output power",
             "maximum power w",
             "maximum power",
             "output power w",
             "output power",
+            "transmitter output power",
+            "transmit power",
+            "tx power",
+            "power w",
+        ],
+        "intensidade_campo": [
+            "intensidade de campo uv m",
+            "intensidade campo uv m",
+            "intensidade de campo µv m",
+            "intensidade campo µv m",
+            "intensidade de campo",
+            "intensidade campo",
+            "field strength uv m",
+            "field strength µv m",
+            "field strength",
+            "electric field strength",
         ],
         "designacao_emissoes": [
             "designacao de emissoes",
@@ -1912,6 +1958,15 @@ def _cabecalho_canonico(valor):
             "modulation",
             "type of modulation",
         ],
+        "taxa_transmissao": [
+            "taxa de transmissao",
+            "taxa transmissao",
+            "transmission rate",
+            "data rate",
+            "bit rate",
+            "mbit s",
+            "mbps",
+        ],
     }
 
     for canonico, aliases in mapeamentos.items():
@@ -1920,7 +1975,6 @@ def _cabecalho_canonico(valor):
                 return canonico
 
     return ""
-
 
 
 def _formatar_float_tabela(numero):
@@ -1963,9 +2017,20 @@ def _normalizar_decimal_tabela(valor):
 
 
 def _normalizar_faixa_frequencia_tabela(valor):
-    texto = _normalizar_texto_tabela(valor)
+    texto_original = str(valor or "").strip()
+
+    if not texto_original:
+        return ""
+
+    texto = _normalizar_texto_tabela(texto_original)
 
     if not texto:
+        return ""
+
+    numeros = re.findall(r"\d[\d.,]*", texto_original)
+
+    # Se não tiver número, não é faixa de frequência.
+    if not numeros:
         return ""
 
     texto = texto.replace("mhz", "")
@@ -1985,22 +2050,31 @@ def _normalizar_faixa_frequencia_tabela(valor):
             return f"{inicio}-{fim}"
 
     if len(numeros) == 1:
-        return _normalizar_decimal_tabela(numeros[0])
+        valor_unico = _normalizar_decimal_tabela(numeros[0])
 
-    return texto.replace(" ", "")
+        if valor_unico:
+            return valor_unico
+
+    return ""
 
 
 def _normalizar_potencia_tabela(valor):
-    texto = _normalizar_texto_tabela(valor)
-    texto = texto.replace("w", "").strip()
+    texto_original = str(valor or "").strip()
 
-    numeros = re.findall(r"\d[\d.,]*", texto)
+    if not texto_original:
+        return ""
+
+    texto = _normalizar_texto_tabela(texto_original)
+    texto = texto.replace("watts", "")
+    texto = re.sub(r"\bw\b", "", texto).strip()
+
+    numeros = re.findall(r"\d[\d.,]*", texto_original)
 
     if numeros:
         return _normalizar_decimal_tabela(numeros[0])
 
-    return texto
-
+    # Se não houver número, não é potência.
+    return ""
 
 
 def _normalizar_valor_tabela_por_campo(campo, valor):
@@ -2014,6 +2088,9 @@ def _normalizar_valor_tabela_por_campo(campo, valor):
 
     if campo == "potencia_max_saida":
         return _normalizar_potencia_tabela(valor)
+
+    if campo == "intensidade_campo":
+        return _normalizar_intensidade_campo_tabela(valor)
 
     if campo == "designacao_emissoes":
         texto = texto.upper()
@@ -2052,6 +2129,48 @@ def _normalizar_valor_tabela_por_campo(campo, valor):
 
     return texto
 
+def _normalizar_intensidade_campo_tabela(valor):
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return ""
+
+    texto = texto.replace("µ", "u")
+    texto = texto.replace("μ", "u")
+
+    texto_norm = _normalizar_texto_tabela(texto)
+
+    if texto_norm in {
+        "",
+        "-",
+        "--",
+        "---",
+        "na",
+        "n a",
+        "n/a",
+        "nao aplicavel",
+        "not applicable",
+    }:
+        return ""
+
+    numeros = re.findall(r"\d[\d.,]*", texto)
+
+    if not numeros:
+        return ""
+
+    comparador = ""
+    m_comp = re.search(r"(<=|>=|<|>)", texto)
+    if m_comp:
+        comparador = m_comp.group(1)
+
+    numero = _normalizar_decimal_tabela(numeros[0])
+
+    if not numero:
+        return ""
+
+    return f"{comparador}{numero}uv/m"
+
+
 def _mapear_colunas_relevantes(cabecalho):
     mapeamento = {}
 
@@ -2063,48 +2182,182 @@ def _mapear_colunas_relevantes(cabecalho):
     return mapeamento
 
 
-def _extrair_linhas_comparaveis(tabela):
+def _tabela_tem_coluna_intensidade(tabela):
+    tabela = tabela or {}
+    cabecalho = list(tabela.get("cabecalho", []) or [])
+    mapa_colunas = _mapear_colunas_relevantes(cabecalho)
+
+    return "intensidade_campo" in mapa_colunas
+
+
+def _tabela_tem_coluna_potencia(tabela):
+    tabela = tabela or {}
+    cabecalho = list(tabela.get("cabecalho", []) or [])
+    mapa_colunas = _mapear_colunas_relevantes(cabecalho)
+
+    return "potencia_max_saida" in mapa_colunas
+
+
+def _extrair_linhas_comparaveis(tabela, usar_potencia=True, usar_intensidade=False):
     tabela = tabela or {}
     cabecalho = list(tabela.get("cabecalho", []) or [])
     linhas = [list(l) for l in (tabela.get("linhas", []) or [])]
 
     mapa_colunas = _mapear_colunas_relevantes(cabecalho)
 
-    campos_alvo = [
-        "faixa_freq_tx",
-        "potencia_max_saida",
-        "designacao_emissoes",
-        "tecnologias",
-        "tipo_modulacao",
-    ]
-
     linhas_saida = []
-    for linha in linhas:
-        registro = {}
-        for campo in campos_alvo:
-            idx = mapa_colunas.get(campo)
-            valor = linha[idx] if idx is not None and idx < len(linha) else ""
-            registro[campo] = _normalizar_valor_tabela_por_campo(campo, valor)
+    ultima_faixa_valida = ""
 
-        if any(registro.values()):
-            linhas_saida.append(registro)
+    for linha in linhas:
+        idx_faixa = mapa_colunas.get("faixa_freq_tx")
+        valor_faixa = (
+            linha[idx_faixa]
+            if idx_faixa is not None and idx_faixa < len(linha)
+            else ""
+        )
+
+        faixa = _normalizar_valor_tabela_por_campo(
+            "faixa_freq_tx",
+            valor_faixa,
+        )
+
+        # CCT pode vir com célula mesclada:
+        # primeira linha tem a faixa e as próximas vêm vazias.
+        if faixa:
+            ultima_faixa_valida = faixa
+        else:
+            faixa = ultima_faixa_valida
+
+        potencia = ""
+
+        if usar_potencia:
+            idx_potencia = mapa_colunas.get("potencia_max_saida")
+            valor_potencia = (
+                linha[idx_potencia]
+                if idx_potencia is not None and idx_potencia < len(linha)
+                else ""
+            )
+
+            potencia = _normalizar_valor_tabela_por_campo(
+                "potencia_max_saida",
+                valor_potencia,
+            )
+
+        intensidade = ""
+
+        if usar_intensidade:
+            idx_intensidade = mapa_colunas.get("intensidade_campo")
+            valor_intensidade = (
+                linha[idx_intensidade]
+                if idx_intensidade is not None and idx_intensidade < len(linha)
+                else ""
+            )
+
+            intensidade = _normalizar_valor_tabela_por_campo(
+                "intensidade_campo",
+                valor_intensidade,
+            )
+
+        if not faixa:
+            continue
+
+        if usar_potencia and not potencia:
+            continue
+
+        registro = {
+            "faixa_freq_tx": faixa,
+        }
+
+        if usar_potencia:
+            registro["potencia_max_saida"] = potencia
+
+        if usar_intensidade:
+            registro["intensidade_campo"] = intensidade
+
+        linhas_saida.append(registro)
 
     return linhas_saida
 
 
-def _assinatura_linha_tabela(registro):
+def _assinatura_linha_tabela(registro, usar_potencia=True, usar_intensidade=False):
+    faixa = registro.get("faixa_freq_tx", "")
+    potencia = registro.get("potencia_max_saida", "") if usar_potencia else ""
+    intensidade = registro.get("intensidade_campo", "") if usar_intensidade else ""
+
     return (
-        registro.get("faixa_freq_tx", ""),
-        registro.get("potencia_max_saida", ""),
-        registro.get("designacao_emissoes", ""),
-        registro.get("tecnologias", ""),
-        registro.get("tipo_modulacao", ""),
+        faixa,
+        potencia,
+        intensidade,
     )
 
 
+def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=False):
+    assinaturas = set()
+
+    for linha in linhas or []:
+        assinatura = _assinatura_linha_tabela(
+            linha,
+            usar_potencia=usar_potencia,
+            usar_intensidade=usar_intensidade,
+        )
+
+        faixa, potencia, intensidade = assinatura
+
+        if not faixa:
+            continue
+
+        if usar_potencia and not potencia:
+            continue
+
+        assinaturas.add(assinatura)
+
+    return sorted(assinaturas)
+
+
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
-    linhas_sch = _extrair_linhas_comparaveis(tabela_sch)
-    linhas_cct = _extrair_linhas_comparaveis(tabela_cct)
+    tem_potencia_sch = _tabela_tem_coluna_potencia(tabela_sch)
+    tem_potencia_cct = _tabela_tem_coluna_potencia(tabela_cct)
+
+    tem_intensidade_sch = _tabela_tem_coluna_intensidade(tabela_sch)
+    tem_intensidade_cct = _tabela_tem_coluna_intensidade(tabela_cct)
+
+    usar_potencia = bool(tem_potencia_sch or tem_potencia_cct)
+    usar_intensidade = bool(tem_intensidade_sch or tem_intensidade_cct)
+
+    linhas_sch = _extrair_linhas_comparaveis(
+        tabela_sch,
+        usar_potencia=usar_potencia,
+        usar_intensidade=usar_intensidade,
+    )
+
+    linhas_cct = _extrair_linhas_comparaveis(
+        tabela_cct,
+        usar_potencia=usar_potencia,
+        usar_intensidade=usar_intensidade,
+    )
+
+    # Se a coluna de intensidade existe, mas nenhum valor real foi extraído,
+    # volta para comparação sem intensidade.
+    if usar_intensidade:
+        existe_valor_intensidade = any(
+            linha.get("intensidade_campo")
+            for linha in linhas_sch + linhas_cct
+        )
+
+        if not existe_valor_intensidade:
+            usar_intensidade = False
+
+            linhas_sch = _extrair_linhas_comparaveis(
+                tabela_sch,
+                usar_potencia=usar_potencia,
+                usar_intensidade=False,
+            )
+
+            linhas_cct = _extrair_linhas_comparaveis(
+                tabela_cct,
+                usar_potencia=usar_potencia,
+                usar_intensidade=False,
+            )
 
     if not linhas_sch and not linhas_cct:
         return {
@@ -2113,65 +2366,115 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
             "divergencias": [],
         }
 
-    linhas_sch_ord = sorted(linhas_sch, key=_assinatura_linha_tabela)
-    linhas_cct_ord = sorted(linhas_cct, key=_assinatura_linha_tabela)
+    assinaturas_sch = _assinaturas_unicas_tabela(
+        linhas_sch,
+        usar_potencia=usar_potencia,
+        usar_intensidade=usar_intensidade,
+    )
+
+    assinaturas_cct = _assinaturas_unicas_tabela(
+        linhas_cct,
+        usar_potencia=usar_potencia,
+        usar_intensidade=usar_intensidade,
+    )
+
+    set_sch = set(assinaturas_sch)
+    set_cct = set(assinaturas_cct)
 
     divergencias = []
 
-    if len(linhas_sch_ord) != len(linhas_cct_ord):
+    faltando_no_cct = sorted(set_sch - set_cct)
+    faltando_no_sch = sorted(set_cct - set_sch)
+
+    campos_comparados = [
+        "Faixa de Frequências Tx (MHz)",
+    ]
+
+    if usar_potencia:
+        campos_comparados.append(
+            "Potência de Saída / Potência Máxima de Saída (W)"
+        )
+
+    if usar_intensidade:
+        campos_comparados.append("Intensidade de Campo (µV/m)")
+
+    nome_coluna = " / ".join(campos_comparados)
+
+    def _descricao_assinatura(faixa, potencia, intensidade):
+        partes = [f"Faixa={faixa or 'vazio'}"]
+
+        if usar_potencia:
+            partes.append(f"Potência={potencia or 'vazio'}")
+
+        if usar_intensidade:
+            partes.append(f"Intensidade={intensidade or 'vazio'}")
+
+        return " | ".join(partes)
+
+    for faixa, potencia, intensidade in faltando_no_cct:
         divergencias.append(
             {
-                "tipo": "quantidade_linhas_diferente",
-                "linhas_sch": len(linhas_sch_ord),
-                "linhas_cct": len(linhas_cct_ord),
+                "tipo": "combinacao_ausente_no_cct",
+                "linha": "",
+                "coluna": nome_coluna,
+                "nome_coluna": nome_coluna,
+                "valor_sch": _descricao_assinatura(faixa, potencia, intensidade),
+                "valor_cct": "Não encontrada no CCT",
             }
         )
 
-    total = min(len(linhas_sch_ord), len(linhas_cct_ord))
-    campos = [
-        ("faixa_freq_tx", "Faixa de Frequências Tx (MHz)"),
-        ("potencia_max_saida", "Potência Máxima de Saída (W)"),
-        ("designacao_emissoes", "Designação de Emissões"),
-        ("tecnologias", "Tecnologias"),
-        ("tipo_modulacao", "Tipo de Modulação"),
-    ]
-
-    for i in range(total):
-        sch = linhas_sch_ord[i]
-        cct = linhas_cct_ord[i]
-
-        for chave, nome_coluna in campos:
-            valor_sch = sch.get(chave, "")
-            valor_cct = cct.get(chave, "")
-
-            if valor_sch != valor_cct:
-                divergencias.append(
-                    {
-                        "tipo": "valor_diferente",
-                        "linha": i + 1,
-                        "coluna": nome_coluna,
-                        "nome_coluna": nome_coluna,
-                        "valor_sch": valor_sch,
-                        "valor_cct": valor_cct,
-                    }
-                )
+    for faixa, potencia, intensidade in faltando_no_sch:
+        divergencias.append(
+            {
+                "tipo": "combinacao_ausente_no_sch",
+                "linha": "",
+                "coluna": nome_coluna,
+                "nome_coluna": nome_coluna,
+                "valor_sch": "Não encontrada no SCH",
+                "valor_cct": _descricao_assinatura(faixa, potencia, intensidade),
+            }
+        )
 
     return {
         "status": "ok" if not divergencias else "divergente",
-        "linhas_sch": len(linhas_sch_ord),
-        "linhas_cct": len(linhas_cct_ord),
-        "campos_comparados": [
-            "Faixa de Frequências Tx (MHz)",
-            "Potência Máxima de Saída (W)",
-            "Designação de Emissões",
-            "Tecnologias",
-            "Tipo de Modulação",
-        ],
+        "motivo": (
+            "comparacao_por_faixa_potencia_e_intensidade"
+            if usar_intensidade
+            else "comparacao_por_faixa_e_potencia"
+            if usar_potencia
+            else "comparacao_por_faixa_de_frequencia"
+        ),
+        "linhas_sch": len(assinaturas_sch),
+        "linhas_cct": len(assinaturas_cct),
+        "linhas_extraidas_sch": len(linhas_sch),
+        "linhas_extraidas_cct": len(linhas_cct),
+        "usar_potencia": usar_potencia,
+        "usar_intensidade": usar_intensidade,
+        "campos_comparados": campos_comparados,
         "colunas_ignoradas_do_cct": [
+            "Designação de Emissões / Designation of Emissions",
+            "Tecnologia / Technology",
+            "Tipo de Modulação / Type of Modulation",
             "SAR Cabeça / SAR head",
             "SAR Corpo / SAR body",
             "Padrão / Standard",
             "Taxa de transmissão / Transmission rate",
+        ],
+        "assinaturas_sch": [
+            {
+                "faixa_freq_tx": faixa,
+                "potencia_max_saida": potencia,
+                "intensidade_campo": intensidade,
+            }
+            for faixa, potencia, intensidade in assinaturas_sch
+        ],
+        "assinaturas_cct": [
+            {
+                "faixa_freq_tx": faixa,
+                "potencia_max_saida": potencia,
+                "intensidade_campo": intensidade,
+            }
+            for faixa, potencia, intensidade in assinaturas_cct
         ],
         "divergencias": divergencias,
     }
@@ -2182,53 +2485,140 @@ def extrair_tabela_tecnica_sch(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
+    def _extrair_tabela_html_basica(tabela):
+        trs = tabela.find_elements(By.XPATH, "./thead/tr | ./tbody/tr | ./tr")
+        if not trs:
+            trs = tabela.find_elements(By.XPATH, ".//tr")
+
+        cabecalho = []
+        linhas = []
+
+        for tr in trs:
+            celulas = tr.find_elements(By.XPATH, "./th | ./td")
+            valores = [_texto_limpo(c.text) for c in celulas]
+
+            if not any(valores):
+                continue
+
+            if not cabecalho and _eh_linha_cabecalho_tabela_sch(valores):
+                cabecalho = valores
+                continue
+
+            linhas.append(valores)
+
+        if not cabecalho and linhas:
+            primeira = linhas[0]
+            if _eh_linha_cabecalho_tabela_sch(primeira):
+                cabecalho = primeira
+                linhas = linhas[1:]
+
+        return _limpar_tabela_tecnica_sch(cabecalho, linhas)
+
+    def _pontuar_tabela_sch(tabela_limpa):
+        tabela_limpa = tabela_limpa or {}
+        cabecalho = tabela_limpa.get("cabecalho", []) or []
+
+        mapa = _mapear_colunas_relevantes(cabecalho)
+
+        tem_faixa = "faixa_freq_tx" in mapa
+        tem_potencia = "potencia_max_saida" in mapa
+        tem_intensidade = "intensidade_campo" in mapa
+
+        if not tem_faixa:
+            return -1, []
+
+        usar_potencia = tem_potencia
+        usar_intensidade = tem_intensidade
+
+        linhas_comp = _extrair_linhas_comparaveis(
+            tabela_limpa,
+            usar_potencia=usar_potencia,
+            usar_intensidade=usar_intensidade,
+        )
+
+        assinaturas = _assinaturas_unicas_tabela(
+            linhas_comp,
+            usar_potencia=usar_potencia,
+            usar_intensidade=usar_intensidade,
+        )
+
+        pontuacao = 0
+        pontuacao += 50 if tem_faixa else 0
+        pontuacao += 35 if tem_potencia else 0
+        pontuacao += 25 if tem_intensidade else 0
+        pontuacao += len(linhas_comp) * 10
+        pontuacao += len(assinaturas) * 5
+
+        return pontuacao, linhas_comp
+
     xpaths_tabela = [
         "//table[.//th[contains(., 'Faixa')] and .//th[contains(., 'Pot')]]",
-        "//table[.//th[contains(., 'Frequ')] and .//th[contains(., 'Emiss')]]",
+        "//table[.//th[contains(., 'Frequ')] and .//th[contains(., 'Pot')]]",
         "//table[.//td[contains(., 'Faixa')] and .//td[contains(., 'Pot')]]",
+        "//table[.//td[contains(., 'Frequ')] and .//td[contains(., 'Pot')]]",
+
+        "//table[.//th[contains(., 'Faixa')] and .//th[contains(., 'Intensidade')]]",
+        "//table[.//th[contains(., 'Frequ')] and .//th[contains(., 'Campo')]]",
+        "//table[.//td[contains(., 'Faixa')] and .//td[contains(., 'Intensidade')]]",
+        "//table[.//td[contains(., 'Frequ')] and .//td[contains(., 'Campo')]]",
+
+        "//table[.//th[contains(., 'Frequ')] and .//th[contains(., 'Emiss')]]",
         "//table[.//td[contains(., 'Frequ')] and .//td[contains(., 'Emiss')]]",
     ]
 
-    tabela = None
+    candidatos = []
+
     for xp in xpaths_tabela:
         try:
-            tabela = WebDriverWait(driver, 2).until(
-                EC.presence_of_element_located((By.XPATH, xp))
-            )
-            break
+            candidatos.extend(driver.find_elements(By.XPATH, xp))
         except Exception:
             continue
 
-    if tabela is None:
-        return {"cabecalho": [], "linhas": []}
+    # Fallback: avalia todas as tabelas visíveis, mas escolhe a melhor por pontuação.
+    try:
+        candidatos.extend(driver.find_elements(By.XPATH, "//table"))
+    except Exception:
+        pass
 
-    trs = tabela.find_elements(By.XPATH, ".//tr")
-    if not trs:
-        return {"cabecalho": [], "linhas": []}
+    candidatos_unicos = []
+    vistos = set()
 
-    cabecalho = []
-    linhas = []
+    for tabela in candidatos:
+        try:
+            chave = tabela.id
+        except Exception:
+            chave = None
 
-    for tr in trs:
-        celulas = tr.find_elements(By.XPATH, "./th | ./td")
-        valores = [_texto_limpo(c.text) for c in celulas]
-
-        if not any(valores):
+        if chave and chave in vistos:
             continue
 
-        if not cabecalho and _eh_linha_cabecalho_tabela_sch(valores):
-            cabecalho = valores
+        if chave:
+            vistos.add(chave)
+
+        candidatos_unicos.append(tabela)
+
+    melhor_tabela = None
+    melhor_pontuacao = -1
+
+    for tabela in candidatos_unicos:
+        try:
+            if not tabela.is_displayed():
+                continue
+
+            tabela_limpa = _extrair_tabela_html_basica(tabela)
+            pontuacao, linhas_comp = _pontuar_tabela_sch(tabela_limpa)
+
+            if pontuacao > melhor_pontuacao and linhas_comp:
+                melhor_pontuacao = pontuacao
+                melhor_tabela = tabela_limpa
+
+        except Exception:
             continue
 
-        linhas.append(valores)
+    if melhor_tabela:
+        return melhor_tabela
 
-    if not cabecalho and linhas:
-        primeira = linhas[0]
-        if _eh_linha_cabecalho_tabela_sch(primeira):
-            cabecalho = primeira
-            linhas = linhas[1:]
-
-    return _limpar_tabela_tecnica_sch(cabecalho, linhas)
+    return {"cabecalho": [], "linhas": []}
 
 
 def _normalizar_cabecalho_tabela_sch(texto):
@@ -2243,14 +2633,48 @@ def _eh_linha_cabecalho_tabela_sch(celulas):
         return False
 
     texto = " | ".join(_normalizar_cabecalho_tabela_sch(c) for c in celulas if c)
+
+    tem_faixa = (
+        "faixa" in texto
+        or "frequencia" in texto
+        or "frequencias" in texto
+        or "frequency range" in texto
+    )
+
+    tem_potencia = (
+        "potencia" in texto
+        or "potência" in texto
+        or "saida" in texto
+        or "saída" in texto
+        or "output power" in texto
+        or "power" in texto
+    )
+
+    tem_intensidade = (
+        "intensidade" in texto
+        or "field strength" in texto
+        or "uv/m" in texto
+        or "µv/m" in texto
+    )
+
+    if tem_faixa and (tem_potencia or tem_intensidade):
+        return True
+
     sinais = [
         "faixa",
         "frequencia",
+        "frequencias",
+        "frequency range",
         "potencia",
-        "emissao",
-        "tecnologia",
-        "modulacao",
+        "saida",
+        "output power",
+        "power",
+        "intensidade",
+        "field strength",
+        "uv/m",
+        "µv/m",
     ]
+
     return sum(1 for s in sinais if s in texto) >= 2
 
 
@@ -2274,61 +2698,141 @@ def _limpar_tabela_tecnica_sch(cabecalho, linhas):
     cabecalho = [cabecalho[idx] for idx in manter]
     linhas = [[linha[idx] for idx in manter] for linha in linhas]
 
-    # No SCH queremos só as 5 colunas comparáveis
-    max_colunas_comparaveis = 5
-    cabecalho = cabecalho[:max_colunas_comparaveis]
-    linhas = [linha[:max_colunas_comparaveis] for linha in linhas]
-
     return {
         "cabecalho": cabecalho,
         "linhas": [linha for linha in linhas if any(_texto_limpo(c) for c in linha)],
     }
 
 
+def _normalizar_modelo_item(valor):
+    texto = str(valor or "").strip().upper()
+
+    if not texto:
+        return ""
+
+    texto = texto.replace(",", " ")
+    texto = texto.replace(";", " ")
+    texto = texto.replace("/", " ")
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    # Mantém letras, números, hífen e ponto.
+    texto = re.sub(r"[^A-Z0-9.\-]+", "", texto)
+
+    return texto
+
+
+def _extrair_modelos_unicos(valor):
+    """
+    Extrai modelos únicos de textos como:
+    'A6S A6S A6S A6S'
+    'TC320B-G, TC320C-G1, TC321B-G e TC321C-G'
+    """
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return []
+
+    texto = texto.replace(",", " ")
+    texto = texto.replace(";", " ")
+    texto = texto.replace("\n", " ")
+    texto = re.sub(r"\s+e\s+", " ", texto, flags=re.I)
+    texto = re.sub(r"\s+and\s+", " ", texto, flags=re.I)
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    candidatos = texto.split(" ")
+
+    modelos = []
+
+    for item in candidatos:
+        modelo = _normalizar_modelo_item(item)
+
+        if not modelo:
+            continue
+
+        if len(modelo) < 2:
+            continue
+
+        if modelo not in modelos:
+            modelos.append(modelo)
+
+    return modelos
+
+
+def _comparar_modelos_sch_x_cct(modelo_sch, modelo_cct):
+    modelos_sch = _extrair_modelos_unicos(modelo_sch)
+    modelos_cct = _extrair_modelos_unicos(modelo_cct)
+
+    if not modelos_sch and not modelos_cct:
+        return {
+            "campo": "modelo",
+            "status": "ausente_nos_dois",
+            "valor_sch": modelo_sch or "",
+            "valor_cct": modelo_cct or "",
+            "valor_sch_normalizado": "",
+            "valor_cct_normalizado": "",
+            "modelos_sch_unicos": modelos_sch,
+            "modelos_cct_unicos": modelos_cct,
+            "diverge": False,
+            "observacao": "Modelo não identificado no SCH nem no CCT.",
+        }
+
+    if not modelos_sch or not modelos_cct:
+        return {
+            "campo": "modelo",
+            "status": "ausente_em_um_dos_lados",
+            "valor_sch": modelo_sch or "",
+            "valor_cct": modelo_cct or "",
+            "valor_sch_normalizado": " ".join(modelos_sch),
+            "valor_cct_normalizado": " ".join(modelos_cct),
+            "modelos_sch_unicos": modelos_sch,
+            "modelos_cct_unicos": modelos_cct,
+            "diverge": True,
+            "observacao": "Modelo identificado apenas em um dos lados.",
+        }
+
+    set_sch = set(modelos_sch)
+    set_cct = set(modelos_cct)
+
+    if set_sch == set_cct:
+        return {
+            "campo": "modelo",
+            "status": "ok",
+            "valor_sch": modelo_sch or "",
+            "valor_cct": modelo_cct or "",
+            "valor_sch_normalizado": " ".join(modelos_sch),
+            "valor_cct_normalizado": " ".join(modelos_cct),
+            "modelos_sch_unicos": modelos_sch,
+            "modelos_cct_unicos": modelos_cct,
+            "diverge": False,
+            "observacao": "Modelos conferem após remover repetições.",
+        }
+
+    faltando_no_cct = sorted(set_sch - set_cct)
+    faltando_no_sch = sorted(set_cct - set_sch)
+
+    return {
+        "campo": "modelo",
+        "status": "divergente",
+        "valor_sch": modelo_sch or "",
+        "valor_cct": modelo_cct or "",
+        "valor_sch_normalizado": " ".join(modelos_sch),
+        "valor_cct_normalizado": " ".join(modelos_cct),
+        "modelos_sch_unicos": modelos_sch,
+        "modelos_cct_unicos": modelos_cct,
+        "faltando_no_cct": faltando_no_cct,
+        "faltando_no_sch": faltando_no_sch,
+        "diverge": True,
+        "observacao": (
+            "Modelos divergentes após remover repetições. "
+            f"Faltando no CCT: {', '.join(faltando_no_cct) or 'nenhum'}. "
+            f"Faltando no SCH: {', '.join(faltando_no_sch) or 'nenhum'}."
+        ),
+    }
+
+
 def comparar_dados_sch_x_cct(req, dados_pdf):
     req = req or {}
     dados_pdf = dados_pdf or {}
-
-    homologacao_sch = req.get("homologacao", "")
-    homologacao_cct = dados_pdf.get("homologacao", "")
-
-    homologacoes_vinculadas = dados_pdf.get("homologacoes_vinculadas", []) or []
-
-    codigos_vinculados = {
-        item.get("codigo_anatel")
-        for item in homologacoes_vinculadas
-        if isinstance(item, dict) and item.get("codigo_anatel")
-    }
-
-    homologacao_sch_norm = _normalizar_numero_comparacao(homologacao_sch)
-
-    homologacao_sch_esta_em_vinculadas = any(
-        homologacao_sch_norm == _normalizar_numero_comparacao(codigo)
-        for codigo in codigos_vinculados
-    )
-
-    if homologacao_sch_esta_em_vinculadas and not homologacao_cct:
-        comparacao_homologacao = {
-            "campo": "homologacao",
-            "status": "homologacao_vinculada_no_cct",
-            "valor_sch": homologacao_sch,
-            "valor_cct": "",
-            "valor_sch_normalizado": homologacao_sch_norm,
-            "valor_cct_normalizado": "",
-            "diverge": False,
-            "observacao": (
-                "A homologação informada no SCH foi encontrada no CCT apenas como "
-                "homologação vinculada/informativa, não como homologação principal."
-            ),
-            "homologacoes_vinculadas": homologacoes_vinculadas,
-        }
-    else:
-        comparacao_homologacao = _comparar_valores(
-            homologacao_sch,
-            homologacao_cct,
-            "homologacao",
-            modo="numero",
-        )
 
     comparacoes = [
         _comparar_valores(
@@ -2337,12 +2841,15 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
             "certificado",
             modo="texto_flex",
         ),
-        comparacao_homologacao,
         _comparar_valores(
+            req.get("homologacao", ""),
+            dados_pdf.get("homologacao", ""),
+            "homologacao",
+            modo="numero",
+        ),
+        _comparar_modelos_sch_x_cct(
             req.get("modelo", ""),
             dados_pdf.get("modelo", ""),
-            "modelo",
-            modo="texto",
         ),
         _comparar_valores(
             req.get("fabricante", ""),
@@ -2359,7 +2866,6 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
     ]
 
     divergencias = [item for item in comparacoes if item.get("diverge")]
-
     campos_ausentes = [
         item for item in comparacoes
         if item.get("status") in {"ausente_nos_dois", "ausente_em_um_dos_lados"}
@@ -2396,8 +2902,8 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         "campos_ausentes": campos_ausentes,
         "comparacao_tabela_tecnica": comparacao_tabela,
         "requerimento": req.get("requerimento", ""),
-        "homologacoes_vinculadas_cct": homologacoes_vinculadas,
     }
+
 
 def avisar_resultado_conferencia_sch_cct(resultado):
     resultado = resultado or {}
@@ -2622,12 +3128,6 @@ def escolher_titulo_caracteristicas_secundarias(req=None, dados_pdf=None):
     """
     req = req or {}
     dados_pdf = dados_pdf or {}
-    texto_completo = str(
-        dados_pdf.get("texto_caracteristicas_secundarias") or ""
-    ).strip()
-
-    if texto_completo:
-        return texto_completo 
     
     
     caracteristicas_sec = dados_pdf.get("caracteristicas_secundarias") or {}
@@ -2750,12 +3250,6 @@ def _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5):
 
 
 def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
-    """
-    Preenche o campo de Características Técnicas Secundárias sempre substituindo
-    qualquer texto existente pelo texto gerado pela automação.
-
-    Mantém o mesmo nome da função para não precisar alterar quem chama.
-    """
     texto = str(texto or "").strip()
 
     if not texto:
@@ -2766,124 +3260,56 @@ def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
 
     try:
         valor_atual = driver.execute_script(
-            """
-            return (
-                arguments[0].value ||
-                arguments[0].innerText ||
-                arguments[0].textContent ||
-                ''
-            ).trim();
-            """,
+            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
             campo,
         ) or ""
     except Exception:
         valor_atual = ""
 
+    if str(valor_atual or "").strip():
+        return {
+            "preenchido": False,
+            "motivo": "campo_ja_preenchido",
+            "valor_atual": valor_atual,
+        }
+
     tag = (campo.tag_name or "").lower()
 
+    if tag in {"textarea", "input"}:
+        driver.execute_script("arguments[0].value = arguments[1];", campo, texto)
+    else:
+        driver.execute_script("arguments[0].innerHTML = arguments[1];", campo, texto)
+
     driver.execute_script(
-        "arguments[0].scrollIntoView({block:'center'});",
+        """
+        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+        """,
         campo,
     )
-
-    try:
-        _clicar_com_fallback(driver, campo)
-    except Exception:
-        pass
-
-    if tag in {"textarea", "input"}:
-        try:
-            campo.send_keys(Keys.CONTROL, "a")
-            campo.send_keys(Keys.DELETE)
-            campo.send_keys(texto)
-        except Exception:
-            driver.execute_script(
-                """
-                const el = arguments[0];
-                const valor = arguments[1];
-
-                el.focus();
-
-                const proto = Object.getPrototypeOf(el);
-                const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-
-                if (desc && desc.set) {
-                    desc.set.call(el, valor);
-                } else {
-                    el.value = valor;
-                }
-
-                el.dispatchEvent(new Event('input', {bubbles:true}));
-                el.dispatchEvent(new Event('change', {bubbles:true}));
-                el.dispatchEvent(new Event('blur', {bubbles:true}));
-                """,
-                campo,
-                texto,
-            )
-
-    else:
-        html = texto.replace("\n", "<br>")
-
-        driver.execute_script(
-            """
-            const el = arguments[0];
-            const html = arguments[1];
-
-            el.focus();
-            el.innerHTML = html;
-
-            el.dispatchEvent(new Event('input', {bubbles:true}));
-            el.dispatchEvent(new Event('change', {bubbles:true}));
-            el.dispatchEvent(new Event('blur', {bubbles:true}));
-            """,
-            campo,
-            html,
-        )
 
     try:
         campo.send_keys(Keys.TAB)
     except Exception:
         pass
 
-    try:
-        valor_final = driver.execute_script(
-            """
-            return (
-                arguments[0].value ||
-                arguments[0].innerText ||
-                arguments[0].textContent ||
-                ''
-            ).trim();
-            """,
-            campo,
-        ) or ""
-    except Exception:
-        valor_final = ""
-
     return {
         "preenchido": True,
-        "motivo": "substituido",
+        "motivo": "preenchido",
         "texto": texto,
-        "valor_anterior": valor_atual,
-        "valor_final": valor_final,
-        "substituiu_texto_existente": bool(str(valor_atual or "").strip()),
     }
 
 
 def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=None, dados_pdf=None):
     """
-    Preenche o campo opcional:
-    'Título/Descrição para Características Técnicas Secundárias'.
-
-    Se o campo já tiver texto, a automação substitui pelo texto gerado.
+    Preenche o campo opcional 'Título/Descrição para Características Técnicas Secundárias'
+    apenas quando ele existir na tela.
     """
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
-    campo = _localizar_campo_titulo_caracteristicas_secundarias(
-        driver,
-        timeout=1.5,
-    )
+    campo = _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5)
 
     if not campo:
         return {
@@ -2893,53 +3319,28 @@ def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=No
             "motivo": "Campo de características técnicas secundárias não encontrado na tela.",
         }
 
-    texto_caracteristicas = escolher_titulo_caracteristicas_secundarias(
+    titulo = escolher_titulo_caracteristicas_secundarias(
         req=req,
         dados_pdf=dados_pdf,
     )
 
-    if not texto_caracteristicas:
-        print(
-            "[SCH][WARN] Campo de características secundárias encontrado, "
-            "mas sem texto seguro para preencher."
-        )
+    if not titulo:
+        print("[SCH][WARN] Campo de características secundárias encontrado, mas sem frase segura para preencher.")
 
         return {
             "campo_encontrado": True,
             "preenchido": False,
             "status": "revisar",
-            "motivo": (
-                "Campo encontrado, mas a automação não identificou texto seguro "
-                "para preenchimento."
-            ),
+            "motivo": "Campo encontrado, mas a automação não identificou frase segura para preenchimento.",
         }
 
-    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(
-        driver,
-        campo,
-        texto_caracteristicas,
-    )
+    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, titulo)
 
     if resultado.get("preenchido"):
-        if resultado.get("substituiu_texto_existente"):
-            print(
-                "[SCH] Características Técnicas Secundárias substituídas "
-                "pelo texto da automação."
-            )
-        else:
-            print(
-                "[SCH] Características Técnicas Secundárias preenchidas "
-                "pela automação."
-            )
-
-        print(
-            "[SCH] Texto aplicado em Características Técnicas Secundárias:",
-            texto_caracteristicas[:500],
-        )
-
+        print(f"[SCH] Título de Características Técnicas Secundárias preenchido: {titulo}")
     else:
         print(
-            "[SCH] Características Técnicas Secundárias não preenchidas: "
+            "[SCH] Título de Características Técnicas Secundárias não preenchido: "
             f"{resultado.get('motivo')}"
         )
 
@@ -2947,7 +3348,6 @@ def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=No
         {
             "campo_encontrado": True,
             "status": "preenchido" if resultado.get("preenchido") else "nao_alterado",
-            "texto_gerado": texto_caracteristicas,
         }
     )
 
@@ -3652,165 +4052,6 @@ def _substituir_texto_campo(driver, wait, texto, descricao, xpaths_input, xpaths
     raise Exception(f"Não foi possível localizar o campo para substituir texto: {descricao}")
 
 
-
-def _capturar_alerta_se_existir(driver, timeout=1.5):
-    try:
-        alert = WebDriverWait(driver, timeout).until(EC.alert_is_present())
-        texto = alert.text or ""
-        print(f"[SCH] Alerta após salvar: {texto}")
-        alert.accept()
-        esperar_tela_carregar(driver, 0.2)
-        return texto
-    except Exception:
-        return ""
-
-
-def _texto_visivel_pagina_e_iframe(driver):
-    textos = []
-
-    try:
-        driver.switch_to.default_content()
-        body = driver.find_element(By.TAG_NAME, "body")
-        textos.append(body.text or "")
-    except Exception:
-        pass
-
-    try:
-        driver.switch_to.default_content()
-        iframe = driver.find_element(By.XPATH, XPATH_IFRAME_DETALHE)
-        driver.switch_to.frame(iframe)
-
-        body = driver.find_element(By.TAG_NAME, "body")
-        textos.append(body.text or "")
-    except Exception:
-        pass
-
-    return "\n".join(textos)
-
-
-def _detectar_resultado_salvamento_minuta(driver, alerta_texto=""):
-    texto_total = "\n".join(
-        [
-            str(alerta_texto or ""),
-            _texto_visivel_pagina_e_iframe(driver),
-        ]
-    )
-
-    texto_norm = _normalizar_texto_comparacao(texto_total)
-
-    termos_sucesso = [
-        "salvo com sucesso",
-        "salva com sucesso",
-        "gravado com sucesso",
-        "alterado com sucesso",
-        "alteracao realizada com sucesso",
-        "alterações realizadas com sucesso",
-        "alteracoes realizadas com sucesso",
-        "operacao realizada com sucesso",
-        "operação realizada com sucesso",
-        "registro salvo com sucesso",
-        "registro alterado com sucesso",
-        "dados salvos com sucesso",
-    ]
-
-    termos_bloqueio = [
-        "erro ao salvar",
-        "falha ao salvar",
-        "nao foi possivel salvar",
-        "não foi possível salvar",
-        "operacao nao realizada",
-        "operação não realizada",
-        "nao permitido",
-        "não permitido",
-        "nao permite",
-        "não permite",
-        "campo obrigatorio",
-        "campo obrigatório",
-        "preenchimento obrigatorio",
-        "preenchimento obrigatório",
-        "corrija",
-        "inconsistencia",
-        "inconsistência",
-        "inconsistente",
-        "data invalida",
-        "data inválida",
-        "periodo invalido",
-        "período inválido",
-        "validade invalida",
-        "validade inválida",
-        "data de validade invalida",
-        "data de validade inválida",
-        "data do certificado invalida",
-        "data do certificado inválida",
-        "data de emissao invalida",
-        "data de emissão inválida",
-        "certificado vencido",
-        "a data",
-        "as datas",
-    ]
-
-    sucesso = any(_normalizar_texto_comparacao(t) in texto_norm for t in termos_sucesso)
-    bloqueio = any(_normalizar_texto_comparacao(t) in texto_norm for t in termos_bloqueio)
-
-    return {
-        "sucesso": sucesso,
-        "bloqueio": bloqueio,
-        "texto_detectado": texto_total[:2000],
-    }
-
-
-def _confirmar_texto_minuta_no_campo(driver, wait, texto_esperado):
-    if not texto_esperado:
-        return False
-
-    texto_esperado_norm = _normalizar_texto_comparacao(texto_esperado)
-
-    try:
-        entrar_iframe_detalhe_analise(driver, wait)
-    except Exception:
-        pass
-
-    xpaths_validacao = [
-        "//textarea[not(@disabled)]",
-        "//*[@contenteditable='true']",
-        "//div[contains(@class,'ql-editor')]",
-        "//input[not(@disabled)]",
-    ]
-
-    for xpath in xpaths_validacao:
-        try:
-            elementos = driver.find_elements(By.XPATH, xpath)
-
-            for el in elementos:
-                try:
-                    if not el.is_displayed():
-                        continue
-
-                    valor = driver.execute_script(
-                        """
-                        return (
-                            arguments[0].value ||
-                            arguments[0].innerText ||
-                            arguments[0].textContent ||
-                            ''
-                        ).trim();
-                        """,
-                        el,
-                    ) or ""
-
-                    if texto_esperado_norm in _normalizar_texto_comparacao(valor):
-                        return True
-
-                except Exception:
-                    continue
-
-        except Exception:
-            continue
-
-    return False
-
-
-
 def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.08)
@@ -3850,95 +4091,74 @@ def salvar_minuta_corrigida(driver, wait, texto_esperado=""):
         print("[SCH][WARN] Botão Salvar não encontrado em Corrigir Minuta.")
         return {
             "salvo": False,
-            "confirmado_apos_salvar": False,
-            "status": "botao_salvar_nao_encontrado",
-            "motivo": "Botão Salvar não encontrado em Corrigir Minuta.",
+            "motivo": "botao_salvar_nao_encontrado",
         }
 
     print("[SCH] Salvando Corrigir Minuta...")
 
-    driver.execute_script(
-        "arguments[0].scrollIntoView({block:'center'});",
-        botao_salvar,
-    )
-
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao_salvar)
     _clicar_com_fallback(driver, botao_salvar)
 
-    esperar_tela_carregar(driver, 0.4)
+    esperar_tela_carregar(driver, 0.8)
 
-    alerta_texto = _capturar_alerta_se_existir(driver, timeout=1.5)
+    try:
+        alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
+        print(f"[SCH] Alerta após salvar Corrigir Minuta: {alert.text}")
+        alert.accept()
+        esperar_tela_carregar(driver, 0.5)
+    except Exception:
+        pass
 
-    esperar_tela_carregar(driver, 0.4)
+    confirmado = False
 
-    resultado_sistema = _detectar_resultado_salvamento_minuta(
-        driver,
-        alerta_texto=alerta_texto,
-    )
+    if texto_esperado:
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+            texto_esperado_norm = _normalizar_texto_comparacao(texto_esperado)
 
-    confirmado = _confirmar_texto_minuta_no_campo(
-        driver,
-        wait,
-        texto_esperado,
-    )
+            xpaths_validacao = [
+                "//textarea[not(@disabled)]",
+                "//*[@contenteditable='true']",
+                "//div[contains(@class,'ql-editor')]",
+                "//input[not(@disabled)]",
+            ]
 
-    if resultado_sistema.get("bloqueio"):
-        print(
-            "[SCH][WARN] Corrigir Minuta NÃO foi considerada salva, "
-            "pois o sistema indicou bloqueio/erro no salvamento."
-        )
+            for xpath in xpaths_validacao:
+                elementos = driver.find_elements(By.XPATH, xpath)
 
-        return {
-            "salvo": False,
-            "confirmado_apos_salvar": confirmado,
-            "status": "bloqueado_pelo_sistema",
-            "motivo": "O SCH indicou erro/bloqueio ao tentar salvar a Corrigir Minuta.",
-            "alerta": alerta_texto,
-            "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
-        }
+                for el in elementos:
+                    try:
+                        if not el.is_displayed():
+                            continue
 
-    if resultado_sistema.get("sucesso") and confirmado:
-        print("[SCH] Corrigir Minuta salva e confirmada com sucesso.")
+                        valor = driver.execute_script(
+                            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+                            el,
+                        ) or ""
 
-        return {
-            "salvo": True,
-            "confirmado_apos_salvar": True,
-            "status": "salvo_confirmado",
-            "motivo": "O SCH retornou mensagem de sucesso e o texto foi confirmado no campo.",
-            "alerta": alerta_texto,
-            "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
-        }
+                        if texto_esperado_norm in _normalizar_texto_comparacao(valor):
+                            confirmado = True
+                            break
 
-    if confirmado and not resultado_sistema.get("sucesso"):
-        print(
-            "[SCH][WARN] Texto encontrado no campo, mas o SCH não confirmou "
-            "o salvamento. Não será marcado como salvo."
-        )
+                    except Exception:
+                        continue
 
-        return {
-            "salvo": False,
-            "confirmado_apos_salvar": True,
-            "status": "texto_na_tela_sem_confirmacao_de_salvamento",
-            "motivo": (
-                "O texto ficou visível no campo, mas o sistema não retornou "
-                "mensagem confiável de sucesso."
-            ),
-            "alerta": alerta_texto,
-            "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
-        }
+                if confirmado:
+                    break
 
-    print(
-        "[SCH][WARN] Corrigir Minuta não foi confirmada após salvar. "
-        "Não será marcada como salva."
-    )
+        except Exception:
+            confirmado = False
+
+    if confirmado:
+        print("[SCH] Corrigir Minuta salva e conferida com sucesso.")
+    else:
+        print("[SCH][WARN] Corrigir Minuta salva, mas não foi possível confirmar o texto após salvar.")
 
     return {
-        "salvo": False,
-        "confirmado_apos_salvar": False,
-        "status": "nao_confirmado",
-        "motivo": "Não houve confirmação confiável de salvamento.",
-        "alerta": alerta_texto,
-        "mensagem_sistema": resultado_sistema.get("texto_detectado", ""),
+        "salvo": True,
+        "confirmado_apos_salvar": confirmado,
     }
+
 
 
 def voltar_da_tela_corrigir_minuta(driver, wait):
@@ -4157,12 +4377,6 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
         analise["salvo"] = False
         analise["confirmado_apos_salvar"] = False
         analise["retornou_para_requerimento"] = False
-        analise["resultado_salvamento"] = {
-            "salvo": False,
-            "confirmado_apos_salvar": False,
-            "status": "sem_frase_para_preencher",
-            "motivo": "A análise SAR não indicou necessidade de preencher frase na minuta.",
-        }
         return analise
 
     try:
@@ -4202,57 +4416,18 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
             driver=driver,
             wait=wait,
             texto_esperado=analise["frase"],
-        ) or {}
+        )
 
         retornou_minuta = voltar_da_tela_corrigir_minuta(driver, wait)
 
-        salvo_ok = bool(resultado_salvar.get("salvo"))
-        confirmado_ok = bool(resultado_salvar.get("confirmado_apos_salvar"))
-
-        if salvo_ok and confirmado_ok:
-            status_final = "preenchido"
-
-            mensagem_final = (
-                "A frase de SAR foi preenchida, salva e confirmada na Corrigir Minuta."
-            )
-
-        elif preenchido and not salvo_ok:
-            status_final = "preenchido_na_tela_mas_nao_salvo"
-
-            mensagem_final = (
-                "A frase de SAR foi inserida na tela da Corrigir Minuta, "
-                "mas o SCH não confirmou o salvamento. Verificar manualmente, "
-                "principalmente possíveis bloqueios relacionados a datas do certificado/validade."
-            )
-
-        else:
-            status_final = "nao_salvo"
-
-            mensagem_final = (
-                "A frase de SAR não foi salva na Corrigir Minuta. "
-                "Verificar manualmente."
-            )
-
-        analise["status"] = status_final
+        analise["status"] = "preenchido"
         analise["preenchido_automaticamente"] = bool(preenchido)
-        analise["salvo"] = salvo_ok
-        analise["confirmado_apos_salvar"] = confirmado_ok
+        analise["salvo"] = bool(resultado_salvar.get("salvo"))
+        analise["confirmado_apos_salvar"] = bool(
+            resultado_salvar.get("confirmado_apos_salvar")
+        )
         analise["retornou_para_requerimento"] = bool(retornou_minuta)
         analise["resultado_salvamento"] = resultado_salvar
-        analise["mensagem"] = mensagem_final
-
-        if not salvo_ok:
-            analise["erro_salvamento"] = {
-                "status": resultado_salvar.get("status", ""),
-                "motivo": resultado_salvar.get("motivo", ""),
-                "alerta": resultado_salvar.get("alerta", ""),
-                "mensagem_sistema": resultado_salvar.get("mensagem_sistema", ""),
-            }
-
-            print(
-                "[SCH][WARN] Corrigir Minuta não foi marcada como salva. "
-                f"Status do salvamento: {resultado_salvar.get('status', 'não informado')}"
-            )
 
         return analise
 
@@ -4270,12 +4445,6 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
         analise["salvo"] = False
         analise["confirmado_apos_salvar"] = False
         analise["retornou_para_requerimento"] = bool(voltou)
-        analise["resultado_salvamento"] = {
-            "salvo": False,
-            "confirmado_apos_salvar": False,
-            "status": "erro_ao_preencher_minuta",
-            "motivo": str(e),
-        }
         analise["mensagem"] = (
             "Não foi possível preencher automaticamente a frase de SAR no caminho "
             "Corrigir Minuta > Especificação > Especificações Complementares."
@@ -4342,13 +4511,12 @@ TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES = (
 )
 
 
-def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=2):
+def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=4):
     for xpath in xpaths:
         try:
-            elementos = WebDriverWait(driver, timeout, poll_frequency=0.05).until(
+            elementos = WebDriverWait(driver, timeout).until(
                 EC.presence_of_all_elements_located((By.XPATH, xpath))
             )
-
             for el in elementos:
                 try:
                     if el.is_displayed() and el.is_enabled():
@@ -4359,7 +4527,6 @@ def _achar_primeiro_elemento_visivel(driver, xpaths, descricao, timeout=2):
                         return el
                 except Exception:
                     continue
-
         except Exception:
             continue
 
@@ -4456,167 +4623,6 @@ def marcar_acompanhar_processo(driver, wait):
     return False
 
 
-
-def _localizar_campo_acompanhar_processo(driver, timeout=4):
-    """
-    Localiza o campo de texto do bloco 'Acompanhar Processo',
-    evitando confundir com o campo '*Descrição' de Informações Adicionais.
-    """
-
-    def _buscar_por_js(d):
-        script = """
-        function visivel(el) {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (!st) return false;
-            if (st.display === 'none') return false;
-            if (st.visibility === 'hidden') return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        }
-
-        const todos = Array.from(document.querySelectorAll('body *'));
-
-        const blocoAcompanhar = todos.find(el => {
-            const txt = (el.innerText || el.textContent || '').trim();
-            return visivel(el) && txt.includes('Acompanhar Processo');
-        });
-
-        const blocoInfo = todos.find(el => {
-            const txt = (el.innerText || el.textContent || '').trim();
-            return visivel(el) && txt.includes('Informações Adicionais');
-        });
-
-        const textareas = Array.from(document.querySelectorAll('textarea'))
-            .filter(el => visivel(el) && !el.disabled && !el.readOnly);
-
-        if (!textareas.length) return null;
-
-        if (blocoAcompanhar) {
-            const rAcomp = blocoAcompanhar.getBoundingClientRect();
-            const rInfo = blocoInfo ? blocoInfo.getBoundingClientRect() : null;
-
-            const candidatos = textareas.filter(t => {
-                const r = t.getBoundingClientRect();
-                const abaixoAcompanhar = r.top >= rAcomp.bottom - 5;
-                const acimaInfo = !rInfo || r.top < rInfo.top;
-                return abaixoAcompanhar && acimaInfo;
-            });
-
-            if (candidatos.length) {
-                candidatos.sort((a, b) => {
-                    return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
-                });
-                return candidatos[0];
-            }
-        }
-
-        return textareas[0];
-        """
-
-        try:
-            return d.execute_script(script)
-        except Exception:
-            return None
-
-    try:
-        entrar_iframe_detalhe_analise(driver, None)
-    except Exception:
-        pass
-
-    try:
-        campo = WebDriverWait(driver, timeout, poll_frequency=0.05).until(
-            lambda d: _buscar_por_js(d)
-        )
-        if campo:
-            driver.execute_script(
-                "arguments[0].scrollIntoView({block:'center'});",
-                campo,
-            )
-            return campo
-    except Exception:
-        pass
-
-    xpaths = [
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
-        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-    ]
-
-    for xpath in xpaths:
-        try:
-            elementos = driver.find_elements(By.XPATH, xpath)
-
-            for campo in elementos:
-                try:
-                    if campo.is_displayed() and campo.is_enabled():
-                        driver.execute_script(
-                            "arguments[0].scrollIntoView({block:'center'});",
-                            campo,
-                        )
-                        return campo
-                except Exception:
-                    continue
-
-        except Exception:
-            continue
-
-    return None
-
-
-
-def _preencher_campo_textarea_js(driver, campo, texto):
-    texto = str(texto or "").strip()
-
-    if not texto:
-        return False
-
-    driver.execute_script(
-        """
-        const el = arguments[0];
-        const valor = arguments[1];
-
-        el.focus();
-
-        if ('value' in el) {
-            const proto = Object.getPrototypeOf(el);
-            const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-
-            if (desc && desc.set) {
-                desc.set.call(el, valor);
-            } else {
-                el.value = valor;
-            }
-        } else {
-            el.textContent = valor;
-            el.innerText = valor;
-        }
-
-        el.dispatchEvent(new Event('input', {bubbles: true}));
-        el.dispatchEvent(new Event('change', {bubbles: true}));
-        el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
-        el.dispatchEvent(new Event('blur', {bubbles: true}));
-        """,
-        campo,
-        texto,
-    )
-
-    try:
-        campo.send_keys(Keys.TAB)
-    except Exception:
-        pass
-
-    valor = driver.execute_script(
-        "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
-        campo,
-    ) or ""
-
-    return texto in valor
-
-
-
-
 def preencher_acompanhar_processo(driver, wait, texto):
     if not texto:
         print("[SCH][WARN] Texto vazio para Acompanhar Processo.")
@@ -4625,53 +4631,65 @@ def preencher_acompanhar_processo(driver, wait, texto):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
-    marcado = marcar_acompanhar_processo(driver, wait)
+    marcar_acompanhar_processo(driver, wait)
 
-    if not marcado:
-        print("[SCH][WARN] Não foi possível marcar 'Desejo acompanhar este processo'.")
-        return False
+    xpaths_texto = [
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
+        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "(//textarea[not(@disabled)])[1]",
+    ]
 
-    entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.08)
+    campo = _achar_primeiro_elemento_visivel(
+        driver,
+        xpaths_texto,
+        "campo Acompanhar Processo",
+        timeout=4,
+    )
 
-    campo = _localizar_campo_acompanhar_processo(driver, timeout=4)
+    _clicar_com_fallback(driver, campo)
 
-    if not campo:
-        print("[SCH][WARN] Campo de texto do Acompanhar Processo não encontrado.")
-        return False
-
-    print("[SCH] Preenchendo campo 'Acompanhar Processo'...")
-
-    # Primeiro tenta por JS, que é mais confiável nesse tipo de tela.
-    preenchido = _preencher_campo_textarea_js(driver, campo, texto)
-
-    if preenchido:
-        print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
-        return True
-
-    # Fallback com teclado.
     try:
-        _clicar_com_fallback(driver, campo)
         campo.send_keys(Keys.CONTROL, "a")
         campo.send_keys(Keys.DELETE)
         campo.send_keys(texto)
-
-        esperar_tela_carregar(driver, 0.05)
-
-        valor = driver.execute_script(
-            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
+    except Exception:
+        driver.execute_script(
+            """
+            arguments[0].value = arguments[1];
+            arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+            arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+            arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+            """,
             campo,
-        ) or ""
+            texto,
+        )
 
+    esperar_tela_carregar(driver, 0.04)
+
+    try:
+        valor = (campo.get_attribute("value") or "").strip()
         if texto.strip() in valor:
-            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso via teclado.")
+            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
             return True
+    except Exception:
+        pass
 
-    except Exception as e:
-        print(f"[SCH][WARN] Falha no fallback por teclado do Acompanhar Processo: {e}")
+    try:
+        valor_js = driver.execute_script(
+            "return (arguments[0].value || arguments[0].textContent || '').trim();",
+            campo,
+        )
+        if texto.strip() in (valor_js or ""):
+            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
+            return True
+    except Exception:
+        pass
 
-    print("[SCH][WARN] O campo de acompanhamento não confirmou o texto após preenchimento.")
+    print("[SCH][WARN] O campo de acompanhamento foi preenchido, mas não foi possível validar o valor.")
     return False
+
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
@@ -4725,32 +4743,8 @@ def preencher_informacoes_adicionais_com_analise(
 
     try:
         clicar_aba_informacoes_adicionais(driver, wait)
-
         acompanhar_marcado = marcar_acompanhar_processo(driver, wait)
-
-        preenchido = preencher_texto_informacoes_adicionais(
-            driver,
-            wait,
-            texto,
-        )
-
-        if not preenchido:
-            print(
-                "[SCH][WARN] Informações Adicionais não serão salvas, "
-                "pois o texto não foi confirmado no campo."
-            )
-
-            return {
-                "texto": texto,
-                "classificacao": "analise_simplificada_portaria_2257",
-                "motivos": [],
-                "preenchido_automaticamente": False,
-                "acompanhar_processo_marcado": acompanhar_marcado,
-                "salvo": False,
-                "modo_preenchimento": "acompanhar_processo",
-                "erro": "texto_nao_confirmado_no_campo",
-            }
-
+        preenchido = preencher_texto_informacoes_adicionais(driver, wait, texto)
         salvo = salvar_informacoes_adicionais(driver, wait)
 
         return {
@@ -4765,7 +4759,6 @@ def preencher_informacoes_adicionais_com_analise(
 
     except Exception as e:
         print(f"[SCH][WARN] Não foi possível preencher Informações Adicionais automaticamente: {e}")
-
         return {
             "texto": texto,
             "classificacao": "analise_simplificada_portaria_2257",
@@ -4776,6 +4769,7 @@ def preencher_informacoes_adicionais_com_analise(
             "modo_preenchimento": "acompanhar_processo",
             "erro": str(e),
         }
+
 
 def voltar_para_fila(driver, wait):
     print("[SCH] Voltando para a fila...")

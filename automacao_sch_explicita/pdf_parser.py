@@ -877,25 +877,135 @@ def _limpar_tabela_bruta(tabela):
 
 
 def _pontuacao_cabecalho_tabela(cabecalho):
-    texto = " | ".join(_normalizar_texto(c) for c in (cabecalho or []))
+    texto = _normalizar_texto(
+        " ".join(str(c or "") for c in (cabecalho or []))
+    )
+
     score = 0
 
-    sinais = [
-        "faixa",
-        "frequencia",
-        "potencia",
-        "emissao",
-        "tecnologia",
-        "modulacao",
-        "taxa maxima de transmissao",
-        "sar",
-    ]
+    tem_faixa = any(
+        termo in texto
+        for termo in [
+            "faixa de frequencia",
+            "faixa de frequencias",
+            "faixa de frequencia tx",
+            "faixa de frequencias tx",
+            "frequency range",
+            "range mhz",
+        ]
+    )
 
-    for s in sinais:
-        if s in texto:
-            score += 1
+    tem_potencia = any(
+        termo in texto
+        for termo in [
+            "potencia maxima de saida",
+            "potencia de saida",
+            "potencia saida",
+            "maximum output power",
+            "output power",
+            "tx power",
+            "power w",
+        ]
+    )
+
+    tem_intensidade = any(
+        termo in texto
+        for termo in [
+            "intensidade de campo",
+            "intensidade campo",
+            "field strength",
+            "electric field strength",
+            "uv m",
+        ]
+    )
+
+    tem_emissao = any(
+        termo in texto
+        for termo in [
+            "designacao de emissoes",
+            "designacao de emissao",
+            "designation of emission",
+            "designation of emissions",
+        ]
+    )
+
+    tem_tecnologia = any(
+        termo in texto
+        for termo in [
+            "tecnologia",
+            "technology",
+            "espalhamento",
+            "spread spectrum",
+        ]
+    )
+
+    tem_modulacao = any(
+        termo in texto
+        for termo in [
+            "modulacao",
+            "modulation",
+            "tipo de modulacao",
+            "type of modulation",
+        ]
+    )
+
+    if tem_faixa:
+        score += 4
+
+    if tem_potencia:
+        score += 4
+
+    if tem_intensidade:
+        score += 4
+
+    if tem_emissao:
+        score += 2
+
+    if tem_tecnologia:
+        score += 2
+
+    if tem_modulacao:
+        score += 2
+
+    # Cabeçalho técnico forte: faixa + potência ou faixa + intensidade.
+    if tem_faixa and (tem_potencia or tem_intensidade):
+        score += 10
 
     return score
+
+
+def _linha_parece_cabecalho_tecnico_cct(linha):
+    texto = _normalizar_texto(
+        " ".join(str(c or "") for c in (linha or []))
+    )
+
+    tem_faixa = (
+        "faixa de frequencia" in texto
+        or "faixa de frequencias" in texto
+        or "frequency range" in texto
+        or "range mhz" in texto
+    )
+
+    tem_potencia = (
+        "potencia maxima de saida" in texto
+        or "potencia maxima saida" in texto
+        or "potencia de saida" in texto
+        or "potencia saida" in texto
+        or "maximum output power" in texto
+        or "output power" in texto
+        or "tx power" in texto
+        or "power w" in texto
+    )
+
+    tem_intensidade = (
+        "intensidade de campo" in texto
+        or "intensidade campo" in texto
+        or "field strength" in texto
+        or "electric field strength" in texto
+        or "uv m" in texto
+    )
+
+    return tem_faixa and (tem_potencia or tem_intensidade)
 
 
 def _ajustar_tabela_extraida(cabecalho, linhas):
@@ -934,39 +1044,238 @@ def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
     melhor_score = -1
     melhor_qtd_linhas = -1
 
-    for tabela in tabelas_brutas:
+    for tabela in tabelas_brutas or []:
         linhas = _limpar_tabela_bruta(tabela)
 
         if len(linhas) < 2:
             continue
 
-        for idx_cab in range(min(3, len(linhas))):
+        # Antes a automação costumava procurar só nas primeiras linhas.
+        # Agora varremos a tabela inteira, porque alguns CCTs trazem título/texto
+        # antes do cabeçalho técnico real.
+        for idx_cab in range(len(linhas)):
             cabecalho = linhas[idx_cab]
+
+            if not _linha_parece_cabecalho_tecnico_cct(cabecalho):
+                continue
+
             score = _pontuacao_cabecalho_tabela(cabecalho)
 
-            if score < 2:
+            if score < 6:
                 continue
 
             corpo = linhas[idx_cab + 1:]
-            corpo = [l for l in corpo if any(_limpar_texto(c) for c in l)]
+            corpo = [
+                l for l in corpo
+                if any(_limpar_texto(c) for c in l)
+            ]
 
             if not corpo:
                 continue
 
             tabela_ajustada = _ajustar_tabela_extraida(cabecalho, corpo)
 
+            qtd_linhas = len(tabela_ajustada.get("linhas", []) or [])
+
             if (
                 score > melhor_score
-                or (score == melhor_score and len(tabela_ajustada["linhas"]) > melhor_qtd_linhas)
+                or (
+                    score == melhor_score
+                    and qtd_linhas > melhor_qtd_linhas
+                )
             ):
                 melhor = tabela_ajustada
                 melhor_score = score
-                melhor_qtd_linhas = len(tabela_ajustada["linhas"])
+                melhor_qtd_linhas = qtd_linhas
 
     if melhor is None:
-        return {"cabecalho": [], "linhas": []}
+        return {
+            "cabecalho": [],
+            "linhas": [],
+        }
 
     return melhor
+
+
+
+def _extrair_tabela_tecnica_cct_do_texto(texto):
+    """
+    Fallback para CCTs em que o pdfplumber não extrai a tabela corretamente.
+
+    Procura no texto linhas contendo:
+    - Faixa de frequência
+    - Potência de saída
+
+    E monta uma tabela simples com:
+    - Faixa de frequência (MHz)
+    - Potência de saída (W)
+
+    Também trata caso de célula mesclada:
+    a faixa aparece uma vez e as potências aparecem nas linhas seguintes.
+    """
+    texto = texto or ""
+
+    linhas = [
+        _limpar_texto(l)
+        for l in texto.splitlines()
+        if _limpar_texto(l)
+    ]
+
+    if not linhas:
+        return {
+            "cabecalho": [],
+            "linhas": [],
+        }
+
+    idx_inicio = None
+
+    for i, linha in enumerate(linhas):
+        norm = _normalizar_texto(linha)
+
+        tem_faixa = (
+            "faixa de frequencia" in norm
+            or "faixa de frequencias" in norm
+            or "frequency range" in norm
+        )
+
+        tem_potencia = (
+            "potencia maxima de saida" in norm
+            or "potencia de saida" in norm
+            or "potencia saida" in norm
+            or "maximum output power" in norm
+            or "output power" in norm
+            or "power w" in norm
+        )
+
+        # Cabeçalho pode estar dividido em linhas próximas.
+        janela = " ".join(linhas[i:i + 4])
+        janela_norm = _normalizar_texto(janela)
+
+        tem_faixa_janela = (
+            "faixa de frequencia" in janela_norm
+            or "faixa de frequencias" in janela_norm
+            or "frequency range" in janela_norm
+        )
+
+        tem_potencia_janela = (
+            "potencia maxima de saida" in janela_norm
+            or "potencia de saida" in janela_norm
+            or "potencia saida" in janela_norm
+            or "maximum output power" in janela_norm
+            or "output power" in janela_norm
+            or "power w" in janela_norm
+        )
+
+        if (tem_faixa and tem_potencia) or (tem_faixa_janela and tem_potencia_janela):
+            idx_inicio = i
+            break
+
+    if idx_inicio is None:
+        return {
+            "cabecalho": [],
+            "linhas": [],
+        }
+
+    linhas_saida = []
+    ultima_faixa = ""
+
+    # Captura a partir do cabeçalho técnico.
+    # Limita a janela para não pegar observações/normas do restante do CCT.
+    trecho = linhas[idx_inicio: idx_inicio + 80]
+
+    padrao_faixa = re.compile(
+        r"(\d[\d.,]*\s*(?:a|até|ate|-|–|—)\s*\d[\d.,]*)",
+        flags=re.I,
+    )
+
+    padrao_potencia = re.compile(
+        r"(?<![A-Z0-9])(\d+[,.]\d+)(?![A-Z0-9])",
+        flags=re.I,
+    )
+
+    for linha in trecho:
+        linha_limpa = _limpar_texto(linha)
+        linha_norm = _normalizar_texto(linha_limpa)
+
+        # Para parar antes de pegar rodapé/observações/normas.
+        if linhas_saida and any(
+            marcador in linha_norm
+            for marcador in [
+                "normas aplicaveis",
+                "applicable standards",
+                "observacoes",
+                "observations",
+                "historico",
+                "history",
+                "informacoes adicionais",
+                "additional information",
+            ]
+        ):
+            break
+
+        m_faixa = padrao_faixa.search(linha_limpa)
+
+        if m_faixa:
+            ultima_faixa = _limpar_texto(m_faixa.group(1))
+
+        # A potência pode estar na mesma linha da faixa ou em linhas seguintes.
+        numeros_decimais = padrao_potencia.findall(linha_limpa)
+
+        if not numeros_decimais:
+            continue
+
+        # Evita tratar a própria faixa como potência.
+        # Ex.: "2400 a 2483,5" contém "2483,5", mas não é potência.
+        potencias = []
+
+        for numero in numeros_decimais:
+            if m_faixa and numero in m_faixa.group(1):
+                continue
+
+            potencias.append(numero)
+
+        if not potencias:
+            continue
+
+        if not ultima_faixa:
+            continue
+
+        # Normalmente a primeira potência da linha é a coluna Potência de saída.
+        potencia = potencias[0]
+
+        linhas_saida.append(
+            [
+                ultima_faixa,
+                potencia,
+            ]
+        )
+
+    # Remove duplicatas preservando ordem.
+    linhas_unicas = []
+    vistos = set()
+
+    for linha in linhas_saida:
+        chave = tuple(linha)
+
+        if chave in vistos:
+            continue
+
+        vistos.add(chave)
+        linhas_unicas.append(linha)
+
+    if not linhas_unicas:
+        return {
+            "cabecalho": [],
+            "linhas": [],
+        }
+
+    return {
+        "cabecalho": [
+            "Faixa de frequência (MHz)",
+            "Potência de saída (W)",
+        ],
+        "linhas": linhas_unicas,
+    }
 
 
 def _inferir_tipo_produto(texto, valor_extraido=""):
@@ -1166,7 +1475,12 @@ def parsear_certificado_pdf(caminho_pdf):
     resultado["observacao_texto"] = obs["observacao_texto"]
     resultado["observacao_motivos"] = obs["observacao_motivos"]
 
-    resultado["tabela_tecnica_cct"] = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas)
+    tabela_cct = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas)
+
+    if not tabela_cct.get("linhas"):
+     tabela_cct = _extrair_tabela_tecnica_cct_do_texto(texto)
+
+    resultado["tabela_tecnica_cct"] = tabela_cct
 
     print(f"[PDF] Dados extraídos de {caminho_pdf.name}: {resultado}")
     return resultado

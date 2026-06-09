@@ -482,6 +482,7 @@ def _nome_humano_campo(campo):
         "modelo": "Modelo",
         "fabricante": "Fabricante",
         "tipo_produto": "Tipo do produto",
+        "tabela_tecnica": "Tabela técnica",
     }
     return nomes.get(campo, str(campo or "").replace("_", " ").title())
 
@@ -570,17 +571,28 @@ def _criar_tabela_campos(titulo, linhas):
 
 def _linhas_tabela_sch(resultado):
     req = resultado.get("requerimento") or {}
+
+    dados_certificado_sch = resultado.get("dados_certificado_sch") or {}
+    dados_produto_sch = resultado.get("dados_produto_sch") or {}
+
+    nome_comercial = (
+        req.get("nome_comercial")
+        or dados_produto_sch.get("nome_comercial")
+        or dados_certificado_sch.get("nome_comercial")
+        or ""
+    )
+
     return [
         ("Requerimento", req.get("requerimento", "")),
         ("Homologação", req.get("homologacao", "")),
         ("Certificado", req.get("certificado", "")),
         ("Tipo do produto", req.get("tipo_produto", "")),
         ("Modelo", req.get("modelo", "")),
+        ("Nome Comercial", nome_comercial),
         ("Solicitante", req.get("solicitante", "")),
         ("Fabricante", req.get("fabricante", "")),
         ("Data de conclusão", req.get("data_conclusao", "")),
     ]
-
 
 def _linhas_tabela_cct(resultado):
     dados_pdf = _fmt_dados_pdf(resultado)
@@ -606,7 +618,26 @@ def _criar_tabela_comparacao(resultado):
     divergencias = conferencia.get("divergencias", []) or []
     mensagens = conferencia.get("mensagens_humanas", []) or []
 
-    itens = comparacoes or divergencias
+    # Antes estava: itens = comparacoes or divergencias
+    # Isso escondia divergências extras, como tabela_tecnica,
+    # quando a lista comparacoes já existia.
+    itens = list(comparacoes or [])
+
+    campos_ja_incluidos = {
+        item.get("campo")
+        for item in itens
+        if isinstance(item, dict)
+    }
+
+    for div in divergencias:
+        if not isinstance(div, dict):
+            continue
+
+        campo = div.get("campo")
+
+        if campo and campo not in campos_ja_incluidos:
+            itens.append(div)
+            campos_ja_incluidos.add(campo)
 
     if not itens:
         itens = _extrair_itens_de_mensagens(mensagens)
@@ -667,7 +698,9 @@ def _criar_tabela_comparacao(resultado):
     ]
 
     for item in itens:
-        campo = _nome_humano_campo(item.get("campo", ""))
+        campo_chave = item.get("campo", "")
+        campo = _nome_humano_campo(campo_chave)
+
         valor_sch = str(item.get("valor_sch") or "").strip() or "Não identificado"
         valor_cct = str(item.get("valor_cct") or "").strip() or "Não identificado"
         status = item.get("status", "")
@@ -678,6 +711,15 @@ def _criar_tabela_comparacao(resultado):
             or item.get("mensagem")
             or ""
         )
+        if item.get("campo") == "modelo":
+            modelos_sch_unicos = item.get("modelos_sch_unicos") or []
+            modelos_cct_unicos = item.get("modelos_cct_unicos") or []
+
+            if modelos_sch_unicos:
+                valor_sch = ", ".join(modelos_sch_unicos)
+
+            if modelos_cct_unicos:
+                valor_cct = ", ".join(modelos_cct_unicos)
 
         status_para_celula = status
 
@@ -709,6 +751,32 @@ def _criar_tabela_comparacao(resultado):
             if valor_cct == "Não identificado":
                 valor_cct = "Encontrada como homologação vinculada/informativa"
 
+        elif campo_chave == "tabela_tecnica":
+            status_para_celula = "NC"
+
+            if valor_sch == "Não identificado":
+                valor_sch = "Tabela técnica do SCH"
+
+            if valor_cct == "Não identificado":
+                valor_cct = "Tabela técnica do CCT"
+
+            if not observacao:
+                detalhes = item.get("detalhes_tabela") or {}
+                status_tabela = detalhes.get("status", "")
+
+                if status_tabela == "divergente":
+                    observacao = (
+                        "Foram encontradas divergências na tabela técnica. "
+                        "Veja a seção 'Conferência da tabela técnica SCH x CCT' abaixo."
+                    )
+                elif status_tabela == "sem_tabela":
+                    observacao = (
+                        "Não foi possível comparar a tabela técnica porque uma ou ambas "
+                        "as tabelas não foram identificadas."
+                    )
+                else:
+                    observacao = "Divergência de tabela técnica identificada."
+
         linhas.append(
             "<tr>"
             f"<td>{escape(campo)}</td>"
@@ -722,6 +790,132 @@ def _criar_tabela_comparacao(resultado):
     linhas.append("</tbody></table>")
     return "".join(linhas)
 
+
+def _html_comparacao_tabela_tecnica(resultado):
+    conferencia = _fmt_conferencia(resultado)
+    comparacao = conferencia.get("comparacao_tabela_tecnica") or {}
+
+    if not comparacao:
+        for div in conferencia.get("divergencias", []) or []:
+            if isinstance(div, dict) and div.get("campo") == "tabela_tecnica":
+                comparacao = div.get("detalhes_tabela") or {}
+                break
+
+    if not comparacao:
+        return (
+            "<h3>Conferência da tabela técnica SCH x CCT</h3>"
+            "<div class='alerta'>Comparação da tabela técnica não encontrada no resultado.</div>"
+        )
+
+    status = comparacao.get("status") or "nao_verificado"
+    motivo = comparacao.get("motivo") or ""
+    divergencias = comparacao.get("divergencias", []) or []
+
+    linhas_sch = comparacao.get("linhas_sch", "")
+    linhas_cct = comparacao.get("linhas_cct", "")
+
+    campos_comparados = comparacao.get("campos_comparados", []) or []
+    colunas_ignoradas = comparacao.get("colunas_ignoradas_do_cct", []) or []
+
+    classe = "ok" if status == "ok" else "alerta"
+
+    if status == "ok":
+        mensagem = (
+            "Tabela técnica SCH x CCT conferida sem divergências nos campos comparados."
+        )
+    elif status == "sem_tabela":
+        mensagem = (
+            "Não foi possível comparar a tabela técnica porque uma ou ambas as tabelas "
+            "não foram identificadas."
+        )
+    elif status == "divergente":
+        mensagem = "Foram encontradas divergências na tabela técnica SCH x CCT."
+    else:
+        mensagem = f"Status da comparação da tabela técnica: {status}"
+
+    if motivo:
+        mensagem += f" Motivo: {motivo}"
+
+    linhas = [
+        "<h3>Conferência da tabela técnica SCH x CCT</h3>",
+        f"<div class='{classe}'>{escape(str(mensagem))}</div>",
+        "<table><thead><tr><th>Item</th><th>Valor</th></tr></thead><tbody>",
+        f"<tr><td>Status</td><td>{escape(str(status))}</td></tr>",
+        f"<tr><td>Linhas no SCH</td><td>{escape(str(linhas_sch))}</td></tr>",
+        f"<tr><td>Linhas no CCT</td><td>{escape(str(linhas_cct))}</td></tr>",
+        f"<tr><td>Campos comparados</td><td>{escape(', '.join(str(c) for c in campos_comparados) or 'Não informado')}</td></tr>",
+        f"<tr><td>Colunas ignoradas do CCT</td><td>{escape(', '.join(str(c) for c in colunas_ignoradas) or 'Não informado')}</td></tr>",
+        "</tbody></table>",
+    ]
+
+    if not divergencias:
+        linhas.append(
+            "<div class='ok'>Nenhuma divergência específica de tabela técnica foi registrada.</div>"
+        )
+        return "".join(linhas)
+
+    linhas.extend(
+        [
+            "<h4>Divergências da tabela técnica</h4>",
+            (
+                "<table>"
+                "<thead>"
+                "<tr>"
+                "<th>Tipo</th>"
+                "<th>Linha</th>"
+                "<th>Coluna</th>"
+                "<th>Valor SCH</th>"
+                "<th>Valor CCT</th>"
+                "</tr>"
+                "</thead>"
+                "<tbody>"
+            ),
+        ]
+    )
+
+    for div in divergencias:
+        tipo = div.get("tipo", "")
+        linha = div.get("linha", "")
+
+        coluna = (
+            div.get("nome_coluna")
+            or div.get("coluna")
+            or ""
+        )
+
+        valor_sch = div.get("valor_sch", "")
+        valor_cct = div.get("valor_cct", "")
+
+        if tipo == "quantidade_linhas_diferente":
+            coluna = "Quantidade de linhas"
+            valor_sch = div.get("linhas_sch", "")
+            valor_cct = div.get("linhas_cct", "")
+
+        elif tipo == "tabela_cct_sem_linhas_comparaveis":
+            coluna = "Tabela CCT"
+            valor_sch = div.get("linhas_sch", "")
+            valor_cct = "Sem linhas comparáveis"
+
+        elif tipo == "tabela_sch_sem_linhas_comparaveis":
+            coluna = "Tabela SCH"
+            valor_sch = "Sem linhas comparáveis"
+            valor_cct = div.get("linhas_cct", "")
+
+        linhas.append(
+            "<tr>"
+            f"<td>{escape(str(tipo))}</td>"
+            f"<td>{escape(str(linha))}</td>"
+            f"<td>{escape(str(coluna))}</td>"
+            f"<td>{escape(str(valor_sch))}</td>"
+            f"<td>{escape(str(valor_cct))}</td>"
+            "</tr>"
+        )
+
+    linhas.append("</tbody></table>")
+
+    return "".join(linhas)
+
+
 def _html_conferencia_bloco(resultado):
     conferencia = _fmt_conferencia(resultado)
     status_geral = (conferencia.get("status_geral") or "").strip().lower()
@@ -729,18 +923,54 @@ def _html_conferencia_bloco(resultado):
     blocos = ["<h2>Conferência SCH x CCT</h2>"]
 
     if status_geral == "ok":
-        blocos.append("<div class='ok'>Sem incongruências entre os dados do SCH e do CCT.</div>")
+        blocos.append(
+            "<div class='ok'>Sem incongruências entre os dados do SCH e do CCT.</div>"
+        )
+
     elif status_geral == "sem_cct":
-        blocos.append("<div class='alerta'>Não foi possível realizar a conferência SCH x CCT porque não houve dados válidos do CCT.</div>")
+        blocos.append(
+            "<div class='alerta'>"
+            "Não foi possível realizar a conferência SCH x CCT porque não houve "
+            "dados válidos do CCT."
+            "</div>"
+        )
+
+    elif status_geral == "parcial":
+        blocos.append(
+            "<div class='alerta'>"
+            "A conferência SCH x CCT foi realizada parcialmente. "
+            "Alguns campos não foram identificados em um dos lados."
+            "</div>"
+        )
+
     else:
-        blocos.append("<div class='alerta'>Foram encontradas incongruências entre os dados do SCH e do CCT.</div>")
+        blocos.append(
+            "<div class='alerta'>"
+            "Foram encontradas incongruências entre os dados do SCH e do CCT."
+            "</div>"
+        )
 
     blocos.append(_criar_tabela_comparacao(resultado))
-    blocos.append(_criar_tabela_campos("Tabela do SCH", _linhas_tabela_sch(resultado)))
-    blocos.append(_criar_tabela_campos("Tabela do CCT", _linhas_tabela_cct(resultado)))
+
+    # Nova seção detalhada da comparação da tabela técnica.
+    # Mostra se a tabela SCH x CCT foi OK, divergente ou não encontrada.
+    blocos.append(_html_comparacao_tabela_tecnica(resultado))
+
+    blocos.append(
+        _criar_tabela_campos(
+            "Tabela do SCH",
+            _linhas_tabela_sch(resultado),
+        )
+    )
+
+    blocos.append(
+        _criar_tabela_campos(
+            "Tabela do CCT",
+            _linhas_tabela_cct(resultado),
+        )
+    )
 
     return "".join(blocos)
-
 
 
 def _html_situacao_sar(resultado):
@@ -822,6 +1052,12 @@ def _html_validade_cct(resultado):
     dados_pdf = _fmt_dados_pdf(resultado)
     dados_certificado_sch = resultado.get("dados_certificado_sch") or {}
 
+    comparacao_datas = (
+        resultado.get("comparacao_datas_sch_cct")
+        or dados_pdf.get("comparacao_datas_sch_cct")
+        or {}
+    )
+
     data_emissao = (
         validade.get("data_emissao_bruta")
         or dados_pdf.get("data_emissao")
@@ -844,15 +1080,8 @@ def _html_validade_cct(resultado):
         or "Não informada"
     )
 
-    data_emissao_cct = (
-        dados_pdf.get("data_emissao_cct")
-        or ""
-    )
-
-    data_validade_cct = (
-        dados_pdf.get("data_validade_cct")
-        or ""
-    )
+    data_emissao_cct = dados_pdf.get("data_emissao_cct") or ""
+    data_validade_cct = dados_pdf.get("data_validade_cct") or ""
 
     numero_certificado_sch = (
         dados_certificado_sch.get("numero_certificado")
@@ -874,7 +1103,7 @@ def _html_validade_cct(resultado):
         "<table><thead><tr><th>Item</th><th>Valor</th></tr></thead><tbody>",
         f"<tr><td>Data de emissão usada na análise</td><td>{escape(str(data_emissao))}</td></tr>",
         f"<tr><td>Data de validade usada na análise</td><td>{escape(str(data_validade))}</td></tr>",
-        f"<tr><td>Origem das datas</td><td>{escape(str(origem))}</td></tr>",
+        f"<tr><td>Origem das datas usadas na análise</td><td>{escape(str(origem))}</td></tr>",
     ]
 
     if numero_certificado_sch:
@@ -904,10 +1133,68 @@ def _html_validade_cct(resultado):
 
     linhas.extend(
         [
-            f"<tr><td>Status</td><td>{escape(str(status))}</td></tr>",
+            f"<tr><td>Status da validade</td><td>{escape(str(status))}</td></tr>",
             "</tbody></table>",
         ]
     )
+
+    status_comp = comparacao_datas.get("status_geral") or "nao_verificado"
+    mensagem_comp = comparacao_datas.get("mensagem") or "Comparação de datas SCH x CCT não executada."
+
+    classe_comp = "ok" if status_comp == "ok" else "alerta"
+
+    linhas.extend(
+        [
+            "<h3>Comparação de datas SCH x CCT</h3>",
+            f"<div class='{classe_comp}'>{escape(str(mensagem_comp))}</div>",
+            (
+                "<table>"
+                "<thead>"
+                "<tr>"
+                "<th>Campo</th>"
+                "<th>Data no SCH</th>"
+                "<th>Data no CCT</th>"
+                "<th>Status</th>"
+                "<th>Observação</th>"
+                "</tr>"
+                "</thead>"
+                "<tbody>"
+            ),
+        ]
+    )
+
+    comparacoes = comparacao_datas.get("comparacoes", []) or []
+
+    if not comparacoes:
+        linhas.append(
+            "<tr>"
+            "<td colspan='5'>Comparação de datas não disponível.</td>"
+            "</tr>"
+        )
+    else:
+        nomes = {
+            "data_emissao": "Data de emissão",
+            "data_validade": "Data de validade",
+        }
+
+        for item in comparacoes:
+            campo = nomes.get(item.get("campo", ""), item.get("campo", ""))
+            valor_sch = item.get("valor_sch", "") or "Não identificada"
+            valor_cct = item.get("valor_cct", "") or "Não identificada"
+            status_item = item.get("status", "")
+            msg_item = item.get("mensagem", "")
+
+            linhas.append(
+                "<tr>"
+                f"<td>{escape(str(campo))}</td>"
+                f"<td>{escape(str(valor_sch))}</td>"
+                f"<td>{escape(str(valor_cct))}</td>"
+                f"<td>{escape(str(status_item))}</td>"
+                f"<td>{escape(str(msg_item))}</td>"
+                "</tr>"
+            )
+
+    linhas.append("</tbody></table>")
 
     return "".join(linhas)
 

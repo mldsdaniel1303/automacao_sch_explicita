@@ -20,6 +20,7 @@ from funcoes_sch import (
     preencher_caracteristicas_tecnicas_com_analise,
     preencher_informacoes_adicionais_com_analise,
     avaliar_validade_cct,
+    comparar_datas_certificado_sch_x_cct,
     preencher_minuta_sar_se_necessario,
     garantir_sessao_ativa_sch,
     voltar_para_fila,
@@ -32,7 +33,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.6.8"
+VERSAO_SCRIPT = "0.7.2"
 
 
 def _normalizar_texto(valor):
@@ -402,6 +403,7 @@ def executar_fluxo_sch(
                 "pdf_cct": "",
                 "validade_cct": {},
                 "dados_certificado_sch": {},
+                "comparacao_datas_sch_cct": {},
                 "sar_minuta": {},
                 "caracteristicas_secundarias": {},
                 "texto_caracteristicas_secundarias": "",
@@ -503,6 +505,35 @@ def executar_fluxo_sch(
                         f"emissão={dados_pdf.get('data_emissao', '')} | "
                         f"validade={dados_pdf.get('data_validade', '')}"
                     )
+                
+                try:
+                    comparacao_datas = comparar_datas_certificado_sch_x_cct(
+                        dados_certificado_sch=dados_certificado_sch,
+                        dados_pdf=dados_pdf,
+                    )
+                    resumo["comparacao_datas_sch_cct"] = comparacao_datas
+                    dados_pdf["comparacao_datas_sch_cct"] = comparacao_datas
+
+                    if comparacao_datas.get("status_geral") == "divergente":
+                        print(
+                            "[SCH][WARN] Divergência nas datas entre SCH e CCT: "
+                            "Revisão manual recomendada."
+                        )
+                    elif comparacao_datas.get("status_geral") == "parcial":
+                        print(
+                            "[SCH][WARN] Comparação de datas SCH x CCT parcial: "
+                            f"{comparacao_datas.get('mensagem')}"
+                        )
+                    else:
+                        print("[SCH] Datas SCH x CCT conferidas com sucesso.")
+                except Exception as e:
+                    print(f"[SCH][WARN] Falha ao comparar datas SCH x CCT: {e}")
+                    resumo["comparacao_datas_sch_cct"] = {
+                        "status_geral": "erro",
+                        "mensagem": str(e),
+                        "comparações": [],
+                        "divergencias": [],
+                    }
 
                 try:
                     caracteristicas_sec = inferir_caracteristicas_secundarias(dados_pdf)
