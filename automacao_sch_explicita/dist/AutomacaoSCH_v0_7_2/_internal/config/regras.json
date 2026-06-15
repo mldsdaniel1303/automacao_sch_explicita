@@ -1,0 +1,53 @@
+{
+  "processar_apenas_radiacao_restrita": true,
+  "limite_requerimentos": 1,
+  "pausar_antes_anexos": false,
+  "preencher_minuta": true,
+  "modo_rapido": true,
+
+  "performance": {
+    "sleep_curto": 0.15,
+    "sleep_medio": 0.35,
+    "sleep_longo": 0.7,
+    "poll_download": 0.2,
+    "timeout_download": 45
+  },
+
+  "analise_palavras_chave": {
+    "modo_busca": "somente_cct"
+  },
+
+  "colunas_fila": {
+    "requerimento": 0,
+    "homologacao": 1,
+    "certificado": 2,
+    "tipo_produto": 4,
+    "modelo": 5,
+    "solicitante": 6,
+    "fabricante": 7,
+    "data_conclusao": 8
+  },
+
+  "categorias_anexos": [
+    "Outros",
+    "ART",
+    "Selo ANATEL",
+    "Relatório de Avaliação da Conformidade - RACT",
+    "Manual do Produto",
+    "Certificado de Conformidade Técnica - CCT",
+    "Contrato Social",
+    "Fotos internas",
+    "Relatório de Ensaio",
+    "Fotos do produto"
+  ],
+
+  "palavras_chave_documentos": {
+    "cct": [
+      "cct",
+      "certificado",
+      "conformidade",
+      "conformidade tecnica",
+      "conformidade técnica"
+    ]
+  }
+}

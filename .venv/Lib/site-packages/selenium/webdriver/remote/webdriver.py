@@ -32,6 +32,8 @@ from contextlib import asynccontextmanager, contextmanager
 from importlib import import_module
 from typing import Any, cast
 
+from typing_extensions import Self
+
 from selenium.common.exceptions import (
     InvalidArgumentException,
     JavascriptException,
@@ -39,6 +41,7 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     WebDriverException,
 )
+from selenium.webdriver.common.api_request_context import APIRequestContext
 from selenium.webdriver.common.bidi.browser import Browser
 from selenium.webdriver.common.bidi.browsing_context import BrowsingContext
 from selenium.webdriver.common.bidi.emulation import Emulation
@@ -282,12 +285,13 @@ class WebDriver(BaseWebDriver):
         self._permissions: Permissions | None = None
         self._emulation: Emulation | None = None
         self._input: Input | None = None
+        self._request: APIRequestContext | None = None
         self._devtools: Any | None = None
 
     def __repr__(self) -> str:
         return f'<{type(self).__module__}.{type(self).__name__} (session="{self.session_id}")>'
 
-    def __enter__(self) -> "WebDriver":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -506,7 +510,7 @@ class WebDriver(BaseWebDriver):
         """
         return list(self.pinned_scripts)
 
-    def execute_script(self, script: str, *args):
+    def execute_script(self, script: str, *args) -> Any:
         """Synchronously Executes JavaScript in the current window/frame.
 
         Args:
@@ -531,7 +535,7 @@ class WebDriver(BaseWebDriver):
 
         return self.execute(command, {"script": script, "args": converted_args})["value"]
 
-    def execute_async_script(self, script: str, *args) -> dict:
+    def execute_async_script(self, script: str, *args) -> Any:
         """Asynchronously Executes JavaScript in the current window/frame.
 
         Args:
@@ -569,6 +573,9 @@ class WebDriver(BaseWebDriver):
         try:
             self.execute(Command.QUIT)
         finally:
+            if self._request is not None:
+                self._request.dispose()
+                self._request = None
             self.stop_client()
             executor = cast(RemoteConnection, self.command_executor)
             executor.close()
@@ -1312,6 +1319,24 @@ class WebDriver(BaseWebDriver):
             self._input = Input(self._websocket_connection)
 
         return self._input
+
+    @property
+    def request(self) -> APIRequestContext:
+        """Returns an APIRequestContext for making HTTP requests with browser cookie sync.
+
+        Returns:
+            An APIRequestContext instance bound to this driver.
+
+        Examples:
+            ```
+            response = driver.request.get("https://api.example.com/data")
+            assert response.ok
+            data = response.json()
+            ```
+        """
+        if self._request is None:
+            self._request = APIRequestContext(self)
+        return self._request
 
     def _get_cdp_details(self):
         import json

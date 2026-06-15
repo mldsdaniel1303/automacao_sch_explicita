@@ -140,8 +140,24 @@ def _formatar_homologacao_anatel(valor):
 
 def _candidato_certificado_valido(candidato):
     """
-    Evita que dados de histórico/processo/descrição sejam confundidos com
-    número de certificado. Ex.: DESCRIPTION 11847-26 não é certificado.
+    Evita que dados de histórico/processo/endereço/descrição sejam confundidos
+    com número de certificado.
+
+    Exemplos que NÃO devem ser aceitos:
+    - DESCRIPTION 11847-26
+    - ROOM 2403-2404
+    - BLOCK B
+    - SALA 01
+    - 04073/26
+    - 04073-26
+    - 04225-26-01654
+
+    Exemplos que devem ser aceitos:
+    - ICC 11.182/2025-I
+    - NCC 29900/26
+    - ABCP-25-0154
+    - BRC-25.5598.02
+    - OCP-I 93425
     """
     cand = _limpar_numero_certificado(candidato)
     cand_norm = _normalizar_texto(cand)
@@ -149,8 +165,50 @@ def _candidato_certificado_valido(candidato):
     if not cand or _eh_cep(cand):
         return False
 
+    # Evita falso positivo vindo de endereço/localização.
+    # Ex.: ROOM 2403-2404, BLOCK B, SALA 01, FLOOR 2.
+    termos_endereco_ou_local = [
+        "room",
+        "sala",
+        "bloco",
+        "block",
+        "andar",
+        "floor",
+        "building",
+        "predio",
+        "prédio",
+        "edificio",
+        "edifício",
+        "avenida",
+        "av ",
+        "rua",
+        "street",
+        "road",
+        "rd",
+        "cep",
+        "zip",
+        "district",
+        "bairro",
+        "cidade",
+        "city",
+        "province",
+        "provincia",
+        "address",
+        "endereco",
+        "endereço",
+    ]
+
+    if any(t in cand_norm for t in termos_endereco_ou_local):
+        return False
+
     # Homologação ANATEL não é número de certificado.
+    # Ex.: 04225-26-01654.
     if _parece_homologacao_anatel(cand):
+        return False
+
+    # Requerimento/processo simples não é certificado.
+    # Ex.: 04073/26, 04073-26, 10268/26.
+    if re.fullmatch(r"\d{4,6}\s*[-/]\s*\d{2,4}", cand, flags=re.I):
         return False
 
     # Código do OCP no selo, por exemplo OCP 0186, não é certificado.
@@ -172,9 +230,27 @@ def _candidato_certificado_valido(candidato):
         "revisão",
         "date",
         "data",
+        "emission",
+        "emissao",
+        "emissão",
+        "validade",
+        "valid",
+        "expiry",
+        "expiration",
+        "traceability",
+        "rastreabilidade",
+        "service",
+        "servico",
+        "serviço",
+        "order",
+        "os",
+        "page",
+        "pagina",
+        "página",
     }
 
     primeiro_token = cand_norm.split(" ", 1)[0] if cand_norm else ""
+
     if primeiro_token in prefixos_ruins:
         return False
 
@@ -182,12 +258,32 @@ def _candidato_certificado_valido(candidato):
     if re.search(r"\b\d{4,6}-\d{2}-\d{2}-[A-Z]{2}-[A-Z]{2}\b", cand, flags=re.I):
         return False
 
-    # Se tiver OCP, ICC ou NCC, é um candidato forte.
-    if re.search(r"\b(OCP|ICC|NCC)\b", cand, flags=re.I):
+    # BRC-25.5598.02 / ABC-25.1234.01 / CERT-25.12345.1
+    if re.search(
+        r"\b[A-Z]{2,12}\s*[-_]\s*\d{2}\s*[.]\s*\d{3,8}(?:\s*[.]\s*\d{1,4})?\b",
+        cand,
+        flags=re.I,
+    ):
+        return True
+
+    # OCP-I 93425 / OCP-TELI 93425 / OCP ABC 93425.
+    if re.search(r"\bOCP\s*[-_]?\s*[A-Z]{1,10}\s*\d{3,8}\b", cand, flags=re.I):
+        return True
+
+    # ICC 11.182/2025-I, NCC 29900/26, OCP-I 93425 etc.
+    if re.search(r"\b(ICC|NCC|OCP)\b", cand, flags=re.I):
+        # Mas não aceitar OCP sozinho sem estrutura de certificado.
+        if re.fullmatch(r"OCP\s*\d{2,6}", cand, flags=re.I):
+            return False
+
         return True
 
     # Candidatos de formato tradicional ABCP-25-0154 etc.
-    if re.search(r"\b[A-Z]{2,12}\s*[-/]?\s*\d{2,6}\s*[-/]\s*\d{2,8}\b", cand, flags=re.I):
+    if re.search(
+        r"\b[A-Z]{2,12}\s*[-/]?\s*\d{2,6}\s*[-/]\s*\d{2,8}\b",
+        cand,
+        flags=re.I,
+    ):
         return True
 
     return False
@@ -200,6 +296,9 @@ def _extrair_candidatos_certificado(texto):
         # Versys OCP 5200 / OCP 0186 / nomes de OCP seguidos de numeração
         r"\b[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9]{1,30}\s+OCP\s*\d{2,6}\b",
         r"\bOCP\s*\d{2,6}\b",
+
+        # OCP-I 93425 / OCP-TELI 93425 / OCP ABC 93425
+        r"\bOCP\s*[-_]?\s*[A-Z]{1,10}\s*\d{3,8}\b",
 
         # ICC 09.104/2025-I
         r"\b(?:ICC|NCC)\s*[-_]?\s*\d{1,5}(?:\.\d{1,5})?\s*/\s*\d{2,4}(?:\s*[-–—]\s*[A-Z0-9]+)?\b",
@@ -218,6 +317,9 @@ def _extrair_candidatos_certificado(texto):
 
         # ABCP25-0154 ou similares
         r"\b[A-Z]{2,12}\s*\d{2,6}\s*[-_]\s*\d{2,8}\b",
+
+        # BRC-25.5598.02 / ABC-25.1234.01
+        r"\b[A-Z]{2,12}\s*[-_]\s*\d{2}\s*[.]\s*\d{3,8}(?:\s*[.]\s*\d{1,4})?\b",
     ]
 
     candidatos = []
@@ -979,22 +1081,38 @@ def _linha_parece_cabecalho_tecnico_cct(linha):
         " ".join(str(c or "") for c in (linha or []))
     )
 
+    # Remove espaços também para capturar cabeçalhos que o PDF junta.
+    # Ex.: "FaixadeFrequência(MHz)".
+    texto_sem_espaco = re.sub(r"\s+", "", texto)
+
     tem_faixa = (
         "faixa de frequencia" in texto
         or "faixa de frequencias" in texto
+        or "faixa frequencia" in texto
+        or "faixa frequencias" in texto
+        or "faixa de frequencia tx" in texto
+        or "faixa de frequencias tx" in texto
         or "frequency range" in texto
         or "range mhz" in texto
+        or "faixadefrequencia" in texto_sem_espaco
+        or "faixadefrequencias" in texto_sem_espaco
+        or "frequencyrange" in texto_sem_espaco
     )
 
     tem_potencia = (
         "potencia maxima de saida" in texto
         or "potencia maxima saida" in texto
+        or "potencia maxima" in texto
         or "potencia de saida" in texto
         or "potencia saida" in texto
         or "maximum output power" in texto
         or "output power" in texto
         or "tx power" in texto
         or "power w" in texto
+        or "potenciamaximadesaida" in texto_sem_espaco
+        or "potenciadesaida" in texto_sem_espaco
+        or "maximumoutputpower" in texto_sem_espaco
+        or "outputpower" in texto_sem_espaco
     )
 
     tem_intensidade = (
@@ -1003,9 +1121,84 @@ def _linha_parece_cabecalho_tecnico_cct(linha):
         or "field strength" in texto
         or "electric field strength" in texto
         or "uv m" in texto
+        or "uv/m" in texto
+        or "intensidadedecampo" in texto_sem_espaco
+        or "fieldstrength" in texto_sem_espaco
+        or "electricfieldstrength" in texto_sem_espaco
     )
 
-    return tem_faixa and (tem_potencia or tem_intensidade)
+    tem_designacao = (
+        "designacao de emissoes" in texto
+        or "designacao das emissoes" in texto
+        or "designacao emissoes" in texto
+        or "designation of emission" in texto
+        or "designation of emissions" in texto
+        or "emission designation" in texto
+        or "designacaodeemissoes" in texto_sem_espaco
+        or "designacaodasemissoes" in texto_sem_espaco
+        or "designationofemission" in texto_sem_espaco
+        or "designationofemissions" in texto_sem_espaco
+        or "emissiondesignation" in texto_sem_espaco
+    )
+
+    tem_tecnologia = (
+        "tecnologia" in texto
+        or "technology" in texto
+        or "spread spectrum" in texto
+        or "espalhamento" in texto
+        or "tecnologiaespalhamento" in texto_sem_espaco
+        or "technologyspread" in texto_sem_espaco
+    )
+
+    tem_modulacao = (
+        "modulacao" in texto
+        or "modulation" in texto
+        or "tipo de modulacao" in texto
+        or "type of modulation" in texto
+        or "tipodemodulacao" in texto_sem_espaco
+        or "typeofmodulation" in texto_sem_espaco
+    )
+
+    tem_sar = (
+        "sar cabeca" in texto
+        or "sar cabeça" in texto
+        or "sar head" in texto
+        or "sar corpo" in texto
+        or "sar body" in texto
+        or "sarcabeca" in texto_sem_espaco
+        or "sarhead" in texto_sem_espaco
+        or "sarcorpo" in texto_sem_espaco
+        or "sarbody" in texto_sem_espaco
+    )
+
+    tem_taxa = (
+        "taxa de transmissao" in texto
+        or "taxa transmissao" in texto
+        or "transmission rate" in texto
+        or "taxadetransmissao" in texto_sem_espaco
+        or "transmissionrate" in texto_sem_espaco
+    )
+
+    tem_padrao = (
+        "padrao" in texto
+        or "standard" in texto
+    )
+
+    # Regra:
+    # precisa ter faixa e pelo menos uma coluna técnica forte.
+    # Normalmente potência aparece sempre, mas alguns CCTs podem ter intensidade.
+    tem_coluna_principal = tem_potencia or tem_intensidade
+
+    tem_coluna_tecnica_auxiliar = (
+        tem_designacao
+        or tem_tecnologia
+        or tem_modulacao
+        or tem_sar
+        or tem_taxa
+        or tem_padrao
+    )
+
+    return tem_faixa and (tem_coluna_principal or tem_coluna_tecnica_auxiliar)
 
 
 def _ajustar_tabela_extraida(cabecalho, linhas):
@@ -1039,79 +1232,18 @@ def _ajustar_tabela_extraida(cabecalho, linhas):
     }
 
 
-def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
-    melhor = None
-    melhor_score = -1
-    melhor_qtd_linhas = -1
-
-    for tabela in tabelas_brutas or []:
-        linhas = _limpar_tabela_bruta(tabela)
-
-        if len(linhas) < 2:
-            continue
-
-        # Antes a automação costumava procurar só nas primeiras linhas.
-        # Agora varremos a tabela inteira, porque alguns CCTs trazem título/texto
-        # antes do cabeçalho técnico real.
-        for idx_cab in range(len(linhas)):
-            cabecalho = linhas[idx_cab]
-
-            if not _linha_parece_cabecalho_tecnico_cct(cabecalho):
-                continue
-
-            score = _pontuacao_cabecalho_tabela(cabecalho)
-
-            if score < 6:
-                continue
-
-            corpo = linhas[idx_cab + 1:]
-            corpo = [
-                l for l in corpo
-                if any(_limpar_texto(c) for c in l)
-            ]
-
-            if not corpo:
-                continue
-
-            tabela_ajustada = _ajustar_tabela_extraida(cabecalho, corpo)
-
-            qtd_linhas = len(tabela_ajustada.get("linhas", []) or [])
-
-            if (
-                score > melhor_score
-                or (
-                    score == melhor_score
-                    and qtd_linhas > melhor_qtd_linhas
-                )
-            ):
-                melhor = tabela_ajustada
-                melhor_score = score
-                melhor_qtd_linhas = qtd_linhas
-
-    if melhor is None:
-        return {
-            "cabecalho": [],
-            "linhas": [],
-        }
-
-    return melhor
-
-
-
 def _extrair_tabela_tecnica_cct_do_texto(texto):
     """
-    Fallback para CCTs em que o pdfplumber não extrai a tabela corretamente.
+    Fallback por texto completo para CCTs cuja tabela técnica é quebrada
+    entre páginas.
 
-    Procura no texto linhas contendo:
-    - Faixa de frequência
-    - Potência de saída
+    Extrai:
+    - Faixa de Frequência/Frequências (MHz)
+    - Potência Máxima de Saída (W)
+    - Designação de Emissões
 
-    E monta uma tabela simples com:
-    - Faixa de frequência (MHz)
-    - Potência de saída (W)
-
-    Também trata caso de célula mesclada:
-    a faixa aparece uma vez e as potências aparecem nas linhas seguintes.
+    Especialmente útil para CCTs da Moderna, em que o pdfplumber pode
+    extrair só a primeira página da tabela e ignorar a continuação.
     """
     texto = texto or ""
 
@@ -1129,44 +1261,31 @@ def _extrair_tabela_tecnica_cct_do_texto(texto):
 
     idx_inicio = None
 
-    for i, linha in enumerate(linhas):
-        norm = _normalizar_texto(linha)
-
-        tem_faixa = (
-            "faixa de frequencia" in norm
-            or "faixa de frequencias" in norm
-            or "frequency range" in norm
-        )
-
-        tem_potencia = (
-            "potencia maxima de saida" in norm
-            or "potencia de saida" in norm
-            or "potencia saida" in norm
-            or "maximum output power" in norm
-            or "output power" in norm
-            or "power w" in norm
-        )
-
-        # Cabeçalho pode estar dividido em linhas próximas.
-        janela = " ".join(linhas[i:i + 4])
+    for i in range(len(linhas)):
+        janela = " ".join(linhas[i:i + 25])
         janela_norm = _normalizar_texto(janela)
 
-        tem_faixa_janela = (
+        tem_faixa = (
             "faixa de frequencia" in janela_norm
             or "faixa de frequencias" in janela_norm
             or "frequency range" in janela_norm
         )
 
-        tem_potencia_janela = (
+        tem_potencia = (
             "potencia maxima de saida" in janela_norm
+            or "potencia maxima" in janela_norm
             or "potencia de saida" in janela_norm
-            or "potencia saida" in janela_norm
-            or "maximum output power" in janela_norm
             or "output power" in janela_norm
-            or "power w" in janela_norm
+            or "maximum output power" in janela_norm
         )
 
-        if (tem_faixa and tem_potencia) or (tem_faixa_janela and tem_potencia_janela):
+        tem_designacao = (
+            "designacao de emissoes" in janela_norm
+            or "designation of emission" in janela_norm
+            or "emission designation" in janela_norm
+        )
+
+        if tem_faixa and tem_potencia and tem_designacao:
             idx_inicio = i
             break
 
@@ -1176,15 +1295,10 @@ def _extrair_tabela_tecnica_cct_do_texto(texto):
             "linhas": [],
         }
 
-    linhas_saida = []
-    ultima_faixa = ""
-
-    # Captura a partir do cabeçalho técnico.
-    # Limita a janela para não pegar observações/normas do restante do CCT.
-    trecho = linhas[idx_inicio: idx_inicio + 80]
+    trecho = linhas[idx_inicio: idx_inicio + 260]
 
     padrao_faixa = re.compile(
-        r"(\d[\d.,]*\s*(?:a|até|ate|-|–|—)\s*\d[\d.,]*)",
+        r"(\d[\d.,]*\s*(?:a|ate|até|-|–|—)\s*\d[\d.,]*)",
         flags=re.I,
     )
 
@@ -1193,60 +1307,123 @@ def _extrair_tabela_tecnica_cct_do_texto(texto):
         flags=re.I,
     )
 
+    padrao_designacao = re.compile(
+        r"\b(?:[0-9]+[A-Z][0-9A-Z]*[A-Z]|[0-9]+[A-Z]{1,3}[0-9A-Z]*)\b",
+        flags=re.I,
+    )
+
+    linhas_saida = []
+    ultima_faixa = ""
+
     for linha in trecho:
         linha_limpa = _limpar_texto(linha)
         linha_norm = _normalizar_texto(linha_limpa)
 
-        # Para parar antes de pegar rodapé/observações/normas.
+        if not linha_limpa:
+            continue
+
+        # Para ao sair da tabela técnica.
         if linhas_saida and any(
             marcador in linha_norm
             for marcador in [
-                "normas aplicaveis",
-                "applicable standards",
                 "observacoes",
-                "observations",
-                "historico",
-                "history",
+                "observacao",
+                "comments",
                 "informacoes adicionais",
-                "additional information",
+                "comentarios adicionais",
+                "relatorio",
+                "relatorios",
+                "laboratorio",
+                "laboratorios",
+                "unidade fabril",
+                "historico",
+                "certification history",
+                "test report",
+                "dados do laboratorio",
+                "factory unit",
             ]
         ):
             break
+
+        # Ignora cabeçalho repetido.
+        if (
+            "faixa de frequencia" in linha_norm
+            and (
+                "potencia" in linha_norm
+                or "output power" in linha_norm
+            )
+        ):
+            continue
 
         m_faixa = padrao_faixa.search(linha_limpa)
 
         if m_faixa:
             ultima_faixa = _limpar_texto(m_faixa.group(1))
 
-        # A potência pode estar na mesma linha da faixa ou em linhas seguintes.
-        numeros_decimais = padrao_potencia.findall(linha_limpa)
+            # Se a linha contém apenas a faixa, segue para a próxima.
+            texto_sem_faixa = linha_limpa.replace(m_faixa.group(1), " ")
+        else:
+            texto_sem_faixa = linha_limpa
 
-        if not numeros_decimais:
+        numeros = padrao_potencia.findall(texto_sem_faixa)
+
+        if not numeros:
             continue
 
-        # Evita tratar a própria faixa como potência.
-        # Ex.: "2400 a 2483,5" contém "2483,5", mas não é potência.
-        potencias = []
+        potencia = ""
 
-        for numero in numeros_decimais:
-            if m_faixa and numero in m_faixa.group(1):
+        for numero in numeros:
+            try:
+                valor_num = float(numero.replace(".", "").replace(",", "."))
+            except Exception:
                 continue
 
-            potencias.append(numero)
+            # Potência em W, normalmente valor pequeno.
+            # Evita pegar frequência, taxa de transmissão, página etc.
+            if 0 < valor_num <= 100:
+                potencia = numero
+                break
 
-        if not potencias:
+        if not potencia:
             continue
 
         if not ultima_faixa:
             continue
 
-        # Normalmente a primeira potência da linha é a coluna Potência de saída.
-        potencia = potencias[0]
+        designacao = ""
+
+        candidatos_designacao = padrao_designacao.findall(texto_sem_faixa)
+
+        for cand in candidatos_designacao:
+            cand_limpo = str(cand or "").strip().upper()
+
+            # Evita pegar coisas que são padrão/tecnologia.
+            if cand_limpo in {
+                "OFDM",
+                "DSSS",
+                "FHSS",
+                "GFSK",
+                "BPSK",
+                "QPSK",
+                "QAM",
+                "HT20",
+                "HT40",
+                "VHT20",
+                "VHT40",
+                "VHT80",
+            }:
+                continue
+
+            # Designações típicas: 1M10F7D, 16M4X9D, 36M0X9D etc.
+            if re.search(r"\d", cand_limpo) and re.search(r"[A-Z]", cand_limpo):
+                designacao = cand_limpo
+                break
 
         linhas_saida.append(
             [
                 ultima_faixa,
                 potencia,
+                designacao,
             ]
         )
 
@@ -1271,8 +1448,9 @@ def _extrair_tabela_tecnica_cct_do_texto(texto):
 
     return {
         "cabecalho": [
-            "Faixa de frequência (MHz)",
-            "Potência de saída (W)",
+            "Faixa de Frequência (MHz)",
+            "Potência Máxima de Saída (W)",
+            "Designação de Emissões",
         ],
         "linhas": linhas_unicas,
     }
@@ -1291,6 +1469,155 @@ def _inferir_tipo_produto(texto, valor_extraido=""):
         return "Transceptor de Radiação Restrita"
 
     return ""
+
+
+
+def _linha_tecnica_cct_util(linha):
+    texto = _normalizar_texto(
+        " ".join(str(c or "") for c in (linha or []))
+    )
+
+    if not texto:
+        return False
+
+    marcadores_fim = [
+        "observacoes",
+        "observacao",
+        "informacoes adicionais",
+        "comentarios adicionais",
+        "relatorio",
+        "relatorios",
+        "laboratorio",
+        "laboratorios",
+        "unidade fabril",
+        "historico",
+        "certification history",
+        "test report",
+    ]
+
+    if any(m in texto for m in marcadores_fim):
+        return False
+
+    return any(_limpar_texto(c) for c in linha or [])
+
+
+def _linha_tecnica_cct_util(linha):
+    texto = _normalizar_texto(
+        " ".join(str(c or "") for c in (linha or []))
+    )
+
+    if not texto:
+        return False
+
+    # Ignora cabeçalho repetido dentro da tabela.
+    if (
+        "faixa de frequencia" in texto
+        and (
+            "potencia" in texto
+            or "output power" in texto
+        )
+    ):
+        return False
+
+    marcadores_fim = [
+        "observacoes",
+        "observacao",
+        "informacoes adicionais",
+        "comentarios adicionais",
+        "relatorio",
+        "relatorios",
+        "laboratorio",
+        "laboratorios",
+        "unidade fabril",
+        "historico",
+        "certification history",
+        "test report",
+        "relatorio de ensaio",
+        "dados do laboratorio",
+    ]
+
+    if any(m in texto for m in marcadores_fim):
+        return False
+
+    return any(_limpar_texto(c) for c in linha or [])
+
+
+
+def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
+    """
+    Extrai e une todas as partes da tabela técnica do CCT.
+
+    Necessário porque alguns CCTs, como os da Moderna, quebram a tabela
+    em mais de uma página. A versão antiga podia escolher apenas uma parte
+    da tabela, causando CCT com 19 linhas quando havia 25.
+    """
+    tabelas_tecnicas = []
+
+    for tabela in tabelas_brutas or []:
+        linhas = _limpar_tabela_bruta(tabela)
+
+        if len(linhas) < 2:
+            continue
+
+        for idx_cab in range(len(linhas)):
+            cabecalho = linhas[idx_cab]
+
+            if not _linha_parece_cabecalho_tecnico_cct(cabecalho):
+                continue
+
+            score = _pontuacao_cabecalho_tabela(cabecalho)
+
+            if score < 6:
+                continue
+
+            corpo = linhas[idx_cab + 1:]
+
+            corpo = [
+                linha for linha in corpo
+                if _linha_tecnica_cct_util(linha)
+            ]
+
+            if not corpo:
+                continue
+
+            tabela_ajustada = _ajustar_tabela_extraida(cabecalho, corpo)
+
+            if tabela_ajustada.get("cabecalho") and tabela_ajustada.get("linhas"):
+                tabelas_tecnicas.append(tabela_ajustada)
+
+            # Já achou o cabeçalho técnico dessa tabela.
+            # Pode ir para a próxima tabela bruta.
+            break
+
+    if not tabelas_tecnicas:
+        return {
+            "cabecalho": [],
+            "linhas": [],
+        }
+
+    # Usa o cabeçalho mais completo entre todas as partes encontradas.
+    cabecalho_final = max(
+        [t.get("cabecalho", []) or [] for t in tabelas_tecnicas],
+        key=lambda cab: sum(1 for c in cab if _limpar_texto(c)),
+    )
+
+    total_colunas = len(cabecalho_final)
+    linhas_final = []
+
+    for tabela in tabelas_tecnicas:
+        for linha in tabela.get("linhas", []) or []:
+            linha = list(linha or [])
+
+            if total_colunas:
+                linha = linha + [""] * (total_colunas - len(linha))
+                linha = linha[:total_colunas]
+
+            if _linha_tecnica_cct_util(linha):
+                linhas_final.append(linha)
+
+    return _ajustar_tabela_extraida(cabecalho_final, linhas_final)
+
+
 
 
 def parsear_certificado_pdf(caminho_pdf):
@@ -1475,12 +1802,28 @@ def parsear_certificado_pdf(caminho_pdf):
     resultado["observacao_texto"] = obs["observacao_texto"]
     resultado["observacao_motivos"] = obs["observacao_motivos"]
 
-    tabela_cct = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas)
+    tabela_cct_tabelas = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas)
+    tabela_cct_texto = _extrair_tabela_tecnica_cct_do_texto(texto)
 
-    if not tabela_cct.get("linhas"):
-     tabela_cct = _extrair_tabela_tecnica_cct_do_texto(texto)
+    linhas_tabelas = len(tabela_cct_tabelas.get("linhas", []) or [])
+    linhas_texto = len(tabela_cct_texto.get("linhas", []) or [])
+
+    if linhas_texto > linhas_tabelas:
+        tabela_cct = tabela_cct_texto
+        tabela_cct["origem_extracao"] = "texto_completo"
+    else:
+        tabela_cct = tabela_cct_tabelas
+        tabela_cct["origem_extracao"] = "pdfplumber_extract_tables"
 
     resultado["tabela_tecnica_cct"] = tabela_cct
+
+    print(
+        "[PDF] Tabela técnica CCT: "
+        f"pdfplumber={linhas_tabelas} linha(s) | "
+        f"texto={linhas_texto} linha(s) | "
+        f"usada={len(tabela_cct.get('linhas', []) or [])} linha(s) | "
+        f"origem={tabela_cct.get('origem_extracao')}"
+    )
 
     print(f"[PDF] Dados extraídos de {caminho_pdf.name}: {resultado}")
     return resultado

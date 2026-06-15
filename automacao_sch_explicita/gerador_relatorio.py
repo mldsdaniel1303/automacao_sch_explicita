@@ -841,12 +841,25 @@ def _html_comparacao_tabela_tecnica(resultado):
         f"<div class='{classe}'>{escape(str(mensagem))}</div>",
         "<table><thead><tr><th>Item</th><th>Valor</th></tr></thead><tbody>",
         f"<tr><td>Status</td><td>{escape(str(status))}</td></tr>",
-        f"<tr><td>Linhas no SCH</td><td>{escape(str(linhas_sch))}</td></tr>",
-        f"<tr><td>Linhas no CCT</td><td>{escape(str(linhas_cct))}</td></tr>",
+        f"<tr><td>Combinações técnicas comparadas no SCH</td><td>{escape(str(linhas_sch))}</td></tr>",
+        f"<tr><td>Combinações técnicas comparadas no CCT</td><td>{escape(str(linhas_cct))}</td></tr>",
         f"<tr><td>Campos comparados</td><td>{escape(', '.join(str(c) for c in campos_comparados) or 'Não informado')}</td></tr>",
         f"<tr><td>Colunas ignoradas do CCT</td><td>{escape(', '.join(str(c) for c in colunas_ignoradas) or 'Não informado')}</td></tr>",
         "</tbody></table>",
     ]
+
+    linhas_extraidas_sch = comparacao.get("linhas_extraidas_sch", "")
+    linhas_extraidas_cct = comparacao.get("linhas_extraidas_cct", "")
+
+    if linhas_extraidas_sch != "":
+        linhas.append(
+            f"<tr><td>Linhas extraídas do SCH antes de remover repetidas</td><td>{escape(str(linhas_extraidas_sch))}</td></tr>"
+        )
+
+    if linhas_extraidas_cct != "":
+        linhas.append(
+            f"<tr><td>Linhas extraídas do CCT antes de remover repetidas</td><td>{escape(str(linhas_extraidas_cct))}</td></tr>"
+        )
 
     if not divergencias:
         linhas.append(

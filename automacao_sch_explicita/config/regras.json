@@ -21,11 +21,11 @@
     "requerimento": 0,
     "homologacao": 1,
     "certificado": 2,
-    "tipo_produto": 3,
-    "modelo": 4,
-    "solicitante": 5,
-    "fabricante": 6,
-    "data_conclusao": 7
+    "tipo_produto": 4,
+    "modelo": 5,
+    "solicitante": 6,
+    "fabricante": 7,
+    "data_conclusao": 8
   },
 
   "categorias_anexos": [

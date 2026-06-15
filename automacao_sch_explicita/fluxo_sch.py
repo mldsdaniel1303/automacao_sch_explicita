@@ -390,6 +390,15 @@ def executar_fluxo_sch(
             numero = _numero_requerimento(req)
             pasta_req = pasta_requerimentos / nome_seguro(numero)
 
+            # Garantia inicial:
+            # Nome Comercial nunca deve ficar vazio no relatório.
+            # Se ainda não foi extraído da aba Dados Gerais, usa o modelo da fila.
+            if not req.get("nome_comercial"):
+                req["nome_comercial"] = req.get("modelo", "")
+
+            if not req.get("modelo_sch_dados_gerais"):
+                req["modelo_sch_dados_gerais"] = req.get("modelo", "")
+
             print("=" * 90)
             print(f"[SCH] Iniciando processamento do requerimento {numero}")
             print(f"[SCH] Pasta do requerimento: {pasta_req}")
@@ -453,13 +462,54 @@ def executar_fluxo_sch(
                     dados_certificado_sch = extrair_dados_certificado_sch(driver, wait)
                     dados_certificado_sch = dados_certificado_sch or {}
 
+                    # ==========================================================
+                    # CORREÇÃO: trazer Nome Comercial e Modelo da aba Dados Gerais
+                    # para dentro do req, porque o relatório usa o req como base.
+                    # ==========================================================
+                    nome_comercial_sch = str(
+                        dados_certificado_sch.get("nome_comercial") or ""
+                    ).strip()
+
+                    modelo_sch_dados_gerais = str(
+                        dados_certificado_sch.get("modelo_sch_dados_gerais") or ""
+                    ).strip()
+
+                    if nome_comercial_sch:
+                        req["nome_comercial"] = nome_comercial_sch
+
+                    if modelo_sch_dados_gerais:
+                        req["modelo_sch_dados_gerais"] = modelo_sch_dados_gerais
+
+                    # Garantia final: Nome Comercial nunca pode ficar vazio.
+                    if not str(req.get("nome_comercial") or "").strip():
+                        req["nome_comercial"] = req.get("modelo_sch_dados_gerais") or req.get("modelo", "")
+
+                    # Também guarda esses dados no resumo, para o relatório conseguir acessar.
                     resumo["dados_certificado_sch"] = dados_certificado_sch
+                    resumo["nome_comercial_sch"] = req.get("nome_comercial", "")
+                    resumo["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
                     req["dados_certificado_sch"] = dados_certificado_sch
 
+                    print(
+                        "[SCH] Produto no SCH: "
+                        f"modelo_dados_gerais={req.get('modelo_sch_dados_gerais', '')} | "
+                        f"nome_comercial={req.get('nome_comercial', '')}"
+                    )
+
                 except Exception as e:
-                    print(f"[SCH][WARN] Não foi possível extrair dados do certificado no SCH: {e}")
+                    print(f"[SCH][WARN] Não foi possível extrair dados do certificado/produto no SCH: {e}")
                     dados_certificado_sch = {}
                     resumo["dados_certificado_sch"] = {}
+
+                    # Mesmo com erro na extração, Nome Comercial não deve ficar vazio.
+                    if not str(req.get("nome_comercial") or "").strip():
+                        req["nome_comercial"] = req.get("modelo", "")
+
+                    if not str(req.get("modelo_sch_dados_gerais") or "").strip():
+                        req["modelo_sch_dados_gerais"] = req.get("modelo", "")
+
+                    resumo["nome_comercial_sch"] = req.get("nome_comercial", "")
+                    resumo["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
 
                 clicar_aba_anexos(driver, wait)
 
@@ -484,6 +534,10 @@ def executar_fluxo_sch(
                     print("[SCH][WARN] Nenhum PDF CCT localizado na pasta do requerimento.")
                     dados_pdf = {}
 
+                # Guarda também no dados_pdf, para qualquer relatório/seção adicional conseguir acessar.
+                dados_pdf["nome_comercial_sch"] = req.get("nome_comercial", "")
+                dados_pdf["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
+
                 if dados_certificado_sch:
                     dados_pdf["data_emissao_cct"] = dados_pdf.get("data_emissao", "")
                     dados_pdf["data_validade_cct"] = dados_pdf.get("data_validade", "")
@@ -505,7 +559,7 @@ def executar_fluxo_sch(
                         f"emissão={dados_pdf.get('data_emissao', '')} | "
                         f"validade={dados_pdf.get('data_validade', '')}"
                     )
-                
+
                 try:
                     comparacao_datas = comparar_datas_certificado_sch_x_cct(
                         dados_certificado_sch=dados_certificado_sch,

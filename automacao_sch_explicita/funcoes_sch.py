@@ -1018,6 +1018,132 @@ def _recortar_bloco_dados_certificado(texto):
     return texto
 
 
+def _deduplicar_lista_preservando_ordem(valores):
+    saida = []
+    vistos = set()
+
+    for valor in valores or []:
+        valor = _texto_limpo(valor)
+
+        if not valor:
+            continue
+
+        chave = _normalizar_texto_comparacao(valor)
+
+        if not chave or chave in vistos:
+            continue
+
+        vistos.add(chave)
+        saida.append(valor)
+
+    return saida
+
+
+def _recortar_bloco_produto_sch(texto):
+    """
+    Recorta a seção Produto da aba Dados Gerais.
+
+    Exemplo esperado no SCH:
+    Produto
+    Modelo: L1100    Nome Comercial: L1100BT
+    Modelo: L1120    Nome Comercial: L1120BT
+    """
+    texto = texto or ""
+
+    m = re.search(
+        r"(?:^|\n)\s*Produto\s*(?P<bloco>.*?)(?:\n\s*(?:Dados\s+da\s+Especifica[cç][aã]o|Caracter[ií]sticas\s+T[eé]cnicas|Outras\s+Unidades|Exig[eê]ncias|Informa[cç][oõ]es\s+Adicionais)\b|$)",
+        texto,
+        flags=re.I | re.S,
+    )
+
+    if m:
+        return "Produto\n" + m.group("bloco")
+
+    return ""
+
+
+def _extrair_produtos_sch_do_texto(texto, req=None):
+    """
+    Extrai modelo(s) e nome(s) comercial(is) do bloco Produto no SCH.
+    Se Nome Comercial não for encontrado, usa o Modelo como fallback,
+    para nunca deixar o relatório vazio.
+    """
+    req = req or {}
+    bloco = _recortar_bloco_produto_sch(texto)
+
+    modelos = []
+    nomes_comerciais = []
+
+    if bloco:
+        texto_bloco = re.sub(r"\r", "\n", bloco)
+        texto_bloco = re.sub(r"[ \t]+", " ", texto_bloco)
+
+        padrao_pares = re.compile(
+            r"Modelo\s*:?\s*(?P<modelo>.*?)\s+Nome\s+Comercial\s*:?\s*(?P<nome>.*?)(?=(?:\s+Modelo\s*:)|(?:\n)|$)",
+            flags=re.I | re.S,
+        )
+
+        for m in padrao_pares.finditer(texto_bloco):
+            modelo = _texto_limpo(m.group("modelo"))
+            nome = _texto_limpo(m.group("nome"))
+
+            if modelo:
+                modelos.append(modelo)
+
+            if nome:
+                nomes_comerciais.append(nome)
+
+        # Fallback para caso venha em linhas separadas.
+        if not nomes_comerciais:
+            for linha in texto_bloco.splitlines():
+                linha_limpa = _texto_limpo(linha)
+
+                if not linha_limpa:
+                    continue
+
+                m_nome = re.search(
+                    r"Nome\s+Comercial\s*:?\s*(.+)$",
+                    linha_limpa,
+                    flags=re.I,
+                )
+
+                if m_nome:
+                    nomes_comerciais.append(_texto_limpo(m_nome.group(1)))
+
+                m_modelo = re.search(
+                    r"Modelo\s*:?\s*(.+?)(?:\s+Nome\s+Comercial\s*:|$)",
+                    linha_limpa,
+                    flags=re.I,
+                )
+
+                if m_modelo:
+                    modelos.append(_texto_limpo(m_modelo.group(1)))
+
+    modelos = _deduplicar_lista_preservando_ordem(modelos)
+    nomes_comerciais = _deduplicar_lista_preservando_ordem(nomes_comerciais)
+
+    modelo_txt = "; ".join(modelos).strip()
+    nome_comercial_txt = "; ".join(nomes_comerciais).strip()
+
+    modelo_req = _texto_limpo(req.get("modelo", ""))
+
+    if not modelo_txt:
+        modelo_txt = modelo_req
+
+    # Regra importante: Nome Comercial nunca deve ficar vazio.
+    # Se o SCH não trouxer Nome Comercial, usa Modelo.
+    if not nome_comercial_txt:
+        nome_comercial_txt = modelo_txt or modelo_req
+
+    return {
+        "modelo_sch_dados_gerais": modelo_txt,
+        "nome_comercial": nome_comercial_txt,
+        "nomes_comerciais": nomes_comerciais,
+        "modelos_produto_sch": modelos,
+        "texto_bloco_produto": bloco,
+    }
+
+
 def _extrair_valor_sch_por_rotulo(texto, rotulos):
     texto = texto or ""
 
@@ -1079,6 +1205,7 @@ def extrair_dados_certificado_sch(driver, wait):
 
     texto = _texto_visivel_sch(driver)
     bloco = _recortar_bloco_dados_certificado(texto)
+    produto_sch = _extrair_produtos_sch_do_texto(texto)
 
     dados = {
         "nome": _extrair_valor_sch_por_rotulo(
@@ -1119,12 +1246,14 @@ def extrair_dados_certificado_sch(driver, wait):
         "origem": "SCH - Dados Gerais - Dados do Certificado",
         "texto_bloco": bloco,
     }
+    dados.update(produto_sch)
 
     print(
         "[SCH] Dados do certificado no SCH: "
         f"certificado={dados.get('numero_certificado', '')} | "
         f"emissão={dados.get('data_certificado', '')} | "
         f"validade={dados.get('data_validade', '')}"
+        f"nome_comercial={dados.get('nome_comercial', '')}"
     )
 
     return dados
@@ -2175,9 +2304,157 @@ def _mapear_colunas_relevantes(cabecalho):
     mapeamento = {}
 
     for idx, col in enumerate(cabecalho or []):
-        canonico = _cabecalho_canonico(col)
+        col_texto = str(col or "").strip()
+
+        if not col_texto:
+            continue
+
+        canonico = _cabecalho_canonico(col_texto)
+
         if canonico and canonico not in mapeamento:
             mapeamento[canonico] = idx
+
+        col_norm = _normalizar_texto_comparacao(col_texto)
+        col_sem_espaco = re.sub(r"\s+", "", col_norm)
+
+        if (
+            "faixa de frequencia" in col_norm
+            or "faixa de frequencias" in col_norm
+            or "faixa frequencia" in col_norm
+            or "faixa frequencias" in col_norm
+            or "faixa de frequencia tx" in col_norm
+            or "faixa de frequencias tx" in col_norm
+            or "frequency range" in col_norm
+            or "range mhz" in col_norm
+            or "faixadefrequencia" in col_sem_espaco
+            or "faixadefrequencias" in col_sem_espaco
+            or "frequencyrange" in col_sem_espaco
+        ):
+            if "faixa_freq_tx" not in mapeamento:
+                mapeamento["faixa_freq_tx"] = idx
+            continue
+
+        if (
+            "sar" not in col_norm
+            and (
+                "potencia maxima de saida" in col_norm
+                or "potencia maxima saida" in col_norm
+                or "potencia maxima" in col_norm
+                or "potencia de saida" in col_norm
+                or "potencia saida" in col_norm
+                or "saida w" in col_norm
+                or "maximum output power" in col_norm
+                or "output power" in col_norm
+                or "tx power" in col_norm
+                or "power w" in col_norm
+                or "potenciamaximadesaida" in col_sem_espaco
+                or "potenciadesaida" in col_sem_espaco
+                or "maximumoutputpower" in col_sem_espaco
+                or "outputpower" in col_sem_espaco
+            )
+        ):
+            if "potencia_max_saida" not in mapeamento:
+                mapeamento["potencia_max_saida"] = idx
+            continue
+
+        if (
+            "intensidade de campo" in col_norm
+            or "intensidade campo" in col_norm
+            or "field strength" in col_norm
+            or "electric field strength" in col_norm
+            or "uv m" in col_norm
+            or "uv/m" in col_norm
+            or "intensidadedecampo" in col_sem_espaco
+            or "fieldstrength" in col_sem_espaco
+            or "electricfieldstrength" in col_sem_espaco
+        ):
+            if "intensidade_campo" not in mapeamento:
+                mapeamento["intensidade_campo"] = idx
+            continue
+
+        if (
+            "designacao de emissoes" in col_norm
+            or "designacao das emissoes" in col_norm
+            or "designacao emissoes" in col_norm
+            or ("emissoes" in col_norm and "designacao" in col_norm)
+            or "designation of emission" in col_norm
+            or "designation of emissions" in col_norm
+            or "emission designation" in col_norm
+            or "emissions designation" in col_norm
+            or "designacaodeemissoes" in col_sem_espaco
+            or "designacaodasemissoes" in col_sem_espaco
+            or "designationofemission" in col_sem_espaco
+            or "designationofemissions" in col_sem_espaco
+            or "emissiondesignation" in col_sem_espaco
+            or "emissionsdesignation" in col_sem_espaco
+        ):
+            if "designacao_emissoes" not in mapeamento:
+                mapeamento["designacao_emissoes"] = idx
+            continue
+
+        if (
+            "tecnologia" in col_norm
+            or "technology" in col_norm
+            or "spread spectrum" in col_norm
+            or "espalhamento" in col_norm
+            or "tecnologiaespalhamento" in col_sem_espaco
+            or "technologyspread" in col_sem_espaco
+        ):
+            if "tecnologia" not in mapeamento:
+                mapeamento["tecnologia"] = idx
+            continue
+
+        if (
+            "tipo de modulacao" in col_norm
+            or "modulacao" in col_norm
+            or "type of modulation" in col_norm
+            or "modulation" in col_norm
+            or "tipodemodulacao" in col_sem_espaco
+            or "typeofmodulation" in col_sem_espaco
+        ):
+            if "tipo_modulacao" not in mapeamento:
+                mapeamento["tipo_modulacao"] = idx
+            continue
+
+        if (
+            "sar cabeca" in col_norm
+            or "sar cabeça" in col_norm
+            or "sar head" in col_norm
+            or "sarcabeca" in col_sem_espaco
+            or "sarhead" in col_sem_espaco
+        ):
+            if "sar_cabeca" not in mapeamento:
+                mapeamento["sar_cabeca"] = idx
+            continue
+
+        if (
+            "sar corpo" in col_norm
+            or "sar body" in col_norm
+            or "sarcorpo" in col_sem_espaco
+            or "sarbody" in col_sem_espaco
+        ):
+            if "sar_corpo" not in mapeamento:
+                mapeamento["sar_corpo"] = idx
+            continue
+
+        if (
+            "taxa de transmissao" in col_norm
+            or "taxa transmissao" in col_norm
+            or "transmission rate" in col_norm
+            or "taxadetransmissao" in col_sem_espaco
+            or "transmissionrate" in col_sem_espaco
+        ):
+            if "taxa_transmissao" not in mapeamento:
+                mapeamento["taxa_transmissao"] = idx
+            continue
+
+        if (
+            "padrao" in col_norm
+            or "standard" in col_norm
+        ):
+            if "padrao" not in mapeamento:
+                mapeamento["padrao"] = idx
+            continue
 
     return mapeamento
 
@@ -3466,9 +3743,7 @@ def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
     }
 
 
-FRASE_SAR_NAO_APLICAVEL = (
-    "Ensaio de SAR não aplicável"
-)
+FRASE_SAR_NAO_APLICAVEL = "Ensaio de SAR não aplicável."
 
 def _dados_pdf_tem_ato_1630(dados_pdf):
     texto = _normalizar_texto_comparacao(_texto_total_dados_pdf(dados_pdf or {}))
@@ -3688,106 +3963,293 @@ def _dados_pdf_tem_valor_sar(dados_pdf):
     return False
 
 
-def analisar_sar_cct(dados_pdf):
-    dados_pdf = dados_pdf or {}
 
-    tem_frase_nao_aplicavel = _dados_pdf_tem_frase_sar_nao_aplicavel(dados_pdf)
-    tem_coluna_sar = _dados_pdf_tem_coluna_sar(dados_pdf)
-    tem_valor_sar = _dados_pdf_tem_valor_sar(dados_pdf)
-    tem_ato_1630 = _dados_pdf_tem_ato_1630(dados_pdf)
-    produto_nao_acabado = _dados_pdf_indica_produto_nao_acabado(dados_pdf)
+def _norm_sar(texto):
+    texto = str(texto or "")
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = texto.lower()
+    texto = texto.replace("µ", "u").replace("μ", "u")
+    texto = re.sub(r"[^a-z0-9.,/() -]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
 
-    frase_sar = _extrair_frase_sar_nao_aplicavel(dados_pdf)
 
-    if tem_coluna_sar and not tem_valor_sar:
+def _valor_sar_real(valor):
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return False
+
+    texto_norm = _norm_sar(texto)
+
+    if texto_norm in {
+        "-",
+        "--",
+        "---",
+        "na",
+        "n/a",
+        "n a",
+        "nao aplicavel",
+        "not applicable",
+        "aplicavel",
+        "sim",
+        "nao",
+    }:
+        return False
+
+    numeros = re.findall(r"\d+[,.]\d+", texto)
+
+    if not numeros:
+        return False
+
+    for numero in numeros:
+        try:
+            numero_txt = str(numero).strip()
+
+            # 0,174 -> 0.174 / 0.174 -> 0.174
+            # 1.234,56 -> 1234.56, se algum OCD usar separador de milhar.
+            if "," in numero_txt and "." in numero_txt:
+                numero_txt = numero_txt.replace(".", "").replace(",", ".")
+            else:
+                numero_txt = numero_txt.replace(",", ".")
+
+            valor_float = float(numero_txt)
+        except Exception:
+            continue
+
+        # Valor real de SAR costuma ser pequeno.
+        # Evita confundir com frequência ou taxa.
+        if 0 < valor_float <= 20:
+            return True
+
+    return False
+
+
+def _indice_colunas_sar(cabecalho):
+    indices = []
+
+    for idx, col in enumerate(cabecalho or []):
+        col_norm = _norm_sar(col)
+
+        if "sar" not in col_norm:
+            continue
+
+        if any(
+            termo in col_norm
+            for termo in [
+                "cabeca",
+                "head",
+                "corpo",
+                "body",
+                "tronco",
+                "limb",
+                "membro",
+                "w/kg",
+                "w kg",
+            ]
+        ):
+            indices.append(idx)
+
+    return indices
+
+
+def _tabela_tem_valores_sar(tabela):
+    tabela = tabela or {}
+    cabecalho = tabela.get("cabecalho", []) or []
+    linhas = tabela.get("linhas", []) or []
+
+    indices_sar = _indice_colunas_sar(cabecalho)
+
+    if not indices_sar:
         return {
-            "status": "sar_nao_aplicavel_coluna_sem_valor",
-            "sar_aplicavel": False,
-            "ato_1630_presente": tem_ato_1630,
-            "preencher_frase": True,
-            "frase": frase_sar or FRASE_SAR_NAO_APLICAVEL,
-            "mensagem": (
-                "A tabela possui coluna SAR, mas os campos de SAR não possuem valor real "
-                "ou estão preenchidos com '-'. SAR tratado como não aplicável."
-        ),
+            "tem_sar": False,
+            "valores": [],
+            "motivo": "sem_coluna_sar",
+        }
+
+    valores = []
+
+    for linha in linhas:
+        for idx in indices_sar:
+            if idx >= len(linha):
+                continue
+
+            valor = linha[idx]
+
+            if _valor_sar_real(valor):
+                valores.append(
+                    {
+                        "coluna": cabecalho[idx],
+                        "valor": str(valor).strip(),
+                    }
+                )
+
+    return {
+        "tem_sar": bool(valores),
+        "valores": valores,
+        "motivo": "valores_sar_encontrados" if valores else "coluna_sar_sem_valores",
     }
 
-    if tem_frase_nao_aplicavel:
+
+def _texto_tem_valores_sar_em_contexto(texto):
+    texto = texto or ""
+    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+
+    valores = []
+
+    for i, linha in enumerate(linhas):
+        linha_norm = _norm_sar(linha)
+
+        if "sar" not in linha_norm:
+            continue
+
+        if not any(
+            termo in linha_norm
+            for termo in [
+                "corpo",
+                "body",
+                "cabeca",
+                "head",
+                "w/kg",
+                "w kg",
+            ]
+        ):
+            continue
+
+        janela = " ".join(linhas[i:i + 30])
+
+        for numero in re.findall(r"\d+[,.]\d+", janela):
+            try:
+                valor_float = float(numero.replace(".", "").replace(",", "."))
+            except Exception:
+                continue
+
+            if 0 < valor_float <= 20:
+                valores.append(numero)
+
+    return {
+        "tem_sar": bool(valores),
+        "valores": valores,
+    }
+
+
+
+
+
+def analisar_sar_cct(dados_pdf):
+    """
+    Analisa se deve preencher 'Ensaio de SAR não aplicável.' na Corrigir Minuta.
+
+    Regra:
+    1. Valor real em coluna SAR Cabeça/Corpo => SAR aplicável.
+    2. Valor explícito de SAR em texto corrido => SAR aplicável.
+    3. Frase segura de SAR não aplicável => preencher frase.
+    4. Coluna SAR existente, mas vazia/traço/N/A => SAR não aplicável e preencher frase.
+    5. Sem coluna SAR e sem frase segura => revisar manualmente.
+    """
+    dados_pdf = dados_pdf or {}
+
+    texto = dados_pdf.get("texto_completo", "") or ""
+    texto_norm = _norm_sar(texto)
+
+    tabela_cct = dados_pdf.get("tabela_tecnica_cct") or {}
+
+    resultado_tabela = _tabela_tem_valores_sar(tabela_cct)
+
+    if resultado_tabela.get("tem_sar"):
+        return {
+            "status": "sar_aplicavel",
+            "mensagem": (
+                "SAR aplicável: foram encontrados valores numéricos reais "
+                "em coluna SAR do CCT. Não preencher 'Ensaio de SAR não aplicável.'."
+            ),
+            "preencher_frase": False,
+            "frase": "",
+            "sar_aplicavel": True,
+            "sar_nao_aplicavel": False,
+            "valores_sar_encontrados": resultado_tabela.get("valores", []),
+            "origem": "tabela_tecnica_cct",
+        }
+
+    resultado_texto = _texto_tem_valores_sar_em_contexto(texto)
+
+    if resultado_texto.get("tem_sar"):
+        return {
+            "status": "sar_aplicavel",
+            "mensagem": (
+                "SAR aplicável: foram encontrados valores explícitos de SAR "
+                "no texto do CCT. Não preencher 'Ensaio de SAR não aplicável.'."
+            ),
+            "preencher_frase": False,
+            "frase": "",
+            "sar_aplicavel": True,
+            "sar_nao_aplicavel": False,
+            "valores_sar_encontrados": resultado_texto.get("valores", []),
+            "origem": "texto_completo_explicito",
+        }
+
+    frases_sar_nao_aplicavel = [
+        "ensaio de sar nao aplicavel",
+        "sar nao aplicavel",
+        "sar n/a",
+        "sar na",
+        "not applicable sar",
+        "sar not applicable",
+        "equipamento nao e terminal portatil",
+        "equipamento nao terminal portatil",
+        "nao e terminal portatil",
+        "potencia media de transmissao em 6 minutos inferior",
+        "potencia de pico inferior",
+    ]
+
+    encontrou_frase_nao_aplicavel = any(
+        frase in texto_norm
+        for frase in frases_sar_nao_aplicavel
+    )
+
+    if encontrou_frase_nao_aplicavel:
         return {
             "status": "sar_nao_aplicavel",
-            "sar_aplicavel": False,
-            "ato_1630_presente": tem_ato_1630,
-            "preencher_frase": True,
-            "frase": frase_sar,
-            "mensagem": "Foi identificado no CCT que o ensaio de SAR não é aplicável.",
-        }
-
-    if produto_nao_acabado:
-        return {
-            "status": "sar_nao_aplicavel_produto_nao_acabado",
-            "sar_aplicavel": False,
-            "ato_1630_presente": tem_ato_1630,
+            "mensagem": (
+                "SAR não aplicável identificado no CCT. "
+                "Não foram encontrados valores numéricos reais de SAR."
+            ),
             "preencher_frase": True,
             "frase": FRASE_SAR_NAO_APLICAVEL,
-            "mensagem": "Produto não acabado/uso interno identificado. SAR tratado como não aplicável.",
+            "sar_aplicavel": False,
+            "sar_nao_aplicavel": True,
+            "valores_sar_encontrados": [],
+            "origem": "texto_completo",
         }
 
-    if not tem_coluna_sar:
+    if _dados_pdf_tem_coluna_sar(dados_pdf):
         return {
-            "status": "sar_nao_aplicavel_sem_coluna",
-            "sar_aplicavel": False,
-            "ato_1630_presente": tem_ato_1630,
+            "status": "sar_nao_aplicavel",
+            "mensagem": (
+                "O CCT possui coluna SAR, mas não foram encontrados valores reais "
+                "nas colunas SAR Cabeça/Corpo. Considerado SAR não aplicável."
+            ),
             "preencher_frase": True,
             "frase": FRASE_SAR_NAO_APLICAVEL,
-            "mensagem": "Não foi identificada coluna SAR na tabela técnica do CCT. SAR tratado como não aplicável.",
-        }
-
-    if tem_coluna_sar and not tem_valor_sar:
-        return {
-            "status": "sar_coluna_sem_valor_revisar",
-            "sar_aplicavel": None,
-            "ato_1630_presente": tem_ato_1630,
-            "preencher_frase": False,
-            "frase": "",
-            "mensagem": (
-                "A tabela possui coluna SAR, mas não há valor preenchido. "
-                "Como o CCT não trouxe frase de SAR não aplicável, revisar manualmente."
-            ),
-        }
-
-    if tem_valor_sar and tem_ato_1630:
-        return {
-            "status": "sar_aplicavel_com_ato_1630",
-            "sar_aplicavel": True,
-            "ato_1630_presente": True,
-            "preencher_frase": False,
-            "frase": "",
-            "mensagem": (
-                "Foram encontrados valores de SAR no CCT e o Ato nº 1630 está presente. "
-                "A frase de SAR não aplicável não será inserida."
-            ),
-        }
-
-    if tem_valor_sar and not tem_ato_1630:
-        return {
-            "status": "sar_aplicavel_sem_ato_1630",
-            "sar_aplicavel": True,
-            "ato_1630_presente": False,
-            "preencher_frase": False,
-            "frase": "",
-            "mensagem": (
-                "Foram encontrados valores de SAR no CCT, mas o Ato nº 1630 não consta. "
-                "Não preencher 'SAR não aplicável'; gerar alerta para revisão/NC."
-            ),
+            "sar_aplicavel": False,
+            "sar_nao_aplicavel": True,
+            "valores_sar_encontrados": [],
+            "origem": "coluna_sar_sem_valor",
         }
 
     return {
-        "status": "nao_identificado",
-        "sar_aplicavel": None,
-        "ato_1630_presente": tem_ato_1630,
+        "status": "revisar",
+        "mensagem": (
+            "Não foram encontrados valores reais de SAR, coluna SAR ou frase segura "
+            "de SAR não aplicável. Revisar manualmente."
+        ),
         "preencher_frase": False,
         "frase": "",
-        "mensagem": "Não foi possível determinar automaticamente a aplicabilidade de SAR.",
+        "sar_aplicavel": None,
+        "sar_nao_aplicavel": None,
+        "valores_sar_encontrados": [],
+        "origem": "nao_identificado",
     }
 
 
@@ -4378,6 +4840,18 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
         analise["confirmado_apos_salvar"] = False
         analise["retornou_para_requerimento"] = False
         return analise
+
+    frase_sar = str(analise.get("frase") or "").strip()
+
+    if _normalizar_texto_comparacao(frase_sar) == _normalizar_texto_comparacao(
+        "Ensaio de SAR não aplicável"
+    ):
+        frase_sar = FRASE_SAR_NAO_APLICAVEL
+
+    if frase_sar and not frase_sar.endswith("."):
+        frase_sar = frase_sar + "."
+
+    analise["frase"] = frase_sar
 
     try:
         clicar_corrigir_minuta(driver, wait)
