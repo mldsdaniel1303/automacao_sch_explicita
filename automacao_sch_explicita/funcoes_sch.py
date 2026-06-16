@@ -3086,6 +3086,37 @@ def _comparar_modelos_sch_x_cct(modelo_sch, modelo_cct):
 
     faltando_no_cct = sorted(set_sch - set_cct)
     faltando_no_sch = sorted(set_cct - set_sch)
+    
+    if _modelo_generico_ou_incompleto(modelo_sch) and not _modelo_generico_ou_incompleto(modelo_cct):
+        return{
+            "campo": "modelo",
+            "status": "NC",
+            "valor_sch": modelo_sch,
+            "valor_cct": modelo_cct,
+            "valor_sch_normalizado": modelo_sch,
+            "valor_cct_normalizado": modelo_cct,
+            "diverge": True,
+            "observacao": (
+                "Modelo do SCH parece incompleto/genérico."
+                "Conferir manualmente contra o modelo completo do CCT."
+            ),
+        }
+    if _modelo_generico_ou_incompleto(modelo_cct) and not _modelo_generico_ou_incompleto(modelo_sch):
+        return{
+            "campo": "modelo",
+            "status": "NC",
+            "valor_sch": modelo_sch,
+            "valor_cct": modelo_cct,
+            "valor_sch_normalizado": modelo_sch,
+            "valor_cct_normalizado": modelo_cct,
+            "diverge": True,
+            "observacao": (
+                "Modelo extraido do CCT parece incompleto/genérico."
+                "Conferir manualmente a extração do PDF."
+            ),
+        }
+
+
 
     return {
         "campo": "modelo",
@@ -3105,6 +3136,34 @@ def _comparar_modelos_sch_x_cct(modelo_sch, modelo_cct):
             f"Faltando no SCH: {', '.join(faltando_no_sch) or 'nenhum'}."
         ),
     }
+def _modelo_generico_ou_incompleto(valor):
+    valor_norm = _normalizar_texto_comparacao(valor)
+    valor_sem_espaco = re.sub(r"[^a-z0-9]+", "", valor_norm)
+
+    if not valor_sem_espaco:
+        return True
+
+    genericos = {
+        "ai",
+        "ia",
+        "wifi",
+        "bluetooth",
+        "ble",
+        "bt",
+        "model",
+        "modelo",
+        "models",
+        "modelos",
+    }
+
+    if valor_sem_espaco in genericos:
+        return True
+
+    # Um modelo muito curto sem número geralmente é inseguro.
+    if len(valor_sem_espaco) <= 2 and not re.search(r"\d", valor_sem_espaco):
+        return True
+
+    return False
 
 
 def comparar_dados_sch_x_cct(req, dados_pdf):

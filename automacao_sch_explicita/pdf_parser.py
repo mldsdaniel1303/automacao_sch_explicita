@@ -785,16 +785,47 @@ def _limpar_modelo(valor):
 
 
 def _extrair_modelo_do_texto(linhas):
-    for linha in linhas or []:
+    for idx, linha in enumerate(linhas or []):
         linha_limpa = _limpar_texto(linha)
-        if re.search(r"\bModelo\b\s*/\s*\bModel\b", linha_limpa, flags=re.I):
-            m = re.search(r"\bModel\b\s*[:\-]?\s*([^\s].+)$", linha_limpa, flags=re.I)
-            if m:
-                return _limpar_modelo(m.group(1))
+        linha_norm = _normalizar_texto(linha_limpa)
 
-            m = re.search(r"\bModelo\b\s*[:\-]?\s*([^\s].+)$", linha_limpa, flags=re.I)
-            if m:
-                return _limpar_modelo(m.group(1))
+        if not linha_limpa:
+            continue
+
+        # Caso: "Modelo(s): W AI 3, W AI 4"
+        m = re.search(
+            r"\bModelo(?:\(s\))?\s*[:\-]?\s*(.+)$",
+            linha_limpa,
+            flags=re.I,
+        )
+
+        if m:
+            valor = _limpar_modelo(m.group(1))
+
+            if valor and not _normalizar_texto(valor) in {
+                "model",
+                "models",
+                "modelo",
+                "modelos",
+                "nome comercial",
+                "trade name",
+            }:
+                return valor
+
+        # Caso: rótulo numa linha e valor na próxima.
+        if linha_norm in {"modelo", "model", "modelos", "models"}:
+            for prox in (linhas or [])[idx + 1: idx + 4]:
+                prox_limpa = _limpar_modelo(prox)
+
+                if prox_limpa and not _normalizar_texto(prox_limpa) in {
+                    "model",
+                    "models",
+                    "modelo",
+                    "modelos",
+                    "nome comercial",
+                    "trade name",
+                }:
+                    return prox_limpa
 
     return ""
 
