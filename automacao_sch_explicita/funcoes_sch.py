@@ -2145,6 +2145,46 @@ def _normalizar_decimal_tabela(valor):
     return _formatar_float_tabela(texto)
 
 
+def _normalizar_decimal_frequencia_tabela(valor):
+    """
+    Normaliza número de frequência em MHz.
+
+    Corrige casos como:
+    - 2.400   -> 2400
+    - 2.400,0 -> 2400
+    - 2.483,5 -> 2483.5
+    - 2400   -> 2400
+    - 2483,5 -> 2483.5
+
+    Importante: esta função é só para frequência.
+    Não usar para potência, porque potência pode ser 0.00371.
+    """
+    texto = str(valor or "").strip()
+    texto = texto.replace(" ", "")
+
+    if not texto:
+        return ""
+
+    # Caso brasileiro completo: 2.400,0 / 2.483,5
+    if "," in texto:
+        texto = texto.replace(".", "")
+        texto = texto.replace(",", ".")
+    else:
+        # Caso comum em CCT: 2.400 significa 2400 MHz, não 2.4 MHz.
+        if re.fullmatch(r"\d{1,3}\.\d{3}", texto):
+            texto = texto.replace(".", "")
+        elif texto.count(".") > 1:
+            partes = texto.split(".")
+            texto = "".join(partes[:-1]) + "." + partes[-1]
+
+    texto = re.sub(r"[^0-9.\-]", "", texto)
+
+    if not texto or texto in {"-", ".", "-."}:
+        return ""
+
+    return _formatar_float_tabela(texto)
+
+
 def _normalizar_faixa_frequencia_tabela(valor):
     texto_original = str(valor or "").strip()
 
@@ -2156,12 +2196,6 @@ def _normalizar_faixa_frequencia_tabela(valor):
     if not texto:
         return ""
 
-    numeros = re.findall(r"\d[\d.,]*", texto_original)
-
-    # Se não tiver número, não é faixa de frequência.
-    if not numeros:
-        return ""
-
     texto = texto.replace("mhz", "")
     texto = texto.replace("até", "a")
     texto = texto.replace("ate", "a")
@@ -2169,22 +2203,26 @@ def _normalizar_faixa_frequencia_tabela(valor):
     texto = texto.replace("—", "-")
     texto = texto.replace("−", "-")
 
-    numeros = re.findall(r"\d[\d.,]*", texto)
+    numeros = re.findall(r"\d[\d.,]*", texto_original)
+
+    if not numeros:
+        return ""
 
     if len(numeros) >= 2:
-        inicio = _normalizar_decimal_tabela(numeros[0])
-        fim = _normalizar_decimal_tabela(numeros[1])
+        inicio = _normalizar_decimal_frequencia_tabela(numeros[0])
+        fim = _normalizar_decimal_frequencia_tabela(numeros[1])
 
         if inicio and fim:
             return f"{inicio}-{fim}"
 
     if len(numeros) == 1:
-        valor_unico = _normalizar_decimal_tabela(numeros[0])
+        valor_unico = _normalizar_decimal_frequencia_tabela(numeros[0])
 
         if valor_unico:
             return valor_unico
 
     return ""
+    
 
 
 def _normalizar_potencia_tabela(valor):
@@ -2475,7 +2513,12 @@ def _tabela_tem_coluna_potencia(tabela):
     return "potencia_max_saida" in mapa_colunas
 
 
-def _extrair_linhas_comparaveis(tabela, usar_potencia=True, usar_intensidade=False):
+def _extrair_linhas_comparaveis(
+    tabela,
+    usar_potencia=True,
+    usar_intensidade=False,
+    usar_designacao=False,
+):
     tabela = tabela or {}
     cabecalho = list(tabela.get("cabecalho", []) or [])
     linhas = [list(l) for l in (tabela.get("linhas", []) or [])]
@@ -2498,7 +2541,7 @@ def _extrair_linhas_comparaveis(tabela, usar_potencia=True, usar_intensidade=Fal
             valor_faixa,
         )
 
-        # CCT pode vir com célula mesclada:
+        # CCT/SCH pode vir com célula mesclada:
         # primeira linha tem a faixa e as próximas vêm vazias.
         if faixa:
             ultima_faixa_valida = faixa
@@ -2535,10 +2578,31 @@ def _extrair_linhas_comparaveis(tabela, usar_potencia=True, usar_intensidade=Fal
                 valor_intensidade,
             )
 
+        designacao = ""
+
+        if usar_designacao:
+            idx_designacao = mapa_colunas.get("designacao_emissoes")
+            valor_designacao = (
+                linha[idx_designacao]
+                if idx_designacao is not None and idx_designacao < len(linha)
+                else ""
+            )
+
+            designacao = _normalizar_valor_tabela_por_campo(
+                "designacao_emissoes",
+                valor_designacao,
+            )
+
         if not faixa:
             continue
 
         if usar_potencia and not potencia:
+            continue
+
+        if usar_intensidade and not intensidade:
+            continue
+
+        if usar_designacao and not designacao:
             continue
 
         registro = {
@@ -2551,24 +2615,39 @@ def _extrair_linhas_comparaveis(tabela, usar_potencia=True, usar_intensidade=Fal
         if usar_intensidade:
             registro["intensidade_campo"] = intensidade
 
+        if usar_designacao:
+            registro["designacao_emissoes"] = designacao
+
         linhas_saida.append(registro)
 
     return linhas_saida
 
 
-def _assinatura_linha_tabela(registro, usar_potencia=True, usar_intensidade=False):
+def _assinatura_linha_tabela(
+    registro,
+    usar_potencia=True,
+    usar_intensidade=False,
+    usar_designacao=False,
+):
     faixa = registro.get("faixa_freq_tx", "")
     potencia = registro.get("potencia_max_saida", "") if usar_potencia else ""
     intensidade = registro.get("intensidade_campo", "") if usar_intensidade else ""
+    designacao = registro.get("designacao_emissoes", "") if usar_designacao else ""
 
     return (
         faixa,
         potencia,
         intensidade,
+        designacao,
     )
 
 
-def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=False):
+def _assinaturas_unicas_tabela(
+    linhas,
+    usar_potencia=True,
+    usar_intensidade=False,
+    usar_designacao=False,
+):
     assinaturas = set()
 
     for linha in linhas or []:
@@ -2576,14 +2655,21 @@ def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=Fals
             linha,
             usar_potencia=usar_potencia,
             usar_intensidade=usar_intensidade,
+            usar_designacao=usar_designacao,
         )
 
-        faixa, potencia, intensidade = assinatura
+        faixa, potencia, intensidade, designacao = assinatura
 
         if not faixa:
             continue
 
         if usar_potencia and not potencia:
+            continue
+
+        if usar_intensidade and not intensidade:
+            continue
+
+        if usar_designacao and not designacao:
             continue
 
         assinaturas.add(assinatura)
@@ -2592,25 +2678,37 @@ def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=Fals
 
 
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
-    tem_potencia_sch = _tabela_tem_coluna_potencia(tabela_sch)
-    tem_potencia_cct = _tabela_tem_coluna_potencia(tabela_cct)
+    tabela_sch = tabela_sch or {}
+    tabela_cct = tabela_cct or {}
 
-    tem_intensidade_sch = _tabela_tem_coluna_intensidade(tabela_sch)
-    tem_intensidade_cct = _tabela_tem_coluna_intensidade(tabela_cct)
+    mapa_sch = _mapear_colunas_relevantes(tabela_sch.get("cabecalho", []) or [])
+    mapa_cct = _mapear_colunas_relevantes(tabela_cct.get("cabecalho", []) or [])
 
-    usar_potencia = bool(tem_potencia_sch or tem_potencia_cct)
-    usar_intensidade = bool(tem_intensidade_sch or tem_intensidade_cct)
+    tem_potencia_sch = "potencia_max_saida" in mapa_sch
+    tem_potencia_cct = "potencia_max_saida" in mapa_cct
+
+    tem_intensidade_sch = "intensidade_campo" in mapa_sch
+    tem_intensidade_cct = "intensidade_campo" in mapa_cct
+
+    tem_designacao_sch = "designacao_emissoes" in mapa_sch
+    tem_designacao_cct = "designacao_emissoes" in mapa_cct
+
+    usar_potencia = bool(tem_potencia_sch and tem_potencia_cct)
+    usar_intensidade = bool(tem_intensidade_sch and tem_intensidade_cct)
+    usar_designacao = bool(tem_designacao_sch and tem_designacao_cct)
 
     linhas_sch = _extrair_linhas_comparaveis(
         tabela_sch,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
+        usar_designacao=usar_designacao,
     )
 
     linhas_cct = _extrair_linhas_comparaveis(
         tabela_cct,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
+        usar_designacao=usar_designacao,
     )
 
     # Se a coluna de intensidade existe, mas nenhum valor real foi extraído,
@@ -2628,12 +2726,14 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
                 tabela_sch,
                 usar_potencia=usar_potencia,
                 usar_intensidade=False,
+                usar_designacao=usar_designacao,
             )
 
             linhas_cct = _extrair_linhas_comparaveis(
                 tabela_cct,
                 usar_potencia=usar_potencia,
                 usar_intensidade=False,
+                usar_designacao=usar_designacao,
             )
 
     if not linhas_sch and not linhas_cct:
@@ -2647,12 +2747,14 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
         linhas_sch,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
+        usar_designacao=usar_designacao,
     )
 
     assinaturas_cct = _assinaturas_unicas_tabela(
         linhas_cct,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
+        usar_designacao=usar_designacao,
     )
 
     set_sch = set(assinaturas_sch)
@@ -2675,9 +2777,12 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
     if usar_intensidade:
         campos_comparados.append("Intensidade de Campo (µV/m)")
 
+    if usar_designacao:
+        campos_comparados.append("Designação de Emissões")
+
     nome_coluna = " / ".join(campos_comparados)
 
-    def _descricao_assinatura(faixa, potencia, intensidade):
+    def _descricao_assinatura(faixa, potencia, intensidade, designacao):
         partes = [f"Faixa={faixa or 'vazio'}"]
 
         if usar_potencia:
@@ -2686,21 +2791,29 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
         if usar_intensidade:
             partes.append(f"Intensidade={intensidade or 'vazio'}")
 
+        if usar_designacao:
+            partes.append(f"Designação={designacao or 'vazio'}")
+
         return " | ".join(partes)
 
-    for faixa, potencia, intensidade in faltando_no_cct:
+    for faixa, potencia, intensidade, designacao in faltando_no_cct:
         divergencias.append(
             {
                 "tipo": "combinacao_ausente_no_cct",
                 "linha": "",
                 "coluna": nome_coluna,
                 "nome_coluna": nome_coluna,
-                "valor_sch": _descricao_assinatura(faixa, potencia, intensidade),
+                "valor_sch": _descricao_assinatura(
+                    faixa,
+                    potencia,
+                    intensidade,
+                    designacao,
+                ),
                 "valor_cct": "Não encontrada no CCT",
             }
         )
 
-    for faixa, potencia, intensidade in faltando_no_sch:
+    for faixa, potencia, intensidade, designacao in faltando_no_sch:
         divergencias.append(
             {
                 "tipo": "combinacao_ausente_no_sch",
@@ -2708,50 +2821,72 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
                 "coluna": nome_coluna,
                 "nome_coluna": nome_coluna,
                 "valor_sch": "Não encontrada no SCH",
-                "valor_cct": _descricao_assinatura(faixa, potencia, intensidade),
+                "valor_cct": _descricao_assinatura(
+                    faixa,
+                    potencia,
+                    intensidade,
+                    designacao,
+                ),
             }
+        )
+
+    if usar_potencia and usar_intensidade and usar_designacao:
+        motivo = "comparacao_por_faixa_potencia_intensidade_e_designacao"
+    elif usar_potencia and usar_designacao:
+        motivo = "comparacao_por_faixa_potencia_e_designacao"
+    elif usar_potencia and usar_intensidade:
+        motivo = "comparacao_por_faixa_potencia_e_intensidade"
+    elif usar_potencia:
+        motivo = "comparacao_por_faixa_e_potencia"
+    elif usar_intensidade:
+        motivo = "comparacao_por_faixa_e_intensidade"
+    else:
+        motivo = "comparacao_por_faixa_de_frequencia"
+
+    colunas_ignoradas = [
+        "Tecnologia / Technology",
+        "Tipo de Modulação / Type of Modulation",
+        "SAR Cabeça / SAR head",
+        "SAR Corpo / SAR body",
+        "Padrão / Standard",
+        "Taxa de transmissão / Transmission rate",
+    ]
+
+    if not usar_designacao:
+        colunas_ignoradas.insert(
+            0,
+            "Designação de Emissões / Designation of Emissions",
         )
 
     return {
         "status": "ok" if not divergencias else "divergente",
-        "motivo": (
-            "comparacao_por_faixa_potencia_e_intensidade"
-            if usar_intensidade
-            else "comparacao_por_faixa_e_potencia"
-            if usar_potencia
-            else "comparacao_por_faixa_de_frequencia"
-        ),
+        "motivo": motivo,
         "linhas_sch": len(assinaturas_sch),
         "linhas_cct": len(assinaturas_cct),
         "linhas_extraidas_sch": len(linhas_sch),
         "linhas_extraidas_cct": len(linhas_cct),
         "usar_potencia": usar_potencia,
         "usar_intensidade": usar_intensidade,
+        "usar_designacao": usar_designacao,
         "campos_comparados": campos_comparados,
-        "colunas_ignoradas_do_cct": [
-            "Designação de Emissões / Designation of Emissions",
-            "Tecnologia / Technology",
-            "Tipo de Modulação / Type of Modulation",
-            "SAR Cabeça / SAR head",
-            "SAR Corpo / SAR body",
-            "Padrão / Standard",
-            "Taxa de transmissão / Transmission rate",
-        ],
+        "colunas_ignoradas_do_cct": colunas_ignoradas,
         "assinaturas_sch": [
             {
                 "faixa_freq_tx": faixa,
                 "potencia_max_saida": potencia,
                 "intensidade_campo": intensidade,
+                "designacao_emissoes": designacao,
             }
-            for faixa, potencia, intensidade in assinaturas_sch
+            for faixa, potencia, intensidade, designacao in assinaturas_sch
         ],
         "assinaturas_cct": [
             {
                 "faixa_freq_tx": faixa,
                 "potencia_max_saida": potencia,
                 "intensidade_campo": intensidade,
+                "designacao_emissoes": designacao,
             }
-            for faixa, potencia, intensidade in assinaturas_cct
+            for faixa, potencia, intensidade, designacao in assinaturas_cct
         ],
         "divergencias": divergencias,
     }
@@ -2800,29 +2935,34 @@ def extrair_tabela_tecnica_sch(driver, wait):
         tem_faixa = "faixa_freq_tx" in mapa
         tem_potencia = "potencia_max_saida" in mapa
         tem_intensidade = "intensidade_campo" in mapa
+        tem_designacao = "designacao_emissoes" in mapa
 
         if not tem_faixa:
             return -1, []
 
         usar_potencia = tem_potencia
         usar_intensidade = tem_intensidade
+        usar_designacao = tem_designacao
 
         linhas_comp = _extrair_linhas_comparaveis(
             tabela_limpa,
             usar_potencia=usar_potencia,
             usar_intensidade=usar_intensidade,
+            usar_designacao=usar_designacao,
         )
 
         assinaturas = _assinaturas_unicas_tabela(
             linhas_comp,
             usar_potencia=usar_potencia,
             usar_intensidade=usar_intensidade,
+            usar_designacao=usar_designacao,
         )
 
         pontuacao = 0
         pontuacao += 50 if tem_faixa else 0
         pontuacao += 35 if tem_potencia else 0
         pontuacao += 25 if tem_intensidade else 0
+        pontuacao += 20 if tem_designacao else 0
         pontuacao += len(linhas_comp) * 10
         pontuacao += len(assinaturas) * 5
 
@@ -4152,39 +4292,33 @@ def _tabela_tem_valores_sar(tabela):
 
 
 def _texto_tem_valores_sar_em_contexto(texto):
+    """
+    Fallback restritivo para SAR em texto corrido.
+
+    Não considera números apenas porque aparecem depois de um cabeçalho SAR,
+    pois isso gera falso positivo com potência, frequência e taxa de transmissão.
+
+    Só considera SAR aplicável quando houver padrão explícito:
+    - SAR Corpo: 0,174 W/kg
+    - SAR Body: 0.174 W/kg
+    - SAR Cabeça: 0,123
+    """
     texto = texto or ""
-    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+    texto_norm = _norm_sar(texto)
 
     valores = []
 
-    for i, linha in enumerate(linhas):
-        linha_norm = _norm_sar(linha)
+    padroes_explicitos = [
+        r"\bsar\s*(?:corpo|body|cabeca|cabeça|head)\s*[:=\-]?\s*(\d+[,.]\d+)\s*(?:w\s*/?\s*kg|wkg)?",
+        r"\b(?:corpo|body|cabeca|cabeça|head)\s*sar\s*[:=\-]?\s*(\d+[,.]\d+)\s*(?:w\s*/?\s*kg|wkg)?",
+        r"\bvalor\s+sar\s*(?:corpo|body|cabeca|cabeça|head)?\s*[:=\-]?\s*(\d+[,.]\d+)\s*(?:w\s*/?\s*kg|wkg)?",
+    ]
 
-        if "sar" not in linha_norm:
-            continue
+    for padrao in padroes_explicitos:
+        for m in re.finditer(padrao, texto_norm, flags=re.I):
+            numero = m.group(1)
 
-        if not any(
-            termo in linha_norm
-            for termo in [
-                "corpo",
-                "body",
-                "cabeca",
-                "head",
-                "w/kg",
-                "w kg",
-            ]
-        ):
-            continue
-
-        janela = " ".join(linhas[i:i + 30])
-
-        for numero in re.findall(r"\d+[,.]\d+", janela):
-            try:
-                valor_float = float(numero.replace(".", "").replace(",", "."))
-            except Exception:
-                continue
-
-            if 0 < valor_float <= 20:
+            if _valor_sar_real(numero):
                 valores.append(numero)
 
     return {
@@ -4195,16 +4329,15 @@ def _texto_tem_valores_sar_em_contexto(texto):
 
 
 
-
 def analisar_sar_cct(dados_pdf):
     """
     Analisa se deve preencher 'Ensaio de SAR não aplicável.' na Corrigir Minuta.
 
     Regra:
     1. Valor real em coluna SAR Cabeça/Corpo => SAR aplicável.
-    2. Valor explícito de SAR em texto corrido => SAR aplicável.
+    2. Coluna SAR existente, mas vazia/traço/N/A => SAR não aplicável e preencher frase.
     3. Frase segura de SAR não aplicável => preencher frase.
-    4. Coluna SAR existente, mas vazia/traço/N/A => SAR não aplicável e preencher frase.
+    4. Valor explícito de SAR em texto corrido => SAR aplicável.
     5. Sem coluna SAR e sem frase segura => revisar manualmente.
     """
     dados_pdf = dados_pdf or {}
@@ -4214,6 +4347,7 @@ def analisar_sar_cct(dados_pdf):
 
     tabela_cct = dados_pdf.get("tabela_tecnica_cct") or {}
 
+    # 1. Prioridade máxima: valor real na tabela SAR.
     resultado_tabela = _tabela_tem_valores_sar(tabela_cct)
 
     if resultado_tabela.get("tem_sar"):
@@ -4231,23 +4365,24 @@ def analisar_sar_cct(dados_pdf):
             "origem": "tabela_tecnica_cct",
         }
 
-    resultado_texto = _texto_tem_valores_sar_em_contexto(texto)
-
-    if resultado_texto.get("tem_sar"):
+    # 2. Se existe coluna SAR, mas ela não tem valor real, não procurar número solto no texto.
+    # Isso evita falso positivo com potência, frequência e taxa de transmissão.
+    if _dados_pdf_tem_coluna_sar(dados_pdf):
         return {
-            "status": "sar_aplicavel",
+            "status": "sar_nao_aplicavel",
             "mensagem": (
-                "SAR aplicável: foram encontrados valores explícitos de SAR "
-                "no texto do CCT. Não preencher 'Ensaio de SAR não aplicável.'."
+                "O CCT possui coluna SAR, mas não foram encontrados valores reais "
+                "nas colunas SAR Cabeça/Corpo. Considerado SAR não aplicável."
             ),
-            "preencher_frase": False,
-            "frase": "",
-            "sar_aplicavel": True,
-            "sar_nao_aplicavel": False,
-            "valores_sar_encontrados": resultado_texto.get("valores", []),
-            "origem": "texto_completo_explicito",
+            "preencher_frase": True,
+            "frase": FRASE_SAR_NAO_APLICAVEL,
+            "sar_aplicavel": False,
+            "sar_nao_aplicavel": True,
+            "valores_sar_encontrados": [],
+            "origem": "coluna_sar_sem_valor",
         }
 
+    # 3. Frases seguras de SAR não aplicável.
     frases_sar_nao_aplicavel = [
         "ensaio de sar nao aplicavel",
         "sar nao aplicavel",
@@ -4282,19 +4417,22 @@ def analisar_sar_cct(dados_pdf):
             "origem": "texto_completo",
         }
 
-    if _dados_pdf_tem_coluna_sar(dados_pdf):
+    # 4. Fallback por texto corrido, somente quando não existe coluna SAR estruturada.
+    resultado_texto = _texto_tem_valores_sar_em_contexto(texto)
+
+    if resultado_texto.get("tem_sar"):
         return {
-            "status": "sar_nao_aplicavel",
+            "status": "sar_aplicavel",
             "mensagem": (
-                "O CCT possui coluna SAR, mas não foram encontrados valores reais "
-                "nas colunas SAR Cabeça/Corpo. Considerado SAR não aplicável."
+                "SAR aplicável: foram encontrados valores explícitos de SAR "
+                "no texto do CCT. Não preencher 'Ensaio de SAR não aplicável.'."
             ),
-            "preencher_frase": True,
-            "frase": FRASE_SAR_NAO_APLICAVEL,
-            "sar_aplicavel": False,
-            "sar_nao_aplicavel": True,
-            "valores_sar_encontrados": [],
-            "origem": "coluna_sar_sem_valor",
+            "preencher_frase": False,
+            "frase": "",
+            "sar_aplicavel": True,
+            "sar_nao_aplicavel": False,
+            "valores_sar_encontrados": resultado_texto.get("valores", []),
+            "origem": "texto_completo_explicito",
         }
 
     return {
