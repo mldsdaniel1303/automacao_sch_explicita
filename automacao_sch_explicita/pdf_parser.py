@@ -929,18 +929,73 @@ def _extrair_homologacoes_vinculadas(texto):
 
 def _extrair_regulamentos_do_texto(texto):
     texto = texto or ""
-    padroes = [
-        r"Normas\s+aplic[aá]veis\s*/\s*Applicable\s+Standards\s*[:\-]?\s*([^\n]+)",
-        r"Normas\s+aplic[aá]veis\s*[:\-]?\s*([^\n]+)",
-        r"Applicable\s+Standards\s*[:\-]?\s*([^\n]+)",
-    ]
 
-    for padrao in padroes:
-        m = re.search(padrao, texto, flags=re.I)
-        if m:
-            return _limpar_texto(m.group(1))
+    def _normalizar_norma_numero(numero):
+        return re.sub(r"\D+", "", str(numero or ""))
 
-    return ""
+    def _adicionar_norma(saida, tipo, numero):
+        numero_norm = _normalizar_norma_numero(numero)
+
+        if not numero_norm:
+            return
+
+        if tipo == "ato":
+            item = f"Ato nº {numero_norm}"
+        elif tipo == "resolucao":
+            item = f"Resolução nº {numero_norm}"
+        else:
+            return
+
+        chave = _normalizar_texto(item)
+
+        if chave not in { _normalizar_texto(x) for x in saida }:
+            saida.append(item)
+
+    # Recorte preferencial do bloco "Normas Aplicáveis"
+    bloco = texto
+
+    m = re.search(
+        r"Normas\s+Aplic[aá]veis\s*/?\s*Applicable\s+Standards\s*:?(?P<bloco>.*?)(?:Laborat[oó]rio|Laboratories|Relat[oó]rio|Reports|Informa[cç][oõ]es\s+Adicionais|Additional\s+Information|$)",
+        texto,
+        flags=re.I | re.S,
+    )
+
+    if m:
+        bloco = m.group("bloco")
+
+    normas = []
+
+    for m_ato in re.finditer(
+        r"\bAto(?:\s+ANATEL)?\s*n?[º°o]?\s*\.?\s*([\d.\s]+)",
+        bloco,
+        flags=re.I,
+    ):
+        _adicionar_norma(normas, "ato", m_ato.group(1))
+
+    for m_res in re.finditer(
+        r"\bResolu[cç][aã]o\s*n?[º°o]?\s*\.?\s*([\d.\s]+)",
+        bloco,
+        flags=re.I,
+    ):
+        _adicionar_norma(normas, "resolucao", m_res.group(1))
+
+    # Fallback no texto completo, caso o recorte do bloco falhe.
+    if not normas:
+        for m_ato in re.finditer(
+            r"\bAto(?:\s+ANATEL)?\s*n?[º°o]?\s*\.?\s*([\d.\s]+)",
+            texto,
+            flags=re.I,
+        ):
+            _adicionar_norma(normas, "ato", m_ato.group(1))
+
+        for m_res in re.finditer(
+            r"\bResolu[cç][aã]o\s*n?[º°o]?\s*\.?\s*([\d.\s]+)",
+            texto,
+            flags=re.I,
+        ):
+            _adicionar_norma(normas, "resolucao", m_res.group(1))
+
+    return "; ".join(normas)
 
 
 def _classificar_observacao_cct(texto):

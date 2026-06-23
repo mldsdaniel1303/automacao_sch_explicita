@@ -30,6 +30,21 @@ XPATHS_TABELA_ANEXOS = [
     "//table[.//th[contains(., 'Tipo')] or .//td[contains(., 'Tipo')]]",
 ]
 
+
+FILA_SCH_ATUAL = "Em Análise"
+
+FILAS_SCH_SUPORTADAS = {
+    "Em Análise": [
+        "Em Análise",
+        "Em Analise",
+    ],
+    "Retorno Para Estudo": [
+        "Retorno Para Estudo",
+        "Retorno para Estudo",
+        "Retorno Para estudo",
+    ],
+}
+
 OBS_RADIACAO_RESTRITA = (
     "Na instalação do produto devem ser observadas as condições de uso "
     "conforme estabelecido no Regulamento sobre Equipamentos de "
@@ -570,15 +585,19 @@ def _esta_na_tela_login_sch(driver):
     return False
 
 
-def garantir_sessao_ativa_sch(driver, wait, contexto="", reabrir_fila=True):
+def garantir_sessao_ativa_sch(driver, wait, contexto="", reabrir_fila=True, nome_fila=None):
     """
     Verifica se o SCH caiu na tela de login.
-    Se caiu, pausa para o usuário logar novamente e reabre a fila Em Análise.
-    Retorna True quando precisou refazer login.
-    Retorna False quando a sessão já estava ativa.
+    Se caiu, pausa para o usuário logar novamente e reabre a fila atual.
+
+    A fila atual pode ser:
+    - Em Análise
+    - Retorno Para Estudo
     """
     if not _esta_na_tela_login_sch(driver):
         return False
+
+    fila_para_reabrir = nome_fila or FILA_SCH_ATUAL or "Em Análise"
 
     print("=" * 90)
     print("[SCH][LOGIN] A sessão do SCH parece ter expirado ou voltou para a tela de login.")
@@ -603,9 +622,12 @@ def garantir_sessao_ativa_sch(driver, wait, contexto="", reabrir_fila=True):
         if not _esta_na_tela_login_sch(driver):
             if reabrir_fila:
                 try:
-                    clicar_fila_em_analise(driver, wait)
+                    clicar_fila_sch(driver, wait, fila_para_reabrir)
                 except Exception as e:
-                    print(f"[SCH][WARN] Login refeito, mas não foi possível clicar na fila Em Análise automaticamente: {e}")
+                    print(
+                        "[SCH][WARN] Login refeito, mas não foi possível clicar "
+                        f"na fila '{fila_para_reabrir}' automaticamente: {e}"
+                    )
 
             print("[SCH][LOGIN] Sessão restaurada. Continuando fluxo.")
             return True
@@ -615,16 +637,130 @@ def garantir_sessao_ativa_sch(driver, wait, contexto="", reabrir_fila=True):
     raise Exception("Sessão SCH expirada. Não foi possível restaurar o login após 3 tentativas.")
 
 
+def _resolver_nome_fila_sch(nome_fila):
+    nome_fila = str(nome_fila or "").strip()
+
+    if not nome_fila:
+        return "Em Análise"
+
+    nome_norm = _normalizar_texto_comparacao(nome_fila)
+
+    if nome_norm in {"em analise", "analise"}:
+        return "Em Análise"
+
+    if nome_norm in {
+        "retorno para estudo",
+        "retorno pra estudo",
+        "retorno estudo",
+    }:
+        return "Retorno Para Estudo"
+
+    return nome_fila
+
+
+def clicar_fila_sch(driver, wait, nome_fila="Em Análise"):
+    """
+    Abre uma fila do menu lateral do SCH/Mosaico.
+
+    Exemplos:
+    - Em Análise
+    - Retorno Para Estudo
+
+    O restante do fluxo continua igual para qualquer fila.
+    """
+    global FILA_SCH_ATUAL
+
+    nome_fila = _resolver_nome_fila_sch(nome_fila)
+    rotulos = FILAS_SCH_SUPORTADAS.get(nome_fila, [nome_fila])
+
+    print(f"[SCH] Clicando na fila {nome_fila}...")
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    xpaths = []
+
+    for rotulo in rotulos:
+        xpaths.extend(
+            [
+                f"//a[contains(normalize-space(.), '{rotulo}')]",
+                f"//span[contains(normalize-space(.), '{rotulo}')]/ancestor::a[1]",
+                f"//*[self::a or self::button][contains(normalize-space(.), '{rotulo}')]",
+                f"//*[contains(normalize-space(.), '{rotulo}')]/ancestor::*[self::a or self::button][1]",
+            ]
+        )
+
+    ultimo_erro = None
+
+    for tentativa in range(1, 4):
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        for xpath in xpaths:
+            try:
+                elementos = WebDriverWait(driver, 3, poll_frequency=0.1).until(
+                    EC.presence_of_all_elements_located((By.XPATH, xpath))
+                )
+
+                for elemento in elementos:
+                    try:
+                        alvo = elemento
+
+                        tag = (alvo.tag_name or "").lower()
+
+                        if tag not in {"a", "button"}:
+                            try:
+                                alvo = elemento.find_element(
+                                    By.XPATH,
+                                    "./ancestor::*[self::a or self::button][1]",
+                                )
+                            except Exception:
+                                alvo = elemento
+
+                        if not alvo.is_displayed() or not alvo.is_enabled():
+                            continue
+
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});",
+                            alvo,
+                        )
+
+                        _clicar_com_fallback(driver, alvo)
+                        esperar_tela_carregar(driver, 1.2)
+
+                        try:
+                            _aguardar_tabela_fila(driver, timeout=6)
+                        except Exception:
+                            pass
+
+                        FILA_SCH_ATUAL = nome_fila
+
+                        print(f"[SCH] Fila aberta: {nome_fila}")
+                        return True
+
+                    except Exception as e:
+                        ultimo_erro = e
+                        continue
+
+            except Exception as e:
+                ultimo_erro = e
+                continue
+
+        esperar_tela_carregar(driver, 0.5)
+
+    raise Exception(f"Não foi possível abrir a fila '{nome_fila}'. Último erro: {ultimo_erro}")
+
+
 def clicar_fila_em_analise(driver, wait):
-    xpath_fila = "//a[normalize-space()='Em Análise' or contains(normalize-space(), 'Em Análise')]"
+    return clicar_fila_sch(driver, wait, "Em Análise")
 
-    print("[SCH] Clicando na fila Em Análise...")
-    fila = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_fila)))
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", fila)
-    driver.execute_script("arguments[0].click();", fila)
 
-    esperar_tela_carregar(driver, 1.2)
-    print("[SCH] Fila aberta.")
+def clicar_fila_retorno_para_estudo(driver, wait):
+    return clicar_fila_sch(driver, wait, "Retorno Para Estudo")
 
 
 def coletar_requerimentos(driver, wait, regras):
@@ -679,6 +815,7 @@ def coletar_requerimentos(driver, wait, regras):
                 "fabricante": valor_coluna(idx_fabricante),
                 "data_conclusao": valor_coluna(idx_data_conclusao),
                 "texto_linha": texto_linha,
+                "fila_sch": FILA_SCH_ATUAL,
             }
 
             dados = _garantir_ano_no_requerimento(dados)
@@ -5294,42 +5431,112 @@ def marcar_acompanhar_processo(driver, wait):
     return False
 
 
+def _localizar_campo_acompanhar_processo(driver, wait):
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.08)
+
+    xpaths = [
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Informações Adicionais')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Informacoes Adicionais')]/following::textarea[1]",
+        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[not(@disabled) and not(@readonly)]",
+    ]
+
+    for xpath in xpaths:
+        try:
+            elementos = WebDriverWait(driver, 4, poll_frequency=0.1).until(
+                EC.presence_of_all_elements_located((By.XPATH, xpath))
+            )
+
+            candidatos = []
+
+            for el in elementos:
+                try:
+                    if not el.is_displayed() or not el.is_enabled():
+                        continue
+
+                    tamanho = el.size or {}
+                    largura = tamanho.get("width", 0)
+                    altura = tamanho.get("height", 0)
+
+                    # Evita pegar textarea pequeno/invisível.
+                    if largura < 100 or altura < 30:
+                        continue
+
+                    candidatos.append(el)
+                except Exception:
+                    continue
+
+            if candidatos:
+                # Normalmente o campo correto é o maior textarea visível.
+                candidatos.sort(
+                    key=lambda e: (e.size.get("width", 0) * e.size.get("height", 0)),
+                    reverse=True,
+                )
+
+                campo = candidatos[0]
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});",
+                    campo,
+                )
+                return campo
+
+        except Exception:
+            continue
+
+    return None
+
+
 def preencher_acompanhar_processo(driver, wait, texto):
+    texto = str(texto or "").strip()
+
     if not texto:
         print("[SCH][WARN] Texto vazio para Acompanhar Processo.")
         return False
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.04)
+    esperar_tela_carregar(driver, 0.08)
 
     marcar_acompanhar_processo(driver, wait)
 
-    xpaths_texto = [
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
-        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "(//textarea[not(@disabled)])[1]",
-    ]
+    campo = _localizar_campo_acompanhar_processo(driver, wait)
 
-    campo = _achar_primeiro_elemento_visivel(
-        driver,
-        xpaths_texto,
-        "campo Acompanhar Processo",
-        timeout=4,
-    )
+    if not campo:
+        print("[SCH][WARN] Campo de Acompanhar Processo não encontrado.")
+        return False
 
-    _clicar_com_fallback(driver, campo)
+    print("[SCH] Preenchendo campo 'Acompanhar Processo'...")
 
     try:
-        campo.send_keys(Keys.CONTROL, "a")
-        campo.send_keys(Keys.DELETE)
-        campo.send_keys(texto)
-    except Exception:
+        driver.execute_script(
+            """
+            arguments[0].scrollIntoView({block:'center'});
+            arguments[0].focus();
+            """,
+            campo,
+        )
+
+        try:
+            campo.click()
+            campo.send_keys(Keys.CONTROL, "a")
+            campo.send_keys(Keys.DELETE)
+        except Exception:
+            pass
+
+        # Preenchimento principal por JS, com eventos.
         driver.execute_script(
             """
             arguments[0].value = arguments[1];
-            arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
+
+            arguments[0].dispatchEvent(new Event('focus', {bubbles:true}));
+            arguments[0].dispatchEvent(new InputEvent('input', {
+                bubbles:true,
+                inputType:'insertText',
+                data: arguments[1]
+            }));
             arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
             arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
             """,
@@ -5337,30 +5544,31 @@ def preencher_acompanhar_processo(driver, wait, texto):
             texto,
         )
 
-    esperar_tela_carregar(driver, 0.04)
+        try:
+            campo.send_keys(Keys.TAB)
+        except Exception:
+            pass
 
-    try:
-        valor = (campo.get_attribute("value") or "").strip()
-        if texto.strip() in valor:
-            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
-            return True
-    except Exception:
-        pass
+        esperar_tela_carregar(driver, 0.15)
 
-    try:
-        valor_js = driver.execute_script(
-            "return (arguments[0].value || arguments[0].textContent || '').trim();",
+        valor = driver.execute_script(
+            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
             campo,
-        )
-        if texto.strip() in (valor_js or ""):
+        ) or ""
+
+        if _normalizar_texto_comparacao(texto) in _normalizar_texto_comparacao(valor):
             print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
             return True
-    except Exception:
-        pass
 
-    print("[SCH][WARN] O campo de acompanhamento foi preenchido, mas não foi possível validar o valor.")
-    return False
+        print(
+            "[SCH][WARN] Campo de acompanhamento recebeu tentativa de preenchimento, "
+            "mas o texto não foi confirmado."
+        )
+        return False
 
+    except Exception as e:
+        print(f"[SCH][WARN] Falha ao preencher Acompanhar Processo: {e}")
+        return False
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
@@ -5442,16 +5650,19 @@ def preencher_informacoes_adicionais_com_analise(
         }
 
 
-def voltar_para_fila(driver, wait):
-    print("[SCH] Voltando para a fila...")
+def voltar_para_fila(driver, wait, nome_fila=None):
+    fila_destino = nome_fila or FILA_SCH_ATUAL or "Em Análise"
+
+    print(f"[SCH] Voltando para a fila {fila_destino}...")
 
     if garantir_sessao_ativa_sch(
         driver,
         wait,
         contexto="ao tentar voltar para a fila",
         reabrir_fila=True,
+        nome_fila=fila_destino,
     ):
-        print("[SCH] Retorno para a fila concluído após refazer login.")
+        print(f"[SCH] Retorno para a fila {fila_destino} concluído após refazer login.")
         return
 
     candidatos = [
@@ -5460,7 +5671,10 @@ def voltar_para_fila(driver, wait):
         "//img[contains(@src,'voltar')]/..",
     ]
 
-    driver.switch_to.default_content()
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
 
     for xpath in candidatos:
         try:
@@ -5472,8 +5686,10 @@ def voltar_para_fila(driver, wait):
             WebDriverWait(driver, 3, poll_frequency=0.08).until(
                 EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
             )
-            print("[SCH] Retorno para a fila concluído por botão.")
+
+            print(f"[SCH] Retorno para a fila {fila_destino} concluído por botão.")
             return
+
         except Exception:
             continue
 
@@ -5484,21 +5700,32 @@ def voltar_para_fila(driver, wait):
         WebDriverWait(driver, 3, poll_frequency=0.08).until(
             EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
         )
-        print("[SCH] Retorno para a fila concluído por back().")
+
+        print(f"[SCH] Retorno para a fila {fila_destino} concluído por back().")
         return
+
     except Exception:
         pass
+
+    try:
+        clicar_fila_sch(driver, wait, fila_destino)
+        print(f"[SCH] Retorno para a fila {fila_destino} concluído por clique no menu lateral.")
+        return
+
+    except Exception as e:
+        print(f"[SCH][WARN] Não foi possível voltar clicando na fila {fila_destino}: {e}")
 
     if garantir_sessao_ativa_sch(
         driver,
         wait,
         contexto="após falha ao voltar para a fila",
         reabrir_fila=True,
+        nome_fila=fila_destino,
     ):
-        print("[SCH] Retorno para a fila concluído após refazer login.")
+        print(f"[SCH] Retorno para a fila {fila_destino} concluído após refazer login.")
         return
 
-    raise Exception("Não foi possível voltar para a fila.")
+    raise Exception(f"Não foi possível voltar para a fila {fila_destino}.")
 
 
 

@@ -19,26 +19,107 @@ def normalizar_lista(valores: List[str]) -> List[str]:
     return [normalizar_texto(v) for v in (valores or []) if str(v).strip()]
 
 
+def _normalizar_numero_norma(valor: str) -> str:
+    """
+    Normaliza número de norma para comparação.
+
+    Exemplos:
+    - 14.448 -> 14448
+    - 17.087 -> 17087
+    - Ato nº 1120 -> 1120
+    - Resolução nº 680 -> 680
+    """
+    return re.sub(r"\D+", "", str(valor or ""))
+
+
+def _normalizar_texto_norma_para_busca(texto: str) -> str:
+    """
+    Normaliza texto do CCT preservando sinais úteis de norma.
+
+    Diferente de normalizar_texto(), esta função não remove tudo antes
+    de tratar separadores de milhar, para permitir:
+    - Ato nº 14.448 -> Ato nº 14448
+    - Ato nº 17.087 -> Ato nº 17087
+    """
+    texto = texto or ""
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    texto = texto.lower()
+
+    # Remove separador de milhar em números de normas:
+    # 14.448 -> 14448 / 17.087 -> 17087.
+    texto = re.sub(r"(?<=\d)[.\s](?=\d{3}\b)", "", texto)
+
+    texto = texto.replace("nº", "n")
+    texto = texto.replace("n°", "n")
+    texto = texto.replace("n.o", "n")
+    texto = texto.replace("numero", "n")
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _norma_numero_presente_no_texto(texto: str, numero: str, tipo: str = "") -> bool:
+    """
+    Verifica se uma norma está presente no texto do CCT,
+    aceitando variações como:
+
+    - Ato nº 14448
+    - Ato ANATEL nº 14.448
+    - Ato n° 1120
+    - Resolução nº 680
+    - Resolucao n 680
+    """
+    numero_norm = _normalizar_numero_norma(numero)
+
+    if not numero_norm:
+        return False
+
+    universo = _normalizar_texto_norma_para_busca(texto)
+    tipo_norm = normalizar_texto(tipo)
+
+    padroes = []
+
+    if not tipo_norm or tipo_norm == "ato":
+        padroes.append(
+            rf"\bato(?:\s+anatel)?\s*n?\s*\.?\s*{numero_norm}\b"
+        )
+
+    if not tipo_norm or tipo_norm == "resolucao":
+        padroes.append(
+            rf"\bresolucao\s*n?\s*\.?\s*{numero_norm}\b"
+        )
+
+    return any(re.search(padrao, universo, flags=re.I) for padrao in padroes)
+
+
 def extrair_atos_do_texto(texto: str) -> List[str]:
     """
     Extrai referências do tipo:
     - Ato nº 14448
+    - Ato ANATEL nº 14.448
     - Ato n° 77
     - Resolução nº 680
     - Resolucao n 680
     """
     texto = texto or ""
+    universo = _normalizar_texto_norma_para_busca(texto)
 
     padrao = re.compile(
-        r"\b(Ato|Resolucao|Resolução)\s*n[ºo°]?\s*(\d{1,6})\b",
+        r"\b(Ato|Resolucao|Resolução)\s*(?:ANATEL)?\s*n?[ºo°]?\s*\.?\s*(\d{1,6})\b",
         flags=re.I,
     )
 
-    encontrados = []
+    encontrados: List[str] = []
 
-    for tipo, numero in padrao.findall(texto):
-        tipo = "Resolução" if normalizar_texto(tipo) == "resolucao" else "Ato"
-        ref = f"{tipo} nº {numero}"
+    for tipo, numero in padrao.findall(universo):
+        tipo_norm = normalizar_texto(tipo)
+        numero_norm = _normalizar_numero_norma(numero)
+
+        if not numero_norm:
+            continue
+
+        tipo_final = "Resolução" if tipo_norm == "resolucao" else "Ato"
+        ref = f"{tipo_final} nº {numero_norm}"
 
         if ref not in encontrados:
             encontrados.append(ref)
@@ -501,9 +582,40 @@ def _texto_tem_termos_ato_77(texto: str) -> bool:
 
 
 def _ato_presente(ato: str, atos_encontrados: List[str]) -> bool:
+    """
+    Verifica presença de ato/resolução tolerando diferenças de grafia.
+
+    Exemplos equivalentes:
+    - Ato nº 14448
+    - Ato ANATEL nº 14.448
+    - Ato n° 14448
+    """
     ato_norm = normalizar_texto(ato)
+    numero_ato = _normalizar_numero_norma(ato)
     encontrados_norm = normalizar_lista(atos_encontrados)
-    return ato_norm in encontrados_norm
+
+    if ato_norm in encontrados_norm:
+        return True
+
+    if not numero_ato:
+        return False
+
+    tipo_ato = "resolucao" if "resolucao" in ato_norm else "ato"
+
+    for encontrado in atos_encontrados or []:
+        encontrado_norm = normalizar_texto(encontrado)
+        numero_encontrado = _normalizar_numero_norma(encontrado)
+
+        if numero_encontrado != numero_ato:
+            continue
+
+        # Evita aceitar Resolução nº 680 como Ato nº 680, caso existisse.
+        tipo_encontrado = "resolucao" if "resolucao" in encontrado_norm else "ato"
+
+        if tipo_encontrado == tipo_ato:
+            return True
+
+    return False
 
 
 def validar_atos_esperados(

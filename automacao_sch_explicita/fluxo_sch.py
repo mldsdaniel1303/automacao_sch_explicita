@@ -8,7 +8,7 @@ from utils import aguardar_enter, carregar_regras, salvar_json, nome_seguro
 from pdf_parser import parsear_certificado_pdf
 from funcoes_sch import (
     abrir_sch,
-    clicar_fila_em_analise,
+    clicar_fila_sch,
     coletar_requerimentos,
     abrir_requerimento,
     clicar_aba_anexos,
@@ -248,6 +248,27 @@ def perguntar_se_fecha_navegador():
         print("[SCH][WARN] Resposta inválida. Digite 's' para sim ou 'n' para não.")
 
 
+def perguntar_fila_sch():
+    """
+    Define qual fila do SCH será processada.
+    O restante do fluxo é exatamente o mesmo para qualquer fila.
+    """
+    while True:
+        print("\n[SCH] Qual fila deseja processar?")
+        print("1. Em Análise")
+        print("2. Retorno Para Estudo")
+
+        resposta = input("Opção [1/2]: ").strip().lower()
+
+        if resposta in {"", "1", "em analise", "em análise"}:
+            return "Em Análise"
+
+        if resposta in {"2", "retorno para estudo", "retorno pra estudo"}:
+            return "Retorno Para Estudo"
+
+        print("[SCH][WARN] Opção inválida. Digite 1 ou 2.")
+
+
 def _montar_ignorados_resumidos(requerimentos_ignorados):
     ignorados_resumidos = []
 
@@ -283,9 +304,15 @@ def executar_fluxo_sch(
     pausar_antes_anexos=False,
     categorias_anexos=None,
     fechar_navegador_ao_final=None,
+    fila_sch=None,
 ):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
+
+    if not fila_sch:
+        fila_sch = perguntar_fila_sch()
+
+    print(f"[SCH] Fila selecionada para processamento: {fila_sch}")
 
     regras = carregar_regras()
     regras["pausar_antes_anexos"] = pausar_antes_anexos
@@ -325,8 +352,12 @@ def executar_fluxo_sch(
 
         inicio_execucao = datetime.now()
 
-        clicar_fila_em_analise(driver, wait)
+        clicar_fila_sch(driver, wait, fila_sch)
         requerimentos = coletar_requerimentos(driver, wait, regras)
+
+        for req in requerimentos:
+            if isinstance(req, dict):
+                req["fila_sch"] = fila_sch
 
         requerimentos = list(reversed(requerimentos))
 
@@ -390,9 +421,6 @@ def executar_fluxo_sch(
             numero = _numero_requerimento(req)
             pasta_req = pasta_requerimentos / nome_seguro(numero)
 
-            # Garantia inicial:
-            # Nome Comercial nunca deve ficar vazio no relatório.
-            # Se ainda não foi extraído da aba Dados Gerais, usa o modelo da fila.
             if not req.get("nome_comercial"):
                 req["nome_comercial"] = req.get("modelo", "")
 
@@ -407,6 +435,7 @@ def executar_fluxo_sch(
             resumo = {
                 "requerimento": req,
                 "pasta_requerimento": str(pasta_req),
+                "fila_sch": fila_sch,
                 "anexos_baixados": [],
                 "dados_pdf": {},
                 "pdf_cct": "",
@@ -454,6 +483,7 @@ def executar_fluxo_sch(
                     wait,
                     contexto=f"antes de iniciar o requerimento {numero}",
                     reabrir_fila=True,
+                    nome_fila=fila_sch,
                 )
 
                 abrir_requerimento(driver, wait, req)
@@ -462,10 +492,6 @@ def executar_fluxo_sch(
                     dados_certificado_sch = extrair_dados_certificado_sch(driver, wait)
                     dados_certificado_sch = dados_certificado_sch or {}
 
-                    # ==========================================================
-                    # CORREÇÃO: trazer Nome Comercial e Modelo da aba Dados Gerais
-                    # para dentro do req, porque o relatório usa o req como base.
-                    # ==========================================================
                     nome_comercial_sch = str(
                         dados_certificado_sch.get("nome_comercial") or ""
                     ).strip()
@@ -480,11 +506,9 @@ def executar_fluxo_sch(
                     if modelo_sch_dados_gerais:
                         req["modelo_sch_dados_gerais"] = modelo_sch_dados_gerais
 
-                    # Garantia final: Nome Comercial nunca pode ficar vazio.
                     if not str(req.get("nome_comercial") or "").strip():
                         req["nome_comercial"] = req.get("modelo_sch_dados_gerais") or req.get("modelo", "")
 
-                    # Também guarda esses dados no resumo, para o relatório conseguir acessar.
                     resumo["dados_certificado_sch"] = dados_certificado_sch
                     resumo["nome_comercial_sch"] = req.get("nome_comercial", "")
                     resumo["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
@@ -501,7 +525,6 @@ def executar_fluxo_sch(
                     dados_certificado_sch = {}
                     resumo["dados_certificado_sch"] = {}
 
-                    # Mesmo com erro na extração, Nome Comercial não deve ficar vazio.
                     if not str(req.get("nome_comercial") or "").strip():
                         req["nome_comercial"] = req.get("modelo", "")
 
@@ -534,7 +557,6 @@ def executar_fluxo_sch(
                     print("[SCH][WARN] Nenhum PDF CCT localizado na pasta do requerimento.")
                     dados_pdf = {}
 
-                # Guarda também no dados_pdf, para qualquer relatório/seção adicional conseguir acessar.
                 dados_pdf["nome_comercial_sch"] = req.get("nome_comercial", "")
                 dados_pdf["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
 
@@ -585,7 +607,7 @@ def executar_fluxo_sch(
                     resumo["comparacao_datas_sch_cct"] = {
                         "status_geral": "erro",
                         "mensagem": str(e),
-                        "comparações": [],
+                        "comparacoes": [],
                         "divergencias": [],
                     }
 
@@ -785,6 +807,7 @@ def executar_fluxo_sch(
                         )
                     ),
                     "escopo_processamento": resumo["escopo_processamento"],
+                    "fila_sch": fila_sch,
                     "atualizado_em": datetime.now().isoformat(),
                 }
                 salvar_json(pasta_req / "controle_downloads.json", controle)
@@ -820,7 +843,7 @@ def executar_fluxo_sch(
                 relatorio_execucao.append(resumo)
 
                 try:
-                    voltar_para_fila(driver, wait)
+                    voltar_para_fila(driver, wait, nome_fila=fila_sch)
                 except Exception as e:
                     print(f"[SCH][WARN] Não foi possível voltar normalmente: {e}")
 
@@ -832,6 +855,7 @@ def executar_fluxo_sch(
             {
                 "inicio_execucao": inicio_execucao.isoformat(),
                 "fim_execucao": fim_execucao.isoformat(),
+                "fila_sch": fila_sch,
                 "tempo_total_segundos": round((fim_execucao - inicio_execucao).total_seconds(), 2),
                 "total_coletados_na_fila": len(requerimentos),
                 "total_processaveis": len(requerimentos_processaveis),
