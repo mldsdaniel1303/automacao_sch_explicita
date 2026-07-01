@@ -10,6 +10,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.common.action_chains import ActionChains
 
 from utils import esperar_tela_carregar, nome_seguro
 
@@ -30,7 +31,6 @@ XPATHS_TABELA_ANEXOS = [
     "//table[.//th[contains(., 'Tipo')] or .//td[contains(., 'Tipo')]]",
 ]
 
-
 FILA_SCH_ATUAL = "Em Análise"
 
 FILAS_SCH_SUPORTADAS = {
@@ -41,7 +41,8 @@ FILAS_SCH_SUPORTADAS = {
     "Retorno Para Estudo": [
         "Retorno Para Estudo",
         "Retorno para Estudo",
-        "Retorno Para estudo",
+        "Retorno Pra Estudo",
+        "Retorno pra Estudo",
     ],
 }
 
@@ -585,19 +586,20 @@ def _esta_na_tela_login_sch(driver):
     return False
 
 
+
 def garantir_sessao_ativa_sch(driver, wait, contexto="", reabrir_fila=True, nome_fila=None):
     """
     Verifica se o SCH caiu na tela de login.
-    Se caiu, pausa para o usuário logar novamente e reabre a fila atual.
+    Se caiu, pausa para o usuário logar novamente e reabre a fila correta.
 
-    A fila atual pode ser:
+    A fila correta pode ser:
     - Em Análise
     - Retorno Para Estudo
     """
     if not _esta_na_tela_login_sch(driver):
         return False
 
-    fila_para_reabrir = nome_fila or FILA_SCH_ATUAL or "Em Análise"
+    fila_para_reabrir = _resolver_nome_fila_sch(nome_fila or FILA_SCH_ATUAL or "Em Análise")
 
     print("=" * 90)
     print("[SCH][LOGIN] A sessão do SCH parece ter expirado ou voltou para a tela de login.")
@@ -666,7 +668,7 @@ def clicar_fila_sch(driver, wait, nome_fila="Em Análise"):
     - Em Análise
     - Retorno Para Estudo
 
-    O restante do fluxo continua igual para qualquer fila.
+    O restante do fluxo usa a mesma coleta da tabela.
     """
     global FILA_SCH_ATUAL
 
@@ -685,10 +687,10 @@ def clicar_fila_sch(driver, wait, nome_fila="Em Análise"):
     for rotulo in rotulos:
         xpaths.extend(
             [
-                f"//a[contains(normalize-space(.), '{rotulo}')]",
-                f"//span[contains(normalize-space(.), '{rotulo}')]/ancestor::a[1]",
-                f"//*[self::a or self::button][contains(normalize-space(.), '{rotulo}')]",
-                f"//*[contains(normalize-space(.), '{rotulo}')]/ancestor::*[self::a or self::button][1]",
+                f"//a[normalize-space()='{rotulo}' or contains(normalize-space(), '{rotulo}')]",
+                f"//span[normalize-space()='{rotulo}' or contains(normalize-space(), '{rotulo}')]/ancestor::a[1]",
+                f"//*[self::a or self::button][normalize-space()='{rotulo}' or contains(normalize-space(), '{rotulo}')]",
+                f"//*[contains(normalize-space(), '{rotulo}')]/ancestor::*[self::a or self::button][1]",
             ]
         )
 
@@ -709,7 +711,6 @@ def clicar_fila_sch(driver, wait, nome_fila="Em Análise"):
                 for elemento in elementos:
                     try:
                         alvo = elemento
-
                         tag = (alvo.tag_name or "").lower()
 
                         if tag not in {"a", "button"}:
@@ -2282,46 +2283,6 @@ def _normalizar_decimal_tabela(valor):
     return _formatar_float_tabela(texto)
 
 
-def _normalizar_decimal_frequencia_tabela(valor):
-    """
-    Normaliza número de frequência em MHz.
-
-    Corrige casos como:
-    - 2.400   -> 2400
-    - 2.400,0 -> 2400
-    - 2.483,5 -> 2483.5
-    - 2400   -> 2400
-    - 2483,5 -> 2483.5
-
-    Importante: esta função é só para frequência.
-    Não usar para potência, porque potência pode ser 0.00371.
-    """
-    texto = str(valor or "").strip()
-    texto = texto.replace(" ", "")
-
-    if not texto:
-        return ""
-
-    # Caso brasileiro completo: 2.400,0 / 2.483,5
-    if "," in texto:
-        texto = texto.replace(".", "")
-        texto = texto.replace(",", ".")
-    else:
-        # Caso comum em CCT: 2.400 significa 2400 MHz, não 2.4 MHz.
-        if re.fullmatch(r"\d{1,3}\.\d{3}", texto):
-            texto = texto.replace(".", "")
-        elif texto.count(".") > 1:
-            partes = texto.split(".")
-            texto = "".join(partes[:-1]) + "." + partes[-1]
-
-    texto = re.sub(r"[^0-9.\-]", "", texto)
-
-    if not texto or texto in {"-", ".", "-."}:
-        return ""
-
-    return _formatar_float_tabela(texto)
-
-
 def _normalizar_faixa_frequencia_tabela(valor):
     texto_original = str(valor or "").strip()
 
@@ -2333,6 +2294,12 @@ def _normalizar_faixa_frequencia_tabela(valor):
     if not texto:
         return ""
 
+    numeros = re.findall(r"\d[\d.,]*", texto_original)
+
+    # Se não tiver número, não é faixa de frequência.
+    if not numeros:
+        return ""
+
     texto = texto.replace("mhz", "")
     texto = texto.replace("até", "a")
     texto = texto.replace("ate", "a")
@@ -2340,26 +2307,22 @@ def _normalizar_faixa_frequencia_tabela(valor):
     texto = texto.replace("—", "-")
     texto = texto.replace("−", "-")
 
-    numeros = re.findall(r"\d[\d.,]*", texto_original)
-
-    if not numeros:
-        return ""
+    numeros = re.findall(r"\d[\d.,]*", texto)
 
     if len(numeros) >= 2:
-        inicio = _normalizar_decimal_frequencia_tabela(numeros[0])
-        fim = _normalizar_decimal_frequencia_tabela(numeros[1])
+        inicio = _normalizar_decimal_tabela(numeros[0])
+        fim = _normalizar_decimal_tabela(numeros[1])
 
         if inicio and fim:
             return f"{inicio}-{fim}"
 
     if len(numeros) == 1:
-        valor_unico = _normalizar_decimal_frequencia_tabela(numeros[0])
+        valor_unico = _normalizar_decimal_tabela(numeros[0])
 
         if valor_unico:
             return valor_unico
 
     return ""
-    
 
 
 def _normalizar_potencia_tabela(valor):
@@ -2650,12 +2613,7 @@ def _tabela_tem_coluna_potencia(tabela):
     return "potencia_max_saida" in mapa_colunas
 
 
-def _extrair_linhas_comparaveis(
-    tabela,
-    usar_potencia=True,
-    usar_intensidade=False,
-    usar_designacao=False,
-):
+def _extrair_linhas_comparaveis(tabela, usar_potencia=True, usar_intensidade=False):
     tabela = tabela or {}
     cabecalho = list(tabela.get("cabecalho", []) or [])
     linhas = [list(l) for l in (tabela.get("linhas", []) or [])]
@@ -2678,7 +2636,7 @@ def _extrair_linhas_comparaveis(
             valor_faixa,
         )
 
-        # CCT/SCH pode vir com célula mesclada:
+        # CCT pode vir com célula mesclada:
         # primeira linha tem a faixa e as próximas vêm vazias.
         if faixa:
             ultima_faixa_valida = faixa
@@ -2715,31 +2673,10 @@ def _extrair_linhas_comparaveis(
                 valor_intensidade,
             )
 
-        designacao = ""
-
-        if usar_designacao:
-            idx_designacao = mapa_colunas.get("designacao_emissoes")
-            valor_designacao = (
-                linha[idx_designacao]
-                if idx_designacao is not None and idx_designacao < len(linha)
-                else ""
-            )
-
-            designacao = _normalizar_valor_tabela_por_campo(
-                "designacao_emissoes",
-                valor_designacao,
-            )
-
         if not faixa:
             continue
 
         if usar_potencia and not potencia:
-            continue
-
-        if usar_intensidade and not intensidade:
-            continue
-
-        if usar_designacao and not designacao:
             continue
 
         registro = {
@@ -2752,39 +2689,24 @@ def _extrair_linhas_comparaveis(
         if usar_intensidade:
             registro["intensidade_campo"] = intensidade
 
-        if usar_designacao:
-            registro["designacao_emissoes"] = designacao
-
         linhas_saida.append(registro)
 
     return linhas_saida
 
 
-def _assinatura_linha_tabela(
-    registro,
-    usar_potencia=True,
-    usar_intensidade=False,
-    usar_designacao=False,
-):
+def _assinatura_linha_tabela(registro, usar_potencia=True, usar_intensidade=False):
     faixa = registro.get("faixa_freq_tx", "")
     potencia = registro.get("potencia_max_saida", "") if usar_potencia else ""
     intensidade = registro.get("intensidade_campo", "") if usar_intensidade else ""
-    designacao = registro.get("designacao_emissoes", "") if usar_designacao else ""
 
     return (
         faixa,
         potencia,
         intensidade,
-        designacao,
     )
 
 
-def _assinaturas_unicas_tabela(
-    linhas,
-    usar_potencia=True,
-    usar_intensidade=False,
-    usar_designacao=False,
-):
+def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=False):
     assinaturas = set()
 
     for linha in linhas or []:
@@ -2792,21 +2714,14 @@ def _assinaturas_unicas_tabela(
             linha,
             usar_potencia=usar_potencia,
             usar_intensidade=usar_intensidade,
-            usar_designacao=usar_designacao,
         )
 
-        faixa, potencia, intensidade, designacao = assinatura
+        faixa, potencia, intensidade = assinatura
 
         if not faixa:
             continue
 
         if usar_potencia and not potencia:
-            continue
-
-        if usar_intensidade and not intensidade:
-            continue
-
-        if usar_designacao and not designacao:
             continue
 
         assinaturas.add(assinatura)
@@ -2815,37 +2730,25 @@ def _assinaturas_unicas_tabela(
 
 
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
-    tabela_sch = tabela_sch or {}
-    tabela_cct = tabela_cct or {}
+    tem_potencia_sch = _tabela_tem_coluna_potencia(tabela_sch)
+    tem_potencia_cct = _tabela_tem_coluna_potencia(tabela_cct)
 
-    mapa_sch = _mapear_colunas_relevantes(tabela_sch.get("cabecalho", []) or [])
-    mapa_cct = _mapear_colunas_relevantes(tabela_cct.get("cabecalho", []) or [])
+    tem_intensidade_sch = _tabela_tem_coluna_intensidade(tabela_sch)
+    tem_intensidade_cct = _tabela_tem_coluna_intensidade(tabela_cct)
 
-    tem_potencia_sch = "potencia_max_saida" in mapa_sch
-    tem_potencia_cct = "potencia_max_saida" in mapa_cct
-
-    tem_intensidade_sch = "intensidade_campo" in mapa_sch
-    tem_intensidade_cct = "intensidade_campo" in mapa_cct
-
-    tem_designacao_sch = "designacao_emissoes" in mapa_sch
-    tem_designacao_cct = "designacao_emissoes" in mapa_cct
-
-    usar_potencia = bool(tem_potencia_sch and tem_potencia_cct)
-    usar_intensidade = bool(tem_intensidade_sch and tem_intensidade_cct)
-    usar_designacao = bool(tem_designacao_sch and tem_designacao_cct)
+    usar_potencia = bool(tem_potencia_sch or tem_potencia_cct)
+    usar_intensidade = bool(tem_intensidade_sch or tem_intensidade_cct)
 
     linhas_sch = _extrair_linhas_comparaveis(
         tabela_sch,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
-        usar_designacao=usar_designacao,
     )
 
     linhas_cct = _extrair_linhas_comparaveis(
         tabela_cct,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
-        usar_designacao=usar_designacao,
     )
 
     # Se a coluna de intensidade existe, mas nenhum valor real foi extraído,
@@ -2863,14 +2766,12 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
                 tabela_sch,
                 usar_potencia=usar_potencia,
                 usar_intensidade=False,
-                usar_designacao=usar_designacao,
             )
 
             linhas_cct = _extrair_linhas_comparaveis(
                 tabela_cct,
                 usar_potencia=usar_potencia,
                 usar_intensidade=False,
-                usar_designacao=usar_designacao,
             )
 
     if not linhas_sch and not linhas_cct:
@@ -2884,14 +2785,12 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
         linhas_sch,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
-        usar_designacao=usar_designacao,
     )
 
     assinaturas_cct = _assinaturas_unicas_tabela(
         linhas_cct,
         usar_potencia=usar_potencia,
         usar_intensidade=usar_intensidade,
-        usar_designacao=usar_designacao,
     )
 
     set_sch = set(assinaturas_sch)
@@ -2914,12 +2813,9 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
     if usar_intensidade:
         campos_comparados.append("Intensidade de Campo (µV/m)")
 
-    if usar_designacao:
-        campos_comparados.append("Designação de Emissões")
-
     nome_coluna = " / ".join(campos_comparados)
 
-    def _descricao_assinatura(faixa, potencia, intensidade, designacao):
+    def _descricao_assinatura(faixa, potencia, intensidade):
         partes = [f"Faixa={faixa or 'vazio'}"]
 
         if usar_potencia:
@@ -2928,29 +2824,21 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
         if usar_intensidade:
             partes.append(f"Intensidade={intensidade or 'vazio'}")
 
-        if usar_designacao:
-            partes.append(f"Designação={designacao or 'vazio'}")
-
         return " | ".join(partes)
 
-    for faixa, potencia, intensidade, designacao in faltando_no_cct:
+    for faixa, potencia, intensidade in faltando_no_cct:
         divergencias.append(
             {
                 "tipo": "combinacao_ausente_no_cct",
                 "linha": "",
                 "coluna": nome_coluna,
                 "nome_coluna": nome_coluna,
-                "valor_sch": _descricao_assinatura(
-                    faixa,
-                    potencia,
-                    intensidade,
-                    designacao,
-                ),
+                "valor_sch": _descricao_assinatura(faixa, potencia, intensidade),
                 "valor_cct": "Não encontrada no CCT",
             }
         )
 
-    for faixa, potencia, intensidade, designacao in faltando_no_sch:
+    for faixa, potencia, intensidade in faltando_no_sch:
         divergencias.append(
             {
                 "tipo": "combinacao_ausente_no_sch",
@@ -2958,72 +2846,50 @@ def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
                 "coluna": nome_coluna,
                 "nome_coluna": nome_coluna,
                 "valor_sch": "Não encontrada no SCH",
-                "valor_cct": _descricao_assinatura(
-                    faixa,
-                    potencia,
-                    intensidade,
-                    designacao,
-                ),
+                "valor_cct": _descricao_assinatura(faixa, potencia, intensidade),
             }
-        )
-
-    if usar_potencia and usar_intensidade and usar_designacao:
-        motivo = "comparacao_por_faixa_potencia_intensidade_e_designacao"
-    elif usar_potencia and usar_designacao:
-        motivo = "comparacao_por_faixa_potencia_e_designacao"
-    elif usar_potencia and usar_intensidade:
-        motivo = "comparacao_por_faixa_potencia_e_intensidade"
-    elif usar_potencia:
-        motivo = "comparacao_por_faixa_e_potencia"
-    elif usar_intensidade:
-        motivo = "comparacao_por_faixa_e_intensidade"
-    else:
-        motivo = "comparacao_por_faixa_de_frequencia"
-
-    colunas_ignoradas = [
-        "Tecnologia / Technology",
-        "Tipo de Modulação / Type of Modulation",
-        "SAR Cabeça / SAR head",
-        "SAR Corpo / SAR body",
-        "Padrão / Standard",
-        "Taxa de transmissão / Transmission rate",
-    ]
-
-    if not usar_designacao:
-        colunas_ignoradas.insert(
-            0,
-            "Designação de Emissões / Designation of Emissions",
         )
 
     return {
         "status": "ok" if not divergencias else "divergente",
-        "motivo": motivo,
+        "motivo": (
+            "comparacao_por_faixa_potencia_e_intensidade"
+            if usar_intensidade
+            else "comparacao_por_faixa_e_potencia"
+            if usar_potencia
+            else "comparacao_por_faixa_de_frequencia"
+        ),
         "linhas_sch": len(assinaturas_sch),
         "linhas_cct": len(assinaturas_cct),
         "linhas_extraidas_sch": len(linhas_sch),
         "linhas_extraidas_cct": len(linhas_cct),
         "usar_potencia": usar_potencia,
         "usar_intensidade": usar_intensidade,
-        "usar_designacao": usar_designacao,
         "campos_comparados": campos_comparados,
-        "colunas_ignoradas_do_cct": colunas_ignoradas,
+        "colunas_ignoradas_do_cct": [
+            "Designação de Emissões / Designation of Emissions",
+            "Tecnologia / Technology",
+            "Tipo de Modulação / Type of Modulation",
+            "SAR Cabeça / SAR head",
+            "SAR Corpo / SAR body",
+            "Padrão / Standard",
+            "Taxa de transmissão / Transmission rate",
+        ],
         "assinaturas_sch": [
             {
                 "faixa_freq_tx": faixa,
                 "potencia_max_saida": potencia,
                 "intensidade_campo": intensidade,
-                "designacao_emissoes": designacao,
             }
-            for faixa, potencia, intensidade, designacao in assinaturas_sch
+            for faixa, potencia, intensidade in assinaturas_sch
         ],
         "assinaturas_cct": [
             {
                 "faixa_freq_tx": faixa,
                 "potencia_max_saida": potencia,
                 "intensidade_campo": intensidade,
-                "designacao_emissoes": designacao,
             }
-            for faixa, potencia, intensidade, designacao in assinaturas_cct
+            for faixa, potencia, intensidade in assinaturas_cct
         ],
         "divergencias": divergencias,
     }
@@ -3072,34 +2938,29 @@ def extrair_tabela_tecnica_sch(driver, wait):
         tem_faixa = "faixa_freq_tx" in mapa
         tem_potencia = "potencia_max_saida" in mapa
         tem_intensidade = "intensidade_campo" in mapa
-        tem_designacao = "designacao_emissoes" in mapa
 
         if not tem_faixa:
             return -1, []
 
         usar_potencia = tem_potencia
         usar_intensidade = tem_intensidade
-        usar_designacao = tem_designacao
 
         linhas_comp = _extrair_linhas_comparaveis(
             tabela_limpa,
             usar_potencia=usar_potencia,
             usar_intensidade=usar_intensidade,
-            usar_designacao=usar_designacao,
         )
 
         assinaturas = _assinaturas_unicas_tabela(
             linhas_comp,
             usar_potencia=usar_potencia,
             usar_intensidade=usar_intensidade,
-            usar_designacao=usar_designacao,
         )
 
         pontuacao = 0
         pontuacao += 50 if tem_faixa else 0
         pontuacao += 35 if tem_potencia else 0
         pontuacao += 25 if tem_intensidade else 0
-        pontuacao += 20 if tem_designacao else 0
         pontuacao += len(linhas_comp) * 10
         pontuacao += len(assinaturas) * 5
 
@@ -4429,33 +4290,39 @@ def _tabela_tem_valores_sar(tabela):
 
 
 def _texto_tem_valores_sar_em_contexto(texto):
-    """
-    Fallback restritivo para SAR em texto corrido.
-
-    Não considera números apenas porque aparecem depois de um cabeçalho SAR,
-    pois isso gera falso positivo com potência, frequência e taxa de transmissão.
-
-    Só considera SAR aplicável quando houver padrão explícito:
-    - SAR Corpo: 0,174 W/kg
-    - SAR Body: 0.174 W/kg
-    - SAR Cabeça: 0,123
-    """
     texto = texto or ""
-    texto_norm = _norm_sar(texto)
+    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
 
     valores = []
 
-    padroes_explicitos = [
-        r"\bsar\s*(?:corpo|body|cabeca|cabeça|head)\s*[:=\-]?\s*(\d+[,.]\d+)\s*(?:w\s*/?\s*kg|wkg)?",
-        r"\b(?:corpo|body|cabeca|cabeça|head)\s*sar\s*[:=\-]?\s*(\d+[,.]\d+)\s*(?:w\s*/?\s*kg|wkg)?",
-        r"\bvalor\s+sar\s*(?:corpo|body|cabeca|cabeça|head)?\s*[:=\-]?\s*(\d+[,.]\d+)\s*(?:w\s*/?\s*kg|wkg)?",
-    ]
+    for i, linha in enumerate(linhas):
+        linha_norm = _norm_sar(linha)
 
-    for padrao in padroes_explicitos:
-        for m in re.finditer(padrao, texto_norm, flags=re.I):
-            numero = m.group(1)
+        if "sar" not in linha_norm:
+            continue
 
-            if _valor_sar_real(numero):
+        if not any(
+            termo in linha_norm
+            for termo in [
+                "corpo",
+                "body",
+                "cabeca",
+                "head",
+                "w/kg",
+                "w kg",
+            ]
+        ):
+            continue
+
+        janela = " ".join(linhas[i:i + 30])
+
+        for numero in re.findall(r"\d+[,.]\d+", janela):
+            try:
+                valor_float = float(numero.replace(".", "").replace(",", "."))
+            except Exception:
+                continue
+
+            if 0 < valor_float <= 20:
                 valores.append(numero)
 
     return {
@@ -4466,15 +4333,16 @@ def _texto_tem_valores_sar_em_contexto(texto):
 
 
 
+
 def analisar_sar_cct(dados_pdf):
     """
     Analisa se deve preencher 'Ensaio de SAR não aplicável.' na Corrigir Minuta.
 
     Regra:
     1. Valor real em coluna SAR Cabeça/Corpo => SAR aplicável.
-    2. Coluna SAR existente, mas vazia/traço/N/A => SAR não aplicável e preencher frase.
+    2. Valor explícito de SAR em texto corrido => SAR aplicável.
     3. Frase segura de SAR não aplicável => preencher frase.
-    4. Valor explícito de SAR em texto corrido => SAR aplicável.
+    4. Coluna SAR existente, mas vazia/traço/N/A => SAR não aplicável e preencher frase.
     5. Sem coluna SAR e sem frase segura => revisar manualmente.
     """
     dados_pdf = dados_pdf or {}
@@ -4484,7 +4352,6 @@ def analisar_sar_cct(dados_pdf):
 
     tabela_cct = dados_pdf.get("tabela_tecnica_cct") or {}
 
-    # 1. Prioridade máxima: valor real na tabela SAR.
     resultado_tabela = _tabela_tem_valores_sar(tabela_cct)
 
     if resultado_tabela.get("tem_sar"):
@@ -4502,24 +4369,23 @@ def analisar_sar_cct(dados_pdf):
             "origem": "tabela_tecnica_cct",
         }
 
-    # 2. Se existe coluna SAR, mas ela não tem valor real, não procurar número solto no texto.
-    # Isso evita falso positivo com potência, frequência e taxa de transmissão.
-    if _dados_pdf_tem_coluna_sar(dados_pdf):
+    resultado_texto = _texto_tem_valores_sar_em_contexto(texto)
+
+    if resultado_texto.get("tem_sar"):
         return {
-            "status": "sar_nao_aplicavel",
+            "status": "sar_aplicavel",
             "mensagem": (
-                "O CCT possui coluna SAR, mas não foram encontrados valores reais "
-                "nas colunas SAR Cabeça/Corpo. Considerado SAR não aplicável."
+                "SAR aplicável: foram encontrados valores explícitos de SAR "
+                "no texto do CCT. Não preencher 'Ensaio de SAR não aplicável.'."
             ),
-            "preencher_frase": True,
-            "frase": FRASE_SAR_NAO_APLICAVEL,
-            "sar_aplicavel": False,
-            "sar_nao_aplicavel": True,
-            "valores_sar_encontrados": [],
-            "origem": "coluna_sar_sem_valor",
+            "preencher_frase": False,
+            "frase": "",
+            "sar_aplicavel": True,
+            "sar_nao_aplicavel": False,
+            "valores_sar_encontrados": resultado_texto.get("valores", []),
+            "origem": "texto_completo_explicito",
         }
 
-    # 3. Frases seguras de SAR não aplicável.
     frases_sar_nao_aplicavel = [
         "ensaio de sar nao aplicavel",
         "sar nao aplicavel",
@@ -4554,22 +4420,19 @@ def analisar_sar_cct(dados_pdf):
             "origem": "texto_completo",
         }
 
-    # 4. Fallback por texto corrido, somente quando não existe coluna SAR estruturada.
-    resultado_texto = _texto_tem_valores_sar_em_contexto(texto)
-
-    if resultado_texto.get("tem_sar"):
+    if _dados_pdf_tem_coluna_sar(dados_pdf):
         return {
-            "status": "sar_aplicavel",
+            "status": "sar_nao_aplicavel",
             "mensagem": (
-                "SAR aplicável: foram encontrados valores explícitos de SAR "
-                "no texto do CCT. Não preencher 'Ensaio de SAR não aplicável.'."
+                "O CCT possui coluna SAR, mas não foram encontrados valores reais "
+                "nas colunas SAR Cabeça/Corpo. Considerado SAR não aplicável."
             ),
-            "preencher_frase": False,
-            "frase": "",
-            "sar_aplicavel": True,
-            "sar_nao_aplicavel": False,
-            "valores_sar_encontrados": resultado_texto.get("valores", []),
-            "origem": "texto_completo_explicito",
+            "preencher_frase": True,
+            "frase": FRASE_SAR_NAO_APLICAVEL,
+            "sar_aplicavel": False,
+            "sar_nao_aplicavel": True,
+            "valores_sar_encontrados": [],
+            "origem": "coluna_sar_sem_valor",
         }
 
     return {
@@ -5431,112 +5294,42 @@ def marcar_acompanhar_processo(driver, wait):
     return False
 
 
-def _localizar_campo_acompanhar_processo(driver, wait):
-    entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.08)
-
-    xpaths = [
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Informações Adicionais')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Informacoes Adicionais')]/following::textarea[1]",
-        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[not(@disabled) and not(@readonly)]",
-    ]
-
-    for xpath in xpaths:
-        try:
-            elementos = WebDriverWait(driver, 4, poll_frequency=0.1).until(
-                EC.presence_of_all_elements_located((By.XPATH, xpath))
-            )
-
-            candidatos = []
-
-            for el in elementos:
-                try:
-                    if not el.is_displayed() or not el.is_enabled():
-                        continue
-
-                    tamanho = el.size or {}
-                    largura = tamanho.get("width", 0)
-                    altura = tamanho.get("height", 0)
-
-                    # Evita pegar textarea pequeno/invisível.
-                    if largura < 100 or altura < 30:
-                        continue
-
-                    candidatos.append(el)
-                except Exception:
-                    continue
-
-            if candidatos:
-                # Normalmente o campo correto é o maior textarea visível.
-                candidatos.sort(
-                    key=lambda e: (e.size.get("width", 0) * e.size.get("height", 0)),
-                    reverse=True,
-                )
-
-                campo = candidatos[0]
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});",
-                    campo,
-                )
-                return campo
-
-        except Exception:
-            continue
-
-    return None
-
-
 def preencher_acompanhar_processo(driver, wait, texto):
-    texto = str(texto or "").strip()
-
     if not texto:
         print("[SCH][WARN] Texto vazio para Acompanhar Processo.")
         return False
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.08)
+    esperar_tela_carregar(driver, 0.04)
 
     marcar_acompanhar_processo(driver, wait)
 
-    campo = _localizar_campo_acompanhar_processo(driver, wait)
+    xpaths_texto = [
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
+        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "(//textarea[not(@disabled)])[1]",
+    ]
 
-    if not campo:
-        print("[SCH][WARN] Campo de Acompanhar Processo não encontrado.")
-        return False
+    campo = _achar_primeiro_elemento_visivel(
+        driver,
+        xpaths_texto,
+        "campo Acompanhar Processo",
+        timeout=4,
+    )
 
-    print("[SCH] Preenchendo campo 'Acompanhar Processo'...")
+    _clicar_com_fallback(driver, campo)
 
     try:
-        driver.execute_script(
-            """
-            arguments[0].scrollIntoView({block:'center'});
-            arguments[0].focus();
-            """,
-            campo,
-        )
-
-        try:
-            campo.click()
-            campo.send_keys(Keys.CONTROL, "a")
-            campo.send_keys(Keys.DELETE)
-        except Exception:
-            pass
-
-        # Preenchimento principal por JS, com eventos.
+        campo.send_keys(Keys.CONTROL, "a")
+        campo.send_keys(Keys.DELETE)
+        campo.send_keys(texto)
+    except Exception:
         driver.execute_script(
             """
             arguments[0].value = arguments[1];
-
-            arguments[0].dispatchEvent(new Event('focus', {bubbles:true}));
-            arguments[0].dispatchEvent(new InputEvent('input', {
-                bubbles:true,
-                inputType:'insertText',
-                data: arguments[1]
-            }));
+            arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
             arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
             arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
             """,
@@ -5544,31 +5337,30 @@ def preencher_acompanhar_processo(driver, wait, texto):
             texto,
         )
 
-        try:
-            campo.send_keys(Keys.TAB)
-        except Exception:
-            pass
+    esperar_tela_carregar(driver, 0.04)
 
-        esperar_tela_carregar(driver, 0.15)
-
-        valor = driver.execute_script(
-            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
-            campo,
-        ) or ""
-
-        if _normalizar_texto_comparacao(texto) in _normalizar_texto_comparacao(valor):
+    try:
+        valor = (campo.get_attribute("value") or "").strip()
+        if texto.strip() in valor:
             print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
             return True
+    except Exception:
+        pass
 
-        print(
-            "[SCH][WARN] Campo de acompanhamento recebeu tentativa de preenchimento, "
-            "mas o texto não foi confirmado."
+    try:
+        valor_js = driver.execute_script(
+            "return (arguments[0].value || arguments[0].textContent || '').trim();",
+            campo,
         )
-        return False
+        if texto.strip() in (valor_js or ""):
+            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
+            return True
+    except Exception:
+        pass
 
-    except Exception as e:
-        print(f"[SCH][WARN] Falha ao preencher Acompanhar Processo: {e}")
-        return False
+    print("[SCH][WARN] O campo de acompanhamento foi preenchido, mas não foi possível validar o valor.")
+    return False
+
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
@@ -5650,9 +5442,1862 @@ def preencher_informacoes_adicionais_com_analise(
         }
 
 
-def voltar_para_fila(driver, wait, nome_fila=None):
-    fila_destino = nome_fila or FILA_SCH_ATUAL or "Em Análise"
 
+# =============================================================================
+# RETORNO PARA ESTUDO - Comparar Versões
+# =============================================================================
+
+def _texto_visivel_atual_sem_travar(driver):
+    try:
+        return driver.execute_script(
+            "return document.body ? (document.body.innerText || document.body.textContent || '') : '';"
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _normalizar_texto_retorno(valor):
+    texto = str(valor or "")
+    texto = _remover_acentos(texto).lower()
+    texto = texto.replace("º", "o")
+    texto = re.sub(r"\s+", " ", texto)
+    texto = re.sub(r"[^a-z0-9.,:/()\- ]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _lista_unica_retorno(valores):
+    saida = []
+    vistos = set()
+
+    for valor in valores or []:
+        texto = _texto_limpo(valor)
+        if not texto:
+            continue
+
+        chave = _normalizar_texto_retorno(texto)
+        if not chave or chave in vistos:
+            continue
+
+        vistos.add(chave)
+        saida.append(texto)
+
+    return saida
+
+
+def _recortar_secao_retorno(texto, titulos_inicio, titulos_fim=None):
+    texto = str(texto or "")
+    if not texto:
+        return ""
+
+    titulos_fim = titulos_fim or []
+    texto_norm = _normalizar_texto_retorno(texto)
+
+    inicio_pos = -1
+    titulo_encontrado = ""
+
+    for titulo in titulos_inicio or []:
+        titulo_norm = _normalizar_texto_retorno(titulo)
+        pos = texto_norm.find(titulo_norm)
+
+        if pos >= 0 and (inicio_pos < 0 or pos < inicio_pos):
+            inicio_pos = pos
+            titulo_encontrado = titulo_norm
+
+    if inicio_pos < 0:
+        return ""
+
+    fim_pos = len(texto_norm)
+
+    for titulo in titulos_fim:
+        titulo_norm = _normalizar_texto_retorno(titulo)
+        pos = texto_norm.find(titulo_norm, inicio_pos + len(titulo_encontrado))
+
+        if pos >= 0 and pos < fim_pos:
+            fim_pos = pos
+
+    # Como o texto normalizado muda acentos, mas mantém ordem/tamanho aproximados,
+    # fazemos uma segunda extração por linhas no texto original.
+    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+    saida = []
+    coletando = False
+
+    for linha in linhas:
+        linha_norm = _normalizar_texto_retorno(linha)
+
+        if not coletando and any(_normalizar_texto_retorno(t) in linha_norm for t in titulos_inicio):
+            coletando = True
+
+        if coletando:
+            if saida and any(_normalizar_texto_retorno(t) in linha_norm for t in titulos_fim):
+                break
+            saida.append(linha)
+
+    if saida:
+        return "\n".join(saida).strip()
+
+    return texto_norm[inicio_pos:fim_pos].strip()
+
+
+def _extrair_especificacoes_complementares_retorno(texto):
+    texto = str(texto or "")
+    if not texto:
+        return ""
+
+    padroes = [
+        r"Especifica[cç][oõ]es\s+Complementares\s*:?\s*(.+?)(?=\n\s*(?:Laborat[oó]rio|Rela[cç][aã]o|Garantias|Dados\s+T[eé]cnicos|$))",
+        r"Especificacoes\s+Complementares\s*:?\s*(.+?)(?=\n\s*(?:Laboratorio|Relacao|Garantias|Dados\s+Tecnicos|$))",
+    ]
+
+    for padrao in padroes:
+        m = re.search(padrao, texto, flags=re.I | re.S)
+        if m:
+            return re.sub(r"\s+", " ", m.group(1)).strip(" -;:")
+
+    # Fallback linha a linha
+    for linha in texto.splitlines():
+        if "especific" not in _normalizar_texto_retorno(linha):
+            continue
+        if "complement" not in _normalizar_texto_retorno(linha):
+            continue
+
+        partes = re.split(r":", linha, maxsplit=1)
+        if len(partes) == 2:
+            return re.sub(r"\s+", " ", partes[1]).strip(" -;:")
+
+        return re.sub(r"\s+", " ", linha).strip()
+
+    return ""
+
+
+def _remover_especificacoes_do_bloco_dados_tecnicos(texto):
+    texto = str(texto or "")
+    if not texto:
+        return ""
+
+    linhas = []
+
+    for linha in texto.splitlines():
+        linha_norm = _normalizar_texto_retorno(linha)
+        if "especificacoes complementares" in linha_norm:
+            continue
+        if "especificacao complementar" in linha_norm:
+            continue
+        if "especificacoes complementares" in linha_norm:
+            continue
+        linhas.append(linha)
+
+    return "\n".join(linhas).strip()
+
+
+def _extrair_documentos_comparar_versoes(texto):
+    bloco = _recortar_secao_retorno(
+        texto,
+        ["Relação de Arquivos Anexos", "Relacao de Arquivos Anexos"],
+        [
+            "Garantias",
+            "Declarações",
+            "Declaracoes",
+            "Solicitante declara",
+            "Histórico",
+            "Historico",
+        ],
+    )
+
+    if not bloco:
+        return []
+
+    ignorar = {
+        "relacao de arquivos anexos",
+        "relação de arquivos anexos",
+        "nome do arquivo",
+        "descricao",
+        "descrição",
+    }
+
+    documentos = []
+    for linha in bloco.splitlines():
+        linha = _texto_limpo(linha)
+        if not linha:
+            continue
+
+        linha_norm = _normalizar_texto_retorno(linha)
+
+        if any(x in linha_norm for x in ignorar):
+            continue
+
+        if len(linha_norm) <= 2:
+            continue
+
+        documentos.append(linha)
+
+    return _lista_unica_retorno(documentos)
+
+
+def _eh_cor_vermelha_retorno(cor):
+    texto = str(cor or "").strip().lower()
+
+    m = re.search(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", texto)
+    if not m:
+        return "red" in texto or "#f00" in texto or "#ff0000" in texto
+
+    r, g, b = [int(m.group(i)) for i in range(1, 4)]
+
+    return r >= 150 and g <= 90 and b <= 90
+
+
+def _coletar_visao_comparar_versoes(driver):
+    """
+    Coleta textos da tela Comparar Versões.
+    Divide visualmente em lado esquerdo (versão anterior) e lado direito (versão nova)
+    e também captura trechos em vermelho.
+    """
+    script = r"""
+    const vw = Math.max(
+        window.innerWidth || 0,
+        document.documentElement ? document.documentElement.clientWidth : 0,
+        1
+    );
+
+    function visible(el) {
+        const st = window.getComputedStyle(el);
+        if (!st || st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity || 1) === 0) {
+            return false;
+        }
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    }
+
+    function isRed(color) {
+        if (!color) return false;
+        const txt = String(color).toLowerCase();
+        const m = txt.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        if (!m) return txt.includes('red') || txt.includes('#f00') || txt.includes('#ff0000');
+        const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
+        return r >= 150 && g <= 90 && b <= 90;
+    }
+
+    const nodes = Array.from(document.querySelectorAll('td, th, span, font, div, p, li, label, a, b, strong'));
+    const items = [];
+
+    for (const el of nodes) {
+        try {
+            if (!visible(el)) continue;
+
+            let text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!text || text.length > 700) continue;
+
+            const r = el.getBoundingClientRect();
+            const st = window.getComputedStyle(el);
+            const color = st.color || el.getAttribute('color') || '';
+            const side = (r.left + (r.width / 2)) < (vw / 2) ? 'esquerda' : 'direita';
+
+            items.push({
+                texto: text,
+                side: side,
+                left: r.left,
+                top: r.top + window.scrollY,
+                width: r.width,
+                height: r.height,
+                color: color,
+                red: isRed(color),
+                tag: el.tagName
+            });
+        } catch (e) {}
+    }
+
+    items.sort((a, b) => (a.top - b.top) || (a.left - b.left));
+
+    function joinSide(side) {
+        const seen = new Set();
+        const lines = [];
+        for (const it of items) {
+            if (it.side !== side) continue;
+            const key = it.texto;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            lines.push(it.texto);
+        }
+        return lines.join('\n');
+    }
+
+    return {
+        url: String(window.location.href || ''),
+        title: String(document.title || ''),
+        texto_total: document.body ? (document.body.innerText || document.body.textContent || '') : '',
+        texto_esquerda: joinSide('esquerda'),
+        texto_direita: joinSide('direita'),
+        vermelhos_esquerda: items.filter(x => x.side === 'esquerda' && x.red),
+        vermelhos_direita: items.filter(x => x.side === 'direita' && x.red)
+    };
+    """
+
+    try:
+        return driver.execute_script(script) or {}
+    except Exception:
+        return {}
+
+
+def _capturar_comparar_versoes(driver, wait=None):
+    """
+    Tenta capturar a tela Comparar Versões no contexto atual e dentro do iframe.
+    """
+    capturas = []
+
+    try:
+        driver.switch_to.default_content()
+        capturas.append(_coletar_visao_comparar_versoes(driver))
+    except Exception:
+        pass
+
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+        capturas.append(_coletar_visao_comparar_versoes(driver))
+    except Exception:
+        pass
+
+    def pontuacao(cap):
+        texto = " ".join(
+            [
+                str(cap.get("texto_total", "")),
+                str(cap.get("texto_esquerda", "")),
+                str(cap.get("texto_direita", "")),
+            ]
+        )
+        texto_norm = _normalizar_texto_retorno(texto)
+        pontos = 0
+        if "dados tecnicos" in texto_norm:
+            pontos += 20
+        if "relacao de arquivos anexos" in texto_norm:
+            pontos += 20
+        if "requerimento para homologacao" in texto_norm:
+            pontos += 10
+        pontos += len(cap.get("vermelhos_direita", []) or [])
+        pontos += len(cap.get("vermelhos_esquerda", []) or [])
+        return pontos
+
+    capturas = [c for c in capturas if isinstance(c, dict)]
+    if not capturas:
+        return {}
+
+    capturas.sort(key=pontuacao, reverse=True)
+    return capturas[0]
+
+
+
+
+def _texto_pagina_com_iframes(driver):
+    """
+    Coleta texto do documento principal e de todos os iframes acessíveis.
+    A tela de Comparar Versões pode carregar dentro de iframe diferente do __frameDetalhe.
+    """
+    textos = []
+
+    def coletar_no_contexto():
+        try:
+            texto = driver.execute_script(
+                "return document.body ? (document.body.innerText || document.body.textContent || '') : '';"
+            ) or ""
+            if texto.strip():
+                textos.append(texto)
+        except Exception:
+            pass
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    coletar_no_contexto()
+
+    try:
+        iframes = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        iframes = []
+
+    for iframe in iframes:
+        try:
+            driver.switch_to.default_content()
+            driver.switch_to.frame(iframe)
+            coletar_no_contexto()
+        except Exception:
+            continue
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    return "\n".join(textos)
+
+
+def _eh_tela_real_comparacao_versoes(driver, wait=None):
+    """
+    Confirma se a tela real de comparação de versões carregou.
+    A comparação pode abrir em nova aba, na mesma aba ou dentro de iframe.
+    """
+    try:
+        texto = _texto_pagina_com_iframes(driver)
+    except Exception:
+        texto = ""
+
+    texto_norm = _normalizar_texto_comparacao(texto)
+
+    if not texto_norm:
+        return False
+
+    # Se ainda está no modal, não é a comparação.
+    if "selecionar requerimento" in texto_norm and "comparar versao" in texto_norm:
+        return False
+
+    sinais = [
+        "requerimento para homologacao",
+        "dados tecnicos do produto",
+        "dados tecnicos",
+        "especificacoes complementares",
+        "relacao de arquivos anexos",
+        "solicitante",
+        "fabricante",
+    ]
+
+    qtd_sinais = sum(1 for sinal in sinais if sinal in texto_norm)
+
+    if qtd_sinais >= 3:
+        return True
+
+    # Na comparação lado a lado, alguns títulos aparecem duplicados.
+    if (
+        texto_norm.count("requerimento para homologacao") >= 2
+        or texto_norm.count("dados tecnicos do produto") >= 2
+        or texto_norm.count("dados tecnicos") >= 2
+        or texto_norm.count("relacao de arquivos anexos") >= 2
+    ):
+        return True
+
+    return False
+
+
+def _instalar_captura_popup_comparacao_retorno(driver, wait=None):
+    """
+    Instala um monitor no contexto do SCH para capturar a URL que o PrimeFaces
+    tenta abrir em window.open/abrirPopup(args). Isso ajuda quando a aba abre
+    como about:blank.
+    """
+    script = """
+    (function () {
+        function pickUrl(args) {
+            try {
+                if (!args) return '';
+                if (typeof args === 'string') return args;
+
+                var keys = [
+                    'url', 'URL', 'href', 'link', 'caminho', 'path',
+                    'pagina', 'page', 'src', 'view', 'targetUrl'
+                ];
+
+                for (var i = 0; i < keys.length; i++) {
+                    var k = keys[i];
+                    if (args[k] && typeof args[k] === 'string') {
+                        return args[k];
+                    }
+                }
+
+                for (var p in args) {
+                    try {
+                        if (typeof args[p] === 'string') {
+                            var v = args[p];
+                            if (
+                                v.indexOf('/') >= 0 ||
+                                v.indexOf('mosaico') >= 0 ||
+                                v.indexOf('compar') >= 0 ||
+                                v.indexOf('requerimento') >= 0
+                            ) {
+                                return v;
+                            }
+                        }
+                    } catch (e) {}
+                }
+            } catch (e) {}
+            return '';
+        }
+
+        function absolutizar(url) {
+            try {
+                if (!url) return '';
+                return new URL(url, window.location.href).href;
+            } catch (e) {
+                return url || '';
+            }
+        }
+
+        window.__sch_popup_comparacao = {
+            instalado: true,
+            url: '',
+            args: '',
+            windowOpenUrl: '',
+            windowOpenTarget: '',
+            erros: []
+        };
+
+        if (!window.__sch_window_open_wrapped) {
+            window.__sch_original_window_open = window.open;
+
+            window.open = function (url, target, features) {
+                try {
+                    window.__sch_popup_comparacao.windowOpenUrl = absolutizar(url || '');
+                    window.__sch_popup_comparacao.windowOpenTarget = target || '';
+
+                    if (url) {
+                        window.__sch_popup_comparacao.url = absolutizar(url);
+                    }
+                } catch (e) {
+                    try {
+                        window.__sch_popup_comparacao.erros.push(String(e));
+                    } catch (e2) {}
+                }
+
+                return window.__sch_original_window_open.apply(window, arguments);
+            };
+
+            window.__sch_window_open_wrapped = true;
+        }
+
+        if (typeof window.abrirPopup === 'function' && !window.__sch_abrir_popup_wrapped) {
+            window.__sch_original_abrirPopup = window.abrirPopup;
+
+            window.abrirPopup = function (args) {
+                try {
+                    var url = pickUrl(args);
+                    window.__sch_popup_comparacao.args = JSON.stringify(args || {});
+
+                    if (url) {
+                        window.__sch_popup_comparacao.url = absolutizar(url);
+                    }
+                } catch (e) {
+                    try {
+                        window.__sch_popup_comparacao.erros.push(String(e));
+                    } catch (e2) {}
+                }
+
+                return window.__sch_original_abrirPopup.apply(this, arguments);
+            };
+
+            window.__sch_abrir_popup_wrapped = true;
+        }
+
+        return window.__sch_popup_comparacao;
+    })();
+    """
+
+    for usar_iframe in [True, False]:
+        try:
+            if usar_iframe:
+                entrar_iframe_detalhe_analise(driver, wait)
+            else:
+                driver.switch_to.default_content()
+
+            info = driver.execute_script(script) or {}
+
+            if isinstance(info, dict) and info.get("instalado"):
+                return True
+
+        except Exception:
+            continue
+
+    return False
+
+
+def _obter_popup_comparacao_capturado(driver, wait=None):
+    """
+    Lê a URL capturada pelo monitor instalado antes do clique.
+    """
+    script = "return window.__sch_popup_comparacao || {};"
+
+    melhor = {}
+
+    for usar_iframe in [True, False]:
+        try:
+            if usar_iframe:
+                entrar_iframe_detalhe_analise(driver, wait)
+            else:
+                driver.switch_to.default_content()
+
+            info = driver.execute_script(script) or {}
+
+            if not isinstance(info, dict):
+                continue
+
+            url = str(info.get("url") or info.get("windowOpenUrl") or "").strip()
+
+            if url and url.lower() not in {
+                "about:blank",
+                "about:blank#blocked",
+                "undefined",
+                "null",
+            }:
+                return info
+
+            if info and not melhor:
+                melhor = info
+
+        except Exception:
+            continue
+
+    return melhor
+
+
+def _clicar_elemento_por_cdp(driver, elemento):
+    """
+    Clique mais próximo de um clique real do Chrome/Edge.
+    Se o elemento estiver dentro de iframe, soma a posição do iframe para
+    clicar nas coordenadas corretas da janela principal.
+    """
+    try:
+        rect = driver.execute_script(
+            """
+            var el = arguments[0];
+            var r = el.getBoundingClientRect();
+            var x = r.left + (r.width / 2);
+            var y = r.top + (r.height / 2);
+
+            try {
+                if (window.frameElement) {
+                    var fr = window.frameElement.getBoundingClientRect();
+                    x += fr.left;
+                    y += fr.top;
+                }
+            } catch (e) {}
+
+            return {x: x, y: y};
+            """,
+            elemento,
+        )
+
+        x = float(rect["x"])
+        y = float(rect["y"])
+
+        driver.switch_to.default_content()
+
+        driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseMoved",
+                "x": x,
+                "y": y,
+                "button": "none",
+                "clickCount": 0,
+            },
+        )
+
+        time.sleep(0.15)
+
+        driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            },
+        )
+
+        time.sleep(0.15)
+
+        driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseReleased",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            },
+        )
+
+        return True
+
+    except Exception:
+        return False
+
+
+def _clicar_botao_comparar_versao_modal(driver, wait):
+    """
+    Clica no botão interno 'Comparar Versão' da janela 'Selecionar Requerimento'.
+
+    Diferença importante desta versão:
+    - espera os dois selects do modal carregarem;
+    - instala captura de URL antes do clique;
+    - usa clique CDP/nativo;
+    - aguarda a fila AJAX do PrimeFaces depois do clique.
+    """
+
+    id_botao = "formAnalise:j_idt10:j_idt26"
+
+    full_xpath_botao = (
+        "/html/body/span/form/div[1]/div/div[2]/div[2]/table/tbody/tr/td[1]/button"
+    )
+
+    def _aguardar_primefaces_estavel(timeout=20):
+        inicio = time.time()
+
+        while time.time() - inicio < timeout:
+            try:
+                pronto = driver.execute_script(
+                    """
+                    var pfOk = true;
+                    try {
+                        if (window.PrimeFaces && PrimeFaces.ajax && PrimeFaces.ajax.Queue) {
+                            pfOk = PrimeFaces.ajax.Queue.isEmpty();
+                        }
+                    } catch(e) {
+                        pfOk = true;
+                    }
+
+                    var jqOk = true;
+                    try {
+                        if (window.jQuery) {
+                            jqOk = jQuery.active === 0;
+                        }
+                    } catch(e) {
+                        jqOk = true;
+                    }
+
+                    return pfOk && jqOk;
+                    """
+                )
+
+                if pronto:
+                    return True
+
+            except Exception:
+                return True
+
+            time.sleep(0.25)
+
+        return False
+
+    def _aguardar_selects_modal():
+        inicio = time.time()
+
+        while time.time() - inicio < 20:
+            try:
+                entrar_iframe_detalhe_analise(driver, wait)
+
+                selects = driver.find_elements(By.XPATH, "//select")
+                valores_ok = 0
+                textos = []
+
+                for select in selects:
+                    try:
+                        if not select.is_displayed() or not select.is_enabled():
+                            continue
+
+                        valor = str(select.get_attribute("value") or "").strip()
+
+                        texto = driver.execute_script(
+                            """
+                            var s = arguments[0];
+                            if (!s || s.selectedIndex < 0) return '';
+                            return s.options[s.selectedIndex].text || '';
+                            """,
+                            select,
+                        ) or ""
+
+                        texto_norm = _normalizar_texto_comparacao(texto)
+                        textos.append(texto)
+
+                        if valor and "selecione" not in texto_norm:
+                            valores_ok += 1
+
+                    except Exception:
+                        continue
+
+                if valores_ok >= 2:
+                    print("[SCH][RETORNO] Selects do modal carregados:")
+                    for t in textos[:2]:
+                        print(f"[SCH][RETORNO] - {t}")
+
+                    return True
+
+            except Exception:
+                pass
+
+            time.sleep(0.3)
+
+        print("[SCH][RETORNO][WARN] Não foi possível confirmar os dois selects do modal.")
+        return False
+
+    def _disparar_eventos_dos_selects():
+        """
+        Força change/blur nos selects antes de clicar.
+        Isso ajuda o PrimeFaces a reconhecer os valores selecionados.
+        """
+        try:
+            selects = driver.find_elements(By.XPATH, "//select")
+
+            for select in selects:
+                try:
+                    if not select.is_displayed() or not select.is_enabled():
+                        continue
+
+                    driver.execute_script(
+                        """
+                        arguments[0].dispatchEvent(new Event('focus', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+                        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+                        """,
+                        select,
+                    )
+
+                except Exception:
+                    continue
+
+            esperar_tela_carregar(driver, 0.5)
+
+        except Exception:
+            pass
+
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+    except Exception:
+        pass
+
+    _aguardar_selects_modal()
+    _disparar_eventos_dos_selects()
+    _aguardar_primefaces_estavel(timeout=15)
+    _instalar_captura_popup_comparacao_retorno(driver, wait)
+
+    # Pausa curta para o PrimeFaces terminar de preparar o submit.
+    time.sleep(1.5)
+
+    xpaths = [
+        f"//*[@id='{id_botao}']",
+        full_xpath_botao,
+        f"//*[@id='{id_botao}']/span/ancestor::button[1]",
+        "//button[.//span[normalize-space()='Comparar Versão']]",
+        "//button[normalize-space()='Comparar Versão']",
+    ]
+
+    ultimo_erro = None
+
+    for xpath in xpaths:
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+
+            botao = WebDriverWait(driver, 10, poll_frequency=0.2).until(
+                EC.element_to_be_clickable((By.XPATH, xpath))
+            )
+
+            if not botao or not botao.is_displayed() or not botao.is_enabled():
+                continue
+
+            print(f"[SCH][RETORNO] Botão interno encontrado pelo XPath: {xpath}")
+
+            driver.execute_script(
+                """
+                arguments[0].scrollIntoView({block:'center', inline:'center'});
+                arguments[0].focus();
+                """,
+                botao,
+            )
+
+            time.sleep(0.8)
+
+            if _clicar_elemento_por_cdp(driver, botao):
+                print("[SCH][RETORNO] Clique CDP executado no botão Comparar Versão.")
+            else:
+                ActionChains(driver).move_to_element(botao).pause(0.4).click().perform()
+                print("[SCH][RETORNO] Clique ActionChains executado no botão Comparar Versão.")
+
+            _aguardar_primefaces_estavel(timeout=30)
+            esperar_tela_carregar(driver, 1.5)
+
+            return True
+
+        except Exception as e:
+            ultimo_erro = e
+            continue
+
+    print(
+        "[SCH][RETORNO][WARN] Não foi possível clicar no botão interno "
+        f"'Comparar Versão'. Último erro: {ultimo_erro}"
+    )
+
+    return False
+
+
+
+
+def _corrigir_url_comparacao_sch(driver, url):
+    """
+    Corrige URL capturada pelo popup do SCH.
+
+    Às vezes o sistema retorna:
+    http://sistemasnet/mosaico/...
+
+    Mas o navegador está em:
+    https://sistemasnet.anatel.gov.br/mosaico/...
+    """
+    url = str(url or "").strip()
+
+    if not url:
+        return ""
+
+    url_lower = url.lower()
+
+    if url_lower.startswith("http://sistemasnet/"):
+        return url.replace(
+            "http://sistemasnet/",
+            "https://sistemasnet.anatel.gov.br/",
+            1,
+        )
+
+    if url_lower.startswith("https://sistemasnet/"):
+        return url.replace(
+            "https://sistemasnet/",
+            "https://sistemasnet.anatel.gov.br/",
+            1,
+        )
+
+    if url.startswith("/"):
+        try:
+            atual = str(driver.current_url or "")
+        except Exception:
+            atual = ""
+
+        if "sistemasnet.anatel.gov.br" in atual:
+            return "https://sistemasnet.anatel.gov.br" + url
+
+        return url
+
+    return url
+
+
+
+
+
+def _descricao_elemento_acao_retorno(elemento):
+    """
+    Monta uma descrição curta de um botão/ícone da linha do Retorno Para Estudo.
+    Serve para escolher o ícone correto e também para deixar o terminal mais claro.
+    """
+    partes = []
+
+    for attr in ["title", "alt", "aria-label", "onclick", "href", "src", "class", "id"]:
+        try:
+            valor = elemento.get_attribute(attr)
+            if valor:
+                partes.append(f"{attr}={valor}")
+        except Exception:
+            pass
+
+    try:
+        imgs = elemento.find_elements(By.XPATH, ".//img")
+        for img in imgs:
+            for attr in ["title", "alt", "src", "class", "id"]:
+                try:
+                    valor = img.get_attribute(attr)
+                    if valor:
+                        partes.append(f"img_{attr}={valor}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        texto = _texto_limpo(elemento.text)
+        if texto:
+            partes.append(f"text={texto}")
+    except Exception:
+        pass
+
+    return " | ".join(partes)
+
+
+def abrir_requerimento_retorno_para_estudo(driver, wait, req, indice_icone=2):
+    """
+    Abre o requerimento da fila Retorno Para Estudo clicando no ícone de ação da linha.
+
+    Pelo caminho validado por print, o ícone correto é o verde, normalmente o 2º ícone
+    de ação da linha. A função primeiro tenta identificar por atributos fortes; se não
+    conseguir, usa indice_icone=2 como fallback seguro.
+    """
+    numero = req.get("requerimento", "") if isinstance(req, dict) else str(req or "")
+    print(f"[SCH][RETORNO] Abrindo requerimento {numero} pelo ícone de ação...")
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    linha = _localizar_linha_requerimento_na_fila(driver, req)
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        linha,
+    )
+
+    candidatos = linha.find_elements(
+        By.XPATH,
+        ".//a[.//img] | .//img/ancestor::a[1] | .//button | .//*[@role='button']"
+    )
+
+    candidatos_unicos = []
+    vistos = set()
+
+    for el in candidatos:
+        try:
+            chave = el.id
+        except Exception:
+            chave = None
+
+        if chave and chave in vistos:
+            continue
+
+        if chave:
+            vistos.add(chave)
+
+        try:
+            if el.is_displayed() and el.is_enabled():
+                candidatos_unicos.append(el)
+        except Exception:
+            continue
+
+    if not candidatos_unicos:
+        raise Exception(
+            f"Não encontrei ícones/botões clicáveis na linha do requerimento {numero}."
+        )
+
+    print(f"[SCH][RETORNO] {len(candidatos_unicos)} ícone(s) de ação encontrados na linha.")
+
+    melhor = None
+    melhor_pontuacao = -1
+
+    for idx, el in enumerate(candidatos_unicos, start=1):
+        desc = _descricao_elemento_acao_retorno(el)
+        desc_norm = _normalizar_texto_comparacao(desc)
+
+        print(f"[SCH][RETORNO] Ícone {idx}: {desc[:300]}")
+
+        pontuacao = 0
+
+        termos_fortes = [
+            "analisar",
+            "analise",
+            "editar",
+            "abrir",
+            "visualizar",
+            "detalhar",
+            "requerimento",
+            "homologacao",
+            "homologacao produto",
+        ]
+
+        for termo in termos_fortes:
+            if termo in desc_norm:
+                pontuacao += 10
+
+        termos_ruins = [
+            "excluir",
+            "cancelar",
+            "remover",
+            "delete",
+            "historico",
+            "history",
+        ]
+
+        for termo in termos_ruins:
+            if termo in desc_norm:
+                pontuacao -= 50
+
+        if pontuacao > melhor_pontuacao:
+            melhor_pontuacao = pontuacao
+            melhor = el
+
+    # Fallback principal: pelo print enviado, o botão correto é o 2º ícone verde da linha.
+    if melhor_pontuacao <= 0:
+        pos = max(1, int(indice_icone)) - 1
+
+        if pos < len(candidatos_unicos):
+            melhor = candidatos_unicos[pos]
+            print(f"[SCH][RETORNO] Usando fallback pelo índice do ícone: {indice_icone}.")
+        else:
+            melhor = candidatos_unicos[0]
+            print("[SCH][RETORNO] Índice solicitado não existe. Usando primeiro ícone clicável.")
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        melhor,
+    )
+
+    try:
+        ActionChains(driver).move_to_element(melhor).pause(0.2).click().perform()
+    except Exception:
+        _clicar_com_fallback(driver, melhor)
+
+    esperar_tela_carregar(driver, 0.8)
+
+    _aguardar_iframe_detalhe(driver, timeout=8)
+
+    print("[SCH][RETORNO] Requerimento aberto com sucesso.")
+    return True
+
+
+def executar_caminho_retorno_para_estudo_teste(
+    driver,
+    wait,
+    regras,
+    pasta_saida=None,
+    pasta_download=None,
+    categorias_baixar=None,
+    requerimento_alvo=None,
+    abrir_comparacao=True,
+):
+    """
+    Executa somente o caminho de navegação do Retorno Para Estudo.
+
+    Não analisa ainda os dois documentos. Esta função serve para validar se os cliques
+    estão corretos antes de partir para a análise lado esquerdo x lado direito.
+
+    Fluxo:
+    1. Abre SCH.
+    2. Entra em Retorno Para Estudo.
+    3. Abre o requerimento pelo ícone verde da linha.
+    4. Entra em Anexos.
+    5. Baixa somente as categorias informadas pelo usuário, se houver.
+    6. Volta para Dados Gerais.
+    7. Clica em Comparar Versões.
+    8. Clica no botão do modal Comparar Versão.
+    9. Aguarda a nova aba dos dois documentos.
+    """
+    resultado = {
+        "status": "iniciado",
+        "requerimento": "",
+        "anexos": [],
+        "comparacao": {},
+        "erro": "",
+    }
+
+    try:
+        abrir_sch(driver)
+        garantir_sessao_ativa_sch(
+            driver,
+            wait,
+            contexto="início do caminho Retorno Para Estudo",
+            reabrir_fila=False,
+        )
+
+        clicar_fila_retorno_para_estudo(driver, wait)
+
+        requerimentos = coletar_requerimentos(driver, wait, regras)
+
+        if not requerimentos:
+            raise Exception("Nenhum requerimento encontrado em Retorno Para Estudo.")
+
+        req = None
+
+        if requerimento_alvo:
+            alvo_digitos = _somente_digitos(str(requerimento_alvo))
+
+            for item in requerimentos:
+                if _somente_digitos(item.get("requerimento", "")) == alvo_digitos:
+                    req = item
+                    break
+
+            if not req:
+                raise Exception(
+                    f"Requerimento alvo {requerimento_alvo} não encontrado na fila."
+                )
+        else:
+            req = requerimentos[0]
+
+        resultado["requerimento"] = req.get("requerimento", "")
+
+        abrir_requerimento_retorno_para_estudo(
+            driver,
+            wait,
+            req,
+            indice_icone=2,
+        )
+
+        clicar_aba_anexos(driver, wait)
+
+        categorias_baixar = categorias_baixar or []
+
+        if categorias_baixar:
+            if not pasta_saida or not pasta_download:
+                raise Exception(
+                    "Para baixar anexos, informe pasta_saida e pasta_download."
+                )
+
+            for categoria in categorias_baixar:
+                clicar_categoria_anexo(driver, wait, categoria)
+
+                anexos_categoria = baixar_anexos_da_categoria_atual(
+                    driver=driver,
+                    wait=wait,
+                    req=req,
+                    pasta_saida=pasta_saida,
+                    pasta_download=pasta_download,
+                    categoria=categoria,
+                )
+
+                resultado["anexos"].extend(anexos_categoria)
+        else:
+            print(
+                "[SCH][RETORNO] Nenhuma categoria de anexo informada para download. "
+                "Apenas validando o caminho."
+            )
+
+        # Para ficar igual ao caminho validado: antes de Comparar Versões, volta para Dados Gerais.
+        clicar_aba_dados_gerais(driver, wait)
+
+        if abrir_comparacao:
+            info_comparacao = clicar_comparar_versoes(driver, wait)
+            resultado["comparacao"] = info_comparacao
+
+            print(
+                "[SCH][RETORNO] Caminho até a tela de comparação concluído. "
+                f"URL: {info_comparacao.get('url_comparacao', '')}"
+            )
+
+        resultado["status"] = "ok"
+        return resultado
+
+    except Exception as e:
+        resultado["status"] = "erro"
+        resultado["erro"] = str(e)
+
+        print(f"[SCH][RETORNO][ERRO] Falha no caminho Retorno Para Estudo: {e}")
+
+        return resultado
+
+def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
+    """
+    Fluxo correto do Retorno Para Estudo:
+
+    1. Clica no botão superior "Comparar Versões".
+    2. Espera abrir o modal "Selecionar Requerimento".
+    3. Clica no botão interno "Comparar Versão".
+    4. Espera o próprio SCH abrir a nova aba.
+    5. Troca para a nova aba.
+    6. Espera a tela real de comparação carregar.
+
+    Importante:
+    - NÃO usa window.open().
+    - NÃO usa driver.get().
+    - NÃO abre aba manualmente.
+    """
+
+    print("[SCH][RETORNO] Clicando no botão superior 'Comparar Versões'...")
+
+    try:
+        aba_origem = driver.current_window_handle
+    except Exception:
+        aba_origem = None
+
+    try:
+        handles_antes = set(driver.window_handles)
+    except Exception:
+        handles_antes = set()
+
+    xpaths_botao_superior = [
+        "//button[normalize-space()='Comparar Versões']",
+        "//a[normalize-space()='Comparar Versões']",
+        "//input[@type='button' and normalize-space(@value)='Comparar Versões']",
+        "//*[self::a or self::button][normalize-space()='Comparar Versões']",
+        "//*[contains(normalize-space(), 'Comparar Versões')][self::a or self::button or self::input]",
+        "//*[contains(normalize-space(), 'Comparar Versões')]/ancestor::*[self::a or self::button][1]",
+    ]
+
+    botao_superior = None
+    ultimo_erro = None
+
+    for usar_iframe in [False, True]:
+        try:
+            if usar_iframe:
+                entrar_iframe_detalhe_analise(driver, wait)
+            else:
+                driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        for xpath in xpaths_botao_superior:
+            try:
+                elementos = driver.find_elements(By.XPATH, xpath)
+
+                for el in elementos:
+                    try:
+                        if el.is_displayed() and el.is_enabled():
+                            botao_superior = el
+                            break
+                    except Exception:
+                        continue
+
+                if botao_superior:
+                    break
+
+            except Exception as e:
+                ultimo_erro = e
+                continue
+
+        if botao_superior:
+            break
+
+    if not botao_superior:
+        raise Exception(
+            "Não foi possível localizar o botão superior 'Comparar Versões'. "
+            f"Último erro: {ultimo_erro}"
+        )
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        botao_superior,
+    )
+
+    try:
+        botao_superior.click()
+    except Exception:
+        try:
+            ActionChains(driver).move_to_element(botao_superior).pause(0.3).click().perform()
+        except Exception:
+            _clicar_com_fallback(driver, botao_superior)
+
+    esperar_tela_carregar(driver, 0.8)
+
+    print("[SCH][RETORNO] Clique superior executado.")
+    print("[SCH][RETORNO] Aguardando modal 'Selecionar Requerimento'...")
+
+    def _modal_selecionar_requerimento_abriu():
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        try:
+            texto = driver.execute_script(
+                """
+                return document.body
+                    ? (document.body.innerText || document.body.textContent || '')
+                    : '';
+                """
+            ) or ""
+
+            texto_norm = _normalizar_texto_comparacao(texto)
+
+            return (
+                "selecionar requerimento" in texto_norm
+                and "comparar versao" in texto_norm
+            )
+        except Exception:
+            return False
+
+    modal_aberto = False
+    inicio_modal = time.time()
+
+    while time.time() - inicio_modal < 30:
+        if _modal_selecionar_requerimento_abriu():
+            modal_aberto = True
+            break
+
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+
+            texto = driver.execute_script(
+                """
+                return document.body
+                    ? (document.body.innerText || document.body.textContent || '')
+                    : '';
+                """
+            ) or ""
+
+            texto_norm = _normalizar_texto_comparacao(texto)
+
+            if (
+                "selecionar requerimento" in texto_norm
+                and "comparar versao" in texto_norm
+            ):
+                modal_aberto = True
+                break
+        except Exception:
+            pass
+
+        time.sleep(0.3)
+
+    if not modal_aberto:
+        raise Exception(
+            "Cliquei em 'Comparar Versões', mas o modal "
+            "'Selecionar Requerimento' não apareceu."
+        )
+
+    print("[SCH][RETORNO] Modal detectado.")
+    print("[SCH][RETORNO] Clicando no botão interno 'Comparar Versão'...")
+
+    try:
+        handles_antes_modal = set(driver.window_handles)
+    except Exception:
+        handles_antes_modal = set()
+
+    # Usa o clique mais robusto, próximo do clique manual, para evitar a aba about:blank.
+    clicou_modal = _clicar_botao_comparar_versao_modal(driver, wait)
+
+    if not clicou_modal:
+        raise Exception(
+            "Modal abriu, mas não foi possível clicar corretamente no botão interno "
+            "'Comparar Versão'."
+        )
+
+    print("[SCH][RETORNO] Clique interno em 'Comparar Versão' executado pelo clique robusto.")
+    print("[SCH][RETORNO] Aguardando o SCH abrir a nova aba de comparação...")
+
+    nova_aba = None
+    inicio_abertura = time.time()
+
+    while time.time() - inicio_abertura < 120:
+        try:
+            handles_depois = set(driver.window_handles)
+
+            novas = [
+                h for h in handles_depois
+                if h not in handles_antes_modal
+            ]
+
+            if novas:
+                nova_aba = novas[-1]
+                print("[SCH][RETORNO] Nova aba de comparação detectada.")
+                break
+
+        except Exception:
+            pass
+
+        time.sleep(0.5)
+
+    if not nova_aba:
+        raise Exception(
+            "Cliquei no botão interno 'Comparar Versão', mas o SCH não abriu "
+            "nova aba dentro do tempo limite."
+        )
+
+    driver.switch_to.window(nova_aba)
+
+    try:
+        driver.maximize_window()
+    except Exception:
+        pass
+
+    print("[SCH][RETORNO] Nova aba aberta. Aguardando carregamento da comparação...")
+
+    inicio_carregamento = time.time()
+
+    while time.time() - inicio_carregamento < timeout_resultado:
+        try:
+            url_atual = str(driver.current_url or "").strip().lower()
+
+            if url_atual in {"", "about:blank"}:
+                print("[SCH][RETORNO] Nova aba ainda está em about:blank. Aguardando...")
+                time.sleep(1.0)
+                continue
+
+            try:
+                estado = driver.execute_script("return document.readyState")
+                if estado not in {"interactive", "complete"}:
+                    time.sleep(0.5)
+                    continue
+            except Exception:
+                pass
+
+            if _eh_tela_real_comparacao_versoes(driver, wait):
+                esperar_tela_carregar(driver, 2.0)
+
+                print("[SCH][RETORNO] Página de comparação carregada com sucesso.")
+
+                return {
+                    "abriu": True,
+                    "aba_origem": aba_origem,
+                    "aba_atual": driver.current_window_handle,
+                    "nova_aba": True,
+                    "url_comparacao": driver.current_url,
+                }
+
+        except Exception:
+            pass
+
+        time.sleep(0.7)
+
+    try:
+        if aba_origem and aba_origem in driver.window_handles:
+            driver.switch_to.window(aba_origem)
+    except Exception:
+        pass
+
+    raise Exception(
+        "A nova aba foi aberta pelo SCH, mas a página de comparação não carregou "
+        "dentro do tempo limite."
+    )
+
+def _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura):
+    if not isinstance(info_abertura, dict):
+        return False
+
+    aba_origem = info_abertura.get("aba_origem")
+    aba_atual = info_abertura.get("aba_atual")
+
+    if not aba_origem or not aba_atual or aba_origem == aba_atual:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        return False
+
+    try:
+        handles = list(driver.window_handles)
+
+        if aba_atual in handles:
+            driver.switch_to.window(aba_atual)
+            driver.close()
+
+        handles = list(driver.window_handles)
+
+        if aba_origem in handles:
+            driver.switch_to.window(aba_origem)
+        elif handles:
+            driver.switch_to.window(handles[0])
+
+        esperar_tela_carregar(driver, 0.5)
+        return True
+
+    except Exception as e:
+        print(f"[SCH][RETORNO][WARN] Não foi possível fechar a aba de comparação: {e}")
+
+        try:
+            if aba_origem in driver.window_handles:
+                driver.switch_to.window(aba_origem)
+        except Exception:
+            pass
+
+        return False
+
+
+def _montar_alteracao_retorno(campo, anterior, novo):
+    return {
+        "campo": campo,
+        "anterior": str(anterior or "").strip(),
+        "novo": str(novo or "").strip(),
+    }
+
+
+def analisar_retorno_para_estudo(
+    driver,
+    wait,
+    req=None,
+    anexos_baixados=None,
+    executar_envio=False,
+):
+    """
+    Analisa a tela 'Comparar Versões' para requerimentos em Retorno Para Estudo.
+
+    Regra de decisão:
+    - Sem alteração técnica relevante + documentos apenas adicionados => Enviar para aprovação.
+    - Alteração em Dados Técnicos, Especificações Complementares, documentos removidos
+      ou comparação inconclusiva => Revisar manualmente.
+    """
+    req = req or {}
+    anexos_baixados = anexos_baixados or []
+
+    numero_req = req.get("requerimento", "") if isinstance(req, dict) else str(req or "")
+
+    resultado = {
+        "tipo_relatorio": "retorno_para_estudo",
+        "requerimento": numero_req,
+        "status_comparacao": "nao_executada",
+        "alteracoes_dados_tecnicos": [],
+        "alteracoes_especificacoes_complementares": [],
+        "documentos_adicionados": [],
+        "documentos_removidos": [],
+        "resultado": "",
+        "acao_recomendada": "Revisar manualmente",
+        "deve_enviar_para_aprovacao": False,
+        "envio_para_aprovacao": {
+            "executado": False,
+            "motivo": "execucao_desabilitada",
+        },
+        "captura": {},
+        "erro": "",
+    }
+
+    info_abertura = {}
+
+    try:
+        info_abertura = clicar_comparar_versoes(driver, wait)
+        captura = _capturar_comparar_versoes(driver, wait)
+
+        resultado["captura"] = {
+            "url": captura.get("url", ""),
+            "title": captura.get("title", ""),
+            "qtd_vermelhos_esquerda": len(captura.get("vermelhos_esquerda", []) or []),
+            "qtd_vermelhos_direita": len(captura.get("vermelhos_direita", []) or []),
+        }
+
+        texto_antigo = captura.get("texto_esquerda", "") or ""
+        texto_novo = captura.get("texto_direita", "") or ""
+
+        if not texto_antigo and not texto_novo:
+            texto_total = captura.get("texto_total", "") or ""
+            texto_antigo = texto_total
+            texto_novo = texto_total
+
+        dados_antigos = _recortar_secao_retorno(
+            texto_antigo,
+            ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
+            ["Laboratório", "Laboratorio", "Relação de Arquivos Anexos", "Relacao de Arquivos Anexos", "Garantias"],
+        )
+
+        dados_novos = _recortar_secao_retorno(
+            texto_novo,
+            ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
+            ["Laboratório", "Laboratorio", "Relação de Arquivos Anexos", "Relacao de Arquivos Anexos", "Garantias"],
+        )
+
+        espec_antiga = _extrair_especificacoes_complementares_retorno(dados_antigos or texto_antigo)
+        espec_nova = _extrair_especificacoes_complementares_retorno(dados_novos or texto_novo)
+
+        dados_antigos_sem_espec = _remover_especificacoes_do_bloco_dados_tecnicos(dados_antigos)
+        dados_novos_sem_espec = _remover_especificacoes_do_bloco_dados_tecnicos(dados_novos)
+
+        if (
+            _normalizar_texto_retorno(dados_antigos_sem_espec)
+            != _normalizar_texto_retorno(dados_novos_sem_espec)
+        ):
+            if dados_antigos_sem_espec or dados_novos_sem_espec:
+                resultado["alteracoes_dados_tecnicos"].append(
+                    _montar_alteracao_retorno(
+                        "Dados Técnicos do Produto",
+                        dados_antigos_sem_espec,
+                        dados_novos_sem_espec,
+                    )
+                )
+
+        if _normalizar_texto_retorno(espec_antiga) != _normalizar_texto_retorno(espec_nova):
+            if espec_antiga or espec_nova:
+                resultado["alteracoes_especificacoes_complementares"].append(
+                    _montar_alteracao_retorno(
+                        "Especificações Complementares",
+                        espec_antiga,
+                        espec_nova,
+                    )
+                )
+
+        docs_antigos = _extrair_documentos_comparar_versoes(texto_antigo)
+        docs_novos = _extrair_documentos_comparar_versoes(texto_novo)
+
+        set_antigos = {_normalizar_texto_retorno(d) for d in docs_antigos}
+        set_novos = {_normalizar_texto_retorno(d) for d in docs_novos}
+
+        adicionados_por_diff = [
+            d for d in docs_novos
+            if _normalizar_texto_retorno(d) not in set_antigos
+        ]
+
+        removidos_por_diff = [
+            d for d in docs_antigos
+            if _normalizar_texto_retorno(d) not in set_novos
+        ]
+
+        vermelhos_direita = [
+            item.get("texto", "")
+            for item in (captura.get("vermelhos_direita", []) or [])
+            if isinstance(item, dict)
+        ]
+
+        vermelhos_esquerda = [
+            item.get("texto", "")
+            for item in (captura.get("vermelhos_esquerda", []) or [])
+            if isinstance(item, dict)
+        ]
+
+        # Preferência: o próprio SCH marca em vermelho o que mudou.
+        # Fallback: diferença entre listas extraídas da relação de anexos.
+        docs_adicionados = _lista_unica_retorno(
+            [
+                d for d in vermelhos_direita
+                if _normalizar_texto_retorno(d) in {_normalizar_texto_retorno(x) for x in adicionados_por_diff}
+            ]
+            or adicionados_por_diff
+        )
+
+        docs_removidos = _lista_unica_retorno(
+            [
+                d for d in vermelhos_esquerda
+                if _normalizar_texto_retorno(d) in {_normalizar_texto_retorno(x) for x in removidos_por_diff}
+            ]
+            or removidos_por_diff
+        )
+
+        resultado["documentos_adicionados"] = docs_adicionados
+        resultado["documentos_removidos"] = docs_removidos
+
+        tem_alteracao_tecnica = bool(
+            resultado["alteracoes_dados_tecnicos"]
+            or resultado["alteracoes_especificacoes_complementares"]
+        )
+
+        tem_remocao_documento = bool(resultado["documentos_removidos"])
+        tem_documento_adicionado = bool(resultado["documentos_adicionados"])
+
+        if not tem_alteracao_tecnica and not tem_remocao_documento and tem_documento_adicionado:
+            resultado["status_comparacao"] = "ok_apenas_documentos_adicionados"
+            resultado["resultado"] = (
+                "Foram identificadas apenas inclusões de documentos, "
+                "sem alteração técnica relevante."
+            )
+            resultado["acao_recomendada"] = "Enviar para aprovação"
+            resultado["deve_enviar_para_aprovacao"] = True
+
+        elif not tem_alteracao_tecnica and not tem_remocao_documento and not tem_documento_adicionado:
+            resultado["status_comparacao"] = "sem_alteracao_identificada"
+            resultado["resultado"] = (
+                "Não foi identificada alteração técnica nem inclusão/remoção de documentos. "
+                "Revisão manual recomendada para confirmar o retorno."
+            )
+            resultado["acao_recomendada"] = "Revisar manualmente"
+            resultado["deve_enviar_para_aprovacao"] = False
+
+        else:
+            resultado["status_comparacao"] = "revisar"
+            resultado["resultado"] = (
+                "Foi identificada alteração relevante ou situação inconclusiva "
+                "no retorno para estudo."
+            )
+            resultado["acao_recomendada"] = "Revisar manualmente"
+            resultado["deve_enviar_para_aprovacao"] = False
+
+        _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
+
+        if executar_envio and resultado["deve_enviar_para_aprovacao"]:
+            resultado["envio_para_aprovacao"] = clicar_aprovar_retorno_para_estudo(driver, wait)
+        elif not executar_envio:
+            resultado["envio_para_aprovacao"] = {
+                "executado": False,
+                "motivo": "execucao_desabilitada_no_fluxo",
+            }
+        else:
+            resultado["envio_para_aprovacao"] = {
+                "executado": False,
+                "motivo": "acao_recomendada_nao_e_envio_para_aprovacao",
+            }
+
+        print(
+            "[SCH][RETORNO] Resultado da comparação: "
+            f"{resultado['status_comparacao']} | ação={resultado['acao_recomendada']}"
+        )
+
+        return resultado
+
+    except Exception as e:
+        try:
+            _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
+        except Exception:
+            pass
+
+        resultado["status_comparacao"] = "erro"
+        resultado["resultado"] = "Não foi possível concluir automaticamente a comparação de versões."
+        resultado["acao_recomendada"] = "Revisar manualmente"
+        resultado["deve_enviar_para_aprovacao"] = False
+        resultado["erro"] = str(e)
+
+        print(f"[SCH][RETORNO][WARN] Falha na análise de Retorno Para Estudo: {e}")
+        return resultado
+
+
+def clicar_aprovar_retorno_para_estudo(driver, wait):
+    """
+    Clica no botão que aprova o retorno / envia o processo para aprovação.
+    Use somente quando analisar_retorno_para_estudo indicar:
+    deve_enviar_para_aprovacao=True.
+    """
+    print("[SCH][RETORNO] Tentando enviar para aprovação...")
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    xpaths = [
+        "//*[self::a or self::button][normalize-space()='Aprovar']",
+        "//*[self::a or self::button][contains(normalize-space(), 'Aprovar')]",
+        "//*[self::a or self::button][contains(normalize-space(), 'Enviar para aprovação')]",
+        "//*[self::a or self::button][contains(normalize-space(), 'Enviar para Aprovação')]",
+        "//*[self::a or self::button][contains(normalize-space(), 'Enviar para aprovacao')]",
+        "//input[contains(@value, 'Aprovar') or contains(@value, 'Enviar para aprovação') or contains(@value, 'Enviar para Aprovação')]",
+    ]
+
+    ultimo_erro = None
+
+    for contexto in ["default", "iframe"]:
+        try:
+            if contexto == "default":
+                driver.switch_to.default_content()
+            else:
+                entrar_iframe_detalhe_analise(driver, wait)
+
+            for xpath in xpaths:
+                try:
+                    botoes = WebDriverWait(driver, 2.5, poll_frequency=0.1).until(
+                        EC.presence_of_all_elements_located((By.XPATH, xpath))
+                    )
+
+                    for botao in botoes:
+                        try:
+                            if not botao.is_displayed() or not botao.is_enabled():
+                                continue
+
+                            driver.execute_script(
+                                "arguments[0].scrollIntoView({block:'center'});",
+                                botao,
+                            )
+
+                            _clicar_com_fallback(driver, botao)
+                            esperar_tela_carregar(driver, 0.8)
+
+                            try:
+                                alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
+                                texto_alerta = alert.text
+                                alert.accept()
+                                esperar_tela_carregar(driver, 0.8)
+                            except Exception:
+                                texto_alerta = ""
+
+                            print("[SCH][RETORNO] Envio para aprovação executado.")
+                            return {
+                                "executado": True,
+                                "botao": "Aprovar/Enviar para aprovação",
+                                "alerta": texto_alerta,
+                            }
+
+                        except Exception as e:
+                            ultimo_erro = e
+                            continue
+
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+        except Exception as e:
+            ultimo_erro = e
+            continue
+
+    return {
+        "executado": False,
+        "motivo": "botao_aprovar_nao_encontrado",
+        "erro": str(ultimo_erro or ""),
+    }
+
+
+def voltar_para_fila(driver, wait, nome_fila=None):
+    fila_destino = _resolver_nome_fila_sch(nome_fila or FILA_SCH_ATUAL or "Em Análise")
     print(f"[SCH] Voltando para a fila {fila_destino}...")
 
     if garantir_sessao_ativa_sch(
@@ -5668,6 +7313,7 @@ def voltar_para_fila(driver, wait, nome_fila=None):
     candidatos = [
         "//a[contains(., 'Voltar')]",
         "//button[contains(., 'Voltar')]",
+        "//input[@type='button' and contains(@value,'Voltar')]",
         "//img[contains(@src,'voltar')]/..",
     ]
 
@@ -5689,7 +7335,6 @@ def voltar_para_fila(driver, wait, nome_fila=None):
 
             print(f"[SCH] Retorno para a fila {fila_destino} concluído por botão.")
             return
-
         except Exception:
             continue
 
@@ -5700,16 +7345,17 @@ def voltar_para_fila(driver, wait, nome_fila=None):
         WebDriverWait(driver, 3, poll_frequency=0.08).until(
             EC.presence_of_element_located((By.XPATH, XPATH_TABELA_FILA))
         )
-
         print(f"[SCH] Retorno para a fila {fila_destino} concluído por back().")
         return
-
     except Exception:
         pass
 
+    # Fallback: reabre a página principal e clica explicitamente na fila correta.
     try:
+        abrir_sch(driver)
+        esperar_tela_carregar(driver, 1.0)
         clicar_fila_sch(driver, wait, fila_destino)
-        print(f"[SCH] Retorno para a fila {fila_destino} concluído por clique no menu lateral.")
+        print(f"[SCH] Retorno para a fila {fila_destino} concluído por clique direto.")
         return
 
     except Exception as e:
@@ -5726,6 +7372,4 @@ def voltar_para_fila(driver, wait, nome_fila=None):
         return
 
     raise Exception(f"Não foi possível voltar para a fila {fila_destino}.")
-
-
 

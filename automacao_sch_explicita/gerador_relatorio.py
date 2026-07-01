@@ -1262,7 +1262,224 @@ def _html_homologacoes_vinculadas(resultado):
 
 
 
+
+
+# =============================================================================
+# RELATÓRIO - RETORNO PARA ESTUDO
+# =============================================================================
+
+def _fmt_fila_sch(resultado):
+    req = resultado.get("requerimento") or {}
+    if isinstance(req, dict):
+        return req.get("fila_sch", "") or resultado.get("fila_sch", "")
+    return resultado.get("fila_sch", "")
+
+
+def _fmt_retorno_para_estudo(resultado):
+    return resultado.get("retorno_para_estudo") or {}
+
+
+def _resultado_eh_retorno_para_estudo(resultado):
+    retorno = _fmt_retorno_para_estudo(resultado)
+    fila = str(_fmt_fila_sch(resultado) or "").lower()
+    fila = fila.replace("á", "a").replace("ã", "a").replace("ç", "c")
+
+    return bool(retorno) or "retorno para estudo" in fila or "retorno pra estudo" in fila
+
+
+def _html_lista_retorno(valores, vazio="Nenhum."):
+    if not valores:
+        return f"<p>{escape(vazio)}</p>"
+
+    linhas = ["<ul>"]
+
+    for item in valores:
+        if isinstance(item, dict):
+            campo = item.get("campo") or ""
+            anterior = item.get("anterior") or ""
+            novo = item.get("novo") or ""
+
+            linhas.append("<li>")
+
+            if campo:
+                linhas.append(f"<b>{escape(str(campo))}</b>")
+
+            if anterior or novo:
+                linhas.append(
+                    "<table>"
+                    "<thead><tr><th>Anterior</th><th>Novo</th></tr></thead>"
+                    "<tbody><tr>"
+                    f"<td>{escape(str(anterior or 'Não identificado'))}</td>"
+                    f"<td>{escape(str(novo or 'Não identificado'))}</td>"
+                    "</tr></tbody></table>"
+                )
+            else:
+                linhas.append(escape(str(item)))
+
+            linhas.append("</li>")
+
+        else:
+            linhas.append(f"<li>{escape(str(item))}</li>")
+
+    linhas.append("</ul>")
+    return "".join(linhas)
+
+
+def _html_retorno_para_estudo_bloco(resultado):
+    retorno = _fmt_retorno_para_estudo(resultado)
+    req_numero = _fmt_req(resultado)
+
+    status = retorno.get("status_comparacao") or "Não executada"
+    alteracoes_dados = retorno.get("alteracoes_dados_tecnicos") or []
+    alteracoes_especificacoes = retorno.get("alteracoes_especificacoes_complementares") or []
+    docs_adicionados = retorno.get("documentos_adicionados") or []
+    docs_removidos = retorno.get("documentos_removidos") or []
+    resultado_txt = retorno.get("resultado") or "Não informado."
+    acao = retorno.get("acao_recomendada") or "Revisar manualmente"
+
+    classe = "ok" if str(acao).strip().lower() == "enviar para aprovação" else "alerta"
+
+    return f"""
+        <h2>Relatório - Retorno Para Estudo</h2>
+
+        <table>
+            <thead>
+                <tr><th>Item</th><th>Valor</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Requerimento</td><td>{escape(str(req_numero))}</td></tr>
+                <tr><td>Status da comparação</td><td>{escape(str(status))}</td></tr>
+            </tbody>
+        </table>
+
+        <h3>Alterações em Dados Técnicos</h3>
+        {_html_lista_retorno(alteracoes_dados, "Nenhuma alteração técnica relevante identificada.")}
+
+        <h3>Alterações em Especificações Complementares</h3>
+        {_html_lista_retorno(alteracoes_especificacoes, "Nenhuma alteração identificada.")}
+
+        <h3>Documentos adicionados</h3>
+        {_html_lista_retorno(docs_adicionados, "Nenhum documento adicionado identificado.")}
+
+        <h3>Documentos removidos</h3>
+        {_html_lista_retorno(docs_removidos, "Nenhum documento removido identificado.")}
+
+        <h3>Resultado</h3>
+        <div class="{classe}">{escape(str(resultado_txt))}</div>
+
+        <h3>Ação recomendada</h3>
+        <div class="{classe}"><b>{escape(str(acao))}</b></div>
+    """
+
+
+def _html_requerimento_retorno_para_estudo(resultado):
+    req_numero = _fmt_req(resultado)
+    tempo_ativo = _tempo_ativo_resultado_segundos(resultado)
+    retorno = _fmt_retorno_para_estudo(resultado)
+    erro = retorno.get("erro") or ""
+
+    erro_html = (
+        f"<div class='alerta'><b>Erro na comparação:</b> {escape(str(erro))}</div>"
+        if erro
+        else ""
+    )
+
+    return f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Retorno Para Estudo - Requerimento {escape(req_numero)}</title>
+        {_css()}
+    </head>
+    <body>
+        <h1>Requerimento {escape(req_numero)}</h1>
+        <p class="muted">Fila: Retorno Para Estudo</p>
+        <p class="muted">Tempo de análise: {escape(str(tempo_ativo))} segundo(s)</p>
+
+        {erro_html}
+
+        {_html_retorno_para_estudo_bloco(resultado)}
+
+        <h2>Dados operacionais</h2>
+        <ul>
+            <li><b>Downloads realizados:</b> {escape(str(resultado.get('downloads_realizados', 0)))}</li>
+            <li><b>CCT localizado:</b> {escape(str(resultado.get('pdf_cct', '')))}</li>
+            <li><b>Status do processamento:</b> {escape(str(resultado.get('status', '')))}</li>
+        </ul>
+    </body>
+    </html>
+    """
+
+
+def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_execucao, fim_execucao):
+    total = len(resultados)
+    sucessos = sum(1 for x in resultados if x.get("status") == "sucesso")
+    erros = sum(1 for x in resultados if x.get("status") == "erro")
+    docs = sum(int(x.get("downloads_realizados", 0) or 0) for x in resultados)
+
+    tempo_total_decorrido_segundos = round((fim_execucao - inicio_execucao).total_seconds(), 2)
+    tempo_ativo_automacao_segundos = _tempo_ativo_total_segundos(resultados)
+
+    qtd_enviar = 0
+    qtd_revisar = 0
+
+    itens_html = []
+
+    for idx, resultado in enumerate(resultados, start=1):
+        retorno = _fmt_retorno_para_estudo(resultado)
+        acao = retorno.get("acao_recomendada") or "Revisar manualmente"
+
+        if str(acao).strip().lower() == "enviar para aprovação":
+            qtd_enviar += 1
+        else:
+            qtd_revisar += 1
+
+        itens_html.append(
+            f"""
+            <div class="break"></div>
+            <h1>{idx} Requerimento {escape(_fmt_req(resultado))}</h1>
+            {_html_retorno_para_estudo_bloco(resultado)}
+            """
+        )
+
+    return f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Relatório - Retorno Para Estudo</title>
+        {_css()}
+    </head>
+    <body>
+        <h1>Relatório - Retorno Para Estudo</h1>
+
+        <div class="sumario">
+            <h2>Sumário</h2>
+            <p>Este relatório apresenta a comparação automatizada de versões dos requerimentos em Retorno Para Estudo.</p>
+
+            <h2>Estatísticas Gerais</h2>
+            <ul>
+                <li>Requerimentos analisados: {total}</li>
+                <li>Recomendados para envio/aprovação: {qtd_enviar}</li>
+                <li>Recomendados para revisão manual: {qtd_revisar}</li>
+                <li>Documentos processados: {docs}</li>
+                <li>Tempo ativo da automação: {_fmt_duracao(tempo_ativo_automacao_segundos)}</li>
+                <li>Tempo total decorrido: {_fmt_duracao(tempo_total_decorrido_segundos)}</li>
+                <li>Data do processamento: {fim_execucao.strftime("%H:%M:%S %d/%m/%Y")}</li>
+                <li>Versão do script: {escape(str(versao_script))}</li>
+                <li>Sucessos: {sucessos}</li>
+                <li>Erros: {erros}</li>
+            </ul>
+        </div>
+
+        {''.join(itens_html)}
+    </body>
+    </html>
+    """
+
 def _html_requerimento(resultado):
+    if _resultado_eh_retorno_para_estudo(resultado):
+        return _html_requerimento_retorno_para_estudo(resultado)
+
     req_numero = _fmt_req(resultado)
     palavras = _fmt_palavras(resultado)
     normas = _fmt_normas(resultado)
@@ -1328,6 +1545,14 @@ def _html_requerimento(resultado):
     """
 
 def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
+    if resultados and all(_resultado_eh_retorno_para_estudo(r) for r in resultados):
+        return _html_consolidado_retorno_para_estudo(
+            resultados=resultados,
+            versao_script=versao_script,
+            inicio_execucao=inicio_execucao,
+            fim_execucao=fim_execucao,
+        )
+
     total = len(resultados)
     sucessos = sum(1 for x in resultados if x.get("status") == "sucesso")
     erros = sum(1 for x in resultados if x.get("status") == "erro")

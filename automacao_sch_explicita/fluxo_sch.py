@@ -25,6 +25,7 @@ from funcoes_sch import (
     garantir_sessao_ativa_sch,
     voltar_para_fila,
     extrair_dados_certificado_sch,
+    analisar_retorno_para_estudo,
 )
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
@@ -33,7 +34,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.7.2"
+VERSAO_SCRIPT = "0.7.3"
 
 
 def _normalizar_texto(valor):
@@ -44,8 +45,15 @@ def _normalizar_texto(valor):
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
     texto = re.sub(r"\s+", " ", texto)
-
     return texto.strip()
+
+
+def _eh_fila_retorno_para_estudo(fila_sch):
+    return _normalizar_texto(fila_sch) in {
+        "retorno para estudo",
+        "retorno pra estudo",
+        "retorno estudo",
+    }
 
 
 def _texto_requerimento(req):
@@ -53,11 +61,9 @@ def _texto_requerimento(req):
         return ""
 
     partes = []
-
     for _, valor in req.items():
         if valor is None:
             continue
-
         partes.append(str(valor))
 
     return _normalizar_texto(" | ".join(partes))
@@ -118,6 +124,21 @@ def _dados_normativos_radiacao_restrita():
             "IPv6 não obrigatório como regra geral para radiação restrita",
             "SAR obrigatório quando aplicável",
             "Segurança cibernética apenas para tipos específicos",
+        ],
+    }
+
+
+def _dados_normativos_retorno_para_estudo():
+    return {
+        "tipo_fluxo": "Retorno Para Estudo",
+        "objetivo": (
+            "Comparar a versão anterior e a nova versão do requerimento, "
+            "identificando alterações em Dados Técnicos, Especificações Complementares "
+            "e na relação de documentos anexados."
+        ),
+        "regra_decisao": [
+            "Sem alteração técnica relevante e somente documentos adicionados: Enviar para aprovação.",
+            "Alteração em Dados Técnicos, Especificações Complementares, documentos removidos ou caso inconclusivo: Revisar manualmente.",
         ],
     }
 
@@ -251,7 +272,7 @@ def perguntar_se_fecha_navegador():
 def perguntar_fila_sch():
     """
     Define qual fila do SCH será processada.
-    O restante do fluxo é exatamente o mesmo para qualquer fila.
+    O restante do fluxo usa a fila escolhida, sem cair automaticamente em Em Análise.
     """
     while True:
         print("\n[SCH] Qual fila deseja processar?")
@@ -293,6 +314,54 @@ def _montar_ignorados_resumidos(requerimentos_ignorados):
     return ignorados_resumidos
 
 
+def _categorias_processadas(anexos_baixados):
+    return sorted(
+        list(
+            {
+                item.get("categoria", "")
+                for item in (anexos_baixados or [])
+                if isinstance(item, dict)
+                and item.get("status") in {
+                    "baixado",
+                    "sem_link",
+                    "erro",
+                    "erro_categoria",
+                    "nao_identificado",
+                    "duplicado_ignorado",
+                    "ja_existente",
+                }
+            }
+        )
+    )
+
+
+def _salvar_controle_downloads(
+    pasta_req,
+    numero,
+    qtd_downloads,
+    categorias_anexos_ativas,
+    anexos_baixados,
+    escopo_processamento,
+    fila_sch,
+    retorno_para_estudo=None,
+):
+    controle = {
+        "requerimento": numero,
+        "downloads_realizados": qtd_downloads,
+        "categorias_configuradas": categorias_anexos_ativas,
+        "categorias_processadas": _categorias_processadas(anexos_baixados),
+        "escopo_processamento": escopo_processamento,
+        "fila_sch": fila_sch,
+        "atualizado_em": datetime.now().isoformat(),
+    }
+
+    if retorno_para_estudo is not None:
+        controle["retorno_para_estudo"] = retorno_para_estudo
+
+    salvar_json(Path(pasta_req) / "controle_downloads.json", controle)
+    return controle
+
+
 def executar_fluxo_sch(
     pasta_base,
     limite_requerimentos=None,
@@ -305,6 +374,7 @@ def executar_fluxo_sch(
     categorias_anexos=None,
     fechar_navegador_ao_final=None,
     fila_sch=None,
+    executar_envio_retorno_para_estudo=False,
 ):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
@@ -312,6 +382,7 @@ def executar_fluxo_sch(
     if not fila_sch:
         fila_sch = perguntar_fila_sch()
 
+    fila_retorno = _eh_fila_retorno_para_estudo(fila_sch)
     print(f"[SCH] Fila selecionada para processamento: {fila_sch}")
 
     regras = carregar_regras()
@@ -328,6 +399,13 @@ def executar_fluxo_sch(
 
     if limite_requerimentos:
         regras["limite_requerimentos"] = int(limite_requerimentos)
+
+    # Em Retorno Para Estudo a análise deve comparar versões do requerimento,
+    # então não faz sentido bloquear o processamento por tipo de produto.
+    processar_apenas_rr_efetivo = (
+        bool(processar_apenas_radiacao_restrita)
+        and not fila_retorno
+    )
 
     driver, wait, pasta_saida_driver, pasta_download = _criar_driver_com_pasta(pasta_base)
 
@@ -366,7 +444,7 @@ def executar_fluxo_sch(
 
         requerimentos_processaveis, requerimentos_ignorados = separar_requerimentos_por_escopo(
             requerimentos,
-            processar_apenas_rr=processar_apenas_radiacao_restrita,
+            processar_apenas_rr=processar_apenas_rr_efetivo,
         )
 
         pasta_requerimentos, mapeados = preparar_pastas_requerimentos(
@@ -394,6 +472,7 @@ def executar_fluxo_sch(
         print(f"[SCH] Dentro do escopo: {len(requerimentos_processaveis)}")
         print(f"[SCH] Fora do escopo: {len(requerimentos_ignorados)}")
         print(f"[SCH] Pasta base da execução: {pasta_base}")
+        print(f"[SCH] Filtro radiação restrita efetivo: {'sim' if processar_apenas_rr_efetivo else 'não'}")
         print(
             "[SCH] Categorias de anexos configuradas: "
             f"{', '.join(categorias_anexos_ativas) if categorias_anexos_ativas else 'padrão do sistema'}"
@@ -447,29 +526,38 @@ def executar_fluxo_sch(
                 "texto_caracteristicas_secundarias": "",
                 "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
+                "retorno_para_estudo": {},
                 "downloads_realizados": 0,
                 "status": "iniciado",
                 "inicio": datetime.now().isoformat(),
                 "fim": None,
                 "versao_script": VERSAO_SCRIPT,
-                "escopo_processamento": "radiacao_restrita" if processar_apenas_radiacao_restrita else "todos",
-                "escopo_normativo": _dados_normativos_radiacao_restrita(),
+                "escopo_processamento": "retorno_para_estudo" if fila_retorno else (
+                    "radiacao_restrita" if processar_apenas_rr_efetivo else "todos"
+                ),
+                "escopo_normativo": _dados_normativos_retorno_para_estudo() if fila_retorno else _dados_normativos_radiacao_restrita(),
                 "categorias_anexos_configuradas": categorias_anexos_ativas,
                 "preenchimento_sch": {
                     "minuta": False,
-                    "minuta_habilitada": preencher_minuta,
-                    "caracteristicas": preencher_caracteristicas,
-                    "informacoes_adicionais": preencher_informacoes_adicionais,
+                    "minuta_habilitada": preencher_minuta and not fila_retorno,
+                    "caracteristicas": preencher_caracteristicas and not fila_retorno,
+                    "informacoes_adicionais": preencher_informacoes_adicionais and not fila_retorno,
                 },
                 "minuta": {
                     "preenchida": False,
                     "salvo": False,
                     "confirmado_apos_salvar": False,
-                    "status": "pendente" if preencher_minuta else "desabilitado_pelo_usuario",
+                    "status": "nao_aplicavel_retorno_para_estudo" if fila_retorno else (
+                        "pendente" if preencher_minuta else "desabilitado_pelo_usuario"
+                    ),
                     "mensagem": (
-                        "Preenchimento de Corrigir Minuta habilitado."
-                        if preencher_minuta
-                        else "Preenchimento de Corrigir Minuta desabilitado pelo usuário."
+                        "Fluxo Retorno Para Estudo não executa Corrigir Minuta; executa Comparar Versões."
+                        if fila_retorno
+                        else (
+                            "Preenchimento de Corrigir Minuta habilitado."
+                            if preencher_minuta
+                            else "Preenchimento de Corrigir Minuta desabilitado pelo usuário."
+                        )
                     ),
                     "frase": "",
                 },
@@ -548,6 +636,47 @@ def executar_fluxo_sch(
 
                 pdf_cct = localizar_pdf_cct_do_requerimento(pasta_req, regras)
                 resumo["pdf_cct"] = str(pdf_cct) if pdf_cct else ""
+
+                # ==========================================================
+                # FLUXO ESPECIAL: Retorno Para Estudo
+                # Baixa anexos, abre Comparar Versões, compara versão antiga x nova
+                # e gera relatório próprio de retorno. Não executa a análise completa
+                # SCH x CCT da fila Em Análise.
+                # ==========================================================
+                if fila_retorno:
+                    qtd_downloads = contar_arquivos_requerimento(pasta_req)
+                    resumo["downloads_realizados"] = qtd_downloads
+
+                    retorno_estudo = analisar_retorno_para_estudo(
+                        driver=driver,
+                        wait=wait,
+                        req=req,
+                        anexos_baixados=resumo["anexos_baixados"],
+                        executar_envio=executar_envio_retorno_para_estudo,
+                    )
+
+                    resumo["retorno_para_estudo"] = retorno_estudo
+                    resumo["status"] = "sucesso"
+                    resumo["fim"] = datetime.now().isoformat()
+
+                    _salvar_controle_downloads(
+                        pasta_req=pasta_req,
+                        numero=numero,
+                        qtd_downloads=qtd_downloads,
+                        categorias_anexos_ativas=categorias_anexos_ativas,
+                        anexos_baixados=resumo["anexos_baixados"],
+                        escopo_processamento=resumo["escopo_processamento"],
+                        fila_sch=fila_sch,
+                        retorno_para_estudo=retorno_estudo,
+                    )
+
+                    print(
+                        "[SCH][RETORNO] Requerimento finalizado. "
+                        f"Resultado={retorno_estudo.get('status_comparacao')} | "
+                        f"Ação={retorno_estudo.get('acao_recomendada')}"
+                    )
+
+                    continue
 
                 if pdf_cct:
                     print(f"[SCH] PDF CCT localizado: {pdf_cct}")
@@ -784,33 +913,15 @@ def executar_fluxo_sch(
                 qtd_downloads = contar_arquivos_requerimento(pasta_req)
                 resumo["downloads_realizados"] = qtd_downloads
 
-                controle = {
-                    "requerimento": numero,
-                    "downloads_realizados": qtd_downloads,
-                    "categorias_configuradas": categorias_anexos_ativas,
-                    "categorias_processadas": sorted(
-                        list(
-                            {
-                                item.get("categoria", "")
-                                for item in resumo["anexos_baixados"]
-                                if isinstance(item, dict)
-                                and item.get("status") in {
-                                    "baixado",
-                                    "sem_link",
-                                    "erro",
-                                    "erro_categoria",
-                                    "nao_identificado",
-                                    "duplicado_ignorado",
-                                    "ja_existente",
-                                }
-                            }
-                        )
-                    ),
-                    "escopo_processamento": resumo["escopo_processamento"],
-                    "fila_sch": fila_sch,
-                    "atualizado_em": datetime.now().isoformat(),
-                }
-                salvar_json(pasta_req / "controle_downloads.json", controle)
+                _salvar_controle_downloads(
+                    pasta_req=pasta_req,
+                    numero=numero,
+                    qtd_downloads=qtd_downloads,
+                    categorias_anexos_ativas=categorias_anexos_ativas,
+                    anexos_baixados=resumo["anexos_baixados"],
+                    escopo_processamento=resumo["escopo_processamento"],
+                    fila_sch=fila_sch,
+                )
 
                 analise_documental = analisar_requerimento(
                     pasta_req=pasta_req,
@@ -868,6 +979,7 @@ def executar_fluxo_sch(
                 "versao_script": VERSAO_SCRIPT,
                 "pasta_base": str(pasta_base),
                 "categorias_anexos_configuradas": categorias_anexos_ativas,
+                "filtro_radiacao_restrita_efetivo": processar_apenas_rr_efetivo,
             },
         )
         print(f"[SCH] Relatório consolidado salvo em: {caminho_relatorio}")

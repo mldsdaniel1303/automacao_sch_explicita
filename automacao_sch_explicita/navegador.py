@@ -91,17 +91,23 @@ def _prefs_download(download_dir):
         # Mantém PDF como download, evitando abrir em aba do navegador.
         "plugins.always_open_pdf_externally": True,
 
-        # Evita popups e prompts que podem travar a automação.
-        "profile.default_content_settings.popups": 0,
-        "profile.default_content_setting_values.automatic_downloads": 1,
-        "profile.default_content_setting_values.notifications": 2,
+        # IMPORTANTE:
+        # Para o SCH conseguir abrir telas novas, comparar versões etc.
+        # 1 = permitir, 2 = bloquear.
+        "profile.default_content_setting_values.popups": 1,
+        "profile.default_content_settings.popups": 1,
 
-        # Evita prompts de senha/salvamento.
+        # Permite múltiplos downloads automáticos.
+        "profile.default_content_setting_values.automatic_downloads": 1,
+
+        # Evita prompts.
+        "profile.default_content_setting_values.notifications": 2,
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
 
-        # Mantém navegação/downloads mais estáveis.
+        # Segurança/downloads.
         "safebrowsing.enabled": True,
+        "safebrowsing.disable_download_protection": False,
     }
 
 
@@ -109,13 +115,21 @@ def _argumentos_comuns():
     return [
         "--start-maximized",
         "--disable-notifications",
+
+        # Mantém popups liberados para telas do SCH.
         "--disable-popup-blocking",
+
         "--disable-infobars",
         "--disable-extensions",
         "--disable-gpu",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-blink-features=AutomationControlled",
+
+        # Ajuda em algumas telas antigas do SCH/Mosaico.
+        "--disable-features=RendererCodeIntegrity",
+        "--disable-web-security",
+        "--allow-running-insecure-content",
     ]
 
 
@@ -139,51 +153,22 @@ def _aplicar_configuracoes_comuns(options, download_dir):
 def _criar_opcoes_chrome(download_dir):
     options = webdriver.ChromeOptions()
 
-    prefs = {
-        "download.default_directory": str(download_dir),
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True,
-        "plugins.always_open_pdf_externally": True,
-        "profile.default_content_settings.popups": 0,
-    }
-
-    options.add_experimental_option("prefs", prefs)
+    options = _aplicar_configuracoes_comuns(options, download_dir)
 
     # Mantém o navegador aberto mesmo quando o Python/Selenium termina.
     options.add_experimental_option("detach", True)
 
-    options.add_argument("--start-maximized")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-popup-blocking")
-    options.add_argument("--disable-infobars")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-
     return options
+
 
 def _criar_opcoes_edge(download_dir):
     options = webdriver.EdgeOptions()
     options.use_chromium = True
 
-    prefs = {
-        "download.default_directory": str(download_dir),
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True,
-        "plugins.always_open_pdf_externally": True,
-        "profile.default_content_settings.popups": 0,
-    }
-
-    options.add_experimental_option("prefs", prefs)
+    options = _aplicar_configuracoes_comuns(options, download_dir)
 
     # Mantém o navegador aberto mesmo quando o Python/Selenium termina.
     options.add_experimental_option("detach", True)
-
-    options.add_argument("--start-maximized")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-popup-blocking")
-    options.add_argument("--disable-infobars")
-    options.add_argument("--disable-blink-features=AutomationControlled")
 
     return options
 
