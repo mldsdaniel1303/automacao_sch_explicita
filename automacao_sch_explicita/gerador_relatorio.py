@@ -1325,34 +1325,126 @@ def _html_lista_retorno(valores, vazio="Nenhum."):
     return "".join(linhas)
 
 
+
+def _bool_retorno(valor):
+    if isinstance(valor, bool):
+        return valor
+
+    texto = str(valor or "").strip().lower()
+    texto = texto.replace("ã", "a").replace("á", "a").replace("ç", "c")
+
+    return texto in {"true", "1", "sim", "s", "yes", "enviar", "apto"}
+
+
+def _sim_nao_retorno(valor):
+    return "SIM" if _bool_retorno(valor) else "NÃO"
+
+
+def _classe_retorno_aprovacao(valor):
+    return "ok" if _bool_retorno(valor) else "alerta"
+
+
+def _html_alertas_retorno(alertas):
+    if not alertas:
+        return "<div class='ok'>Nenhum alerta identificado.</div>"
+
+    return "".join(
+        f"<div class='alerta'>{escape(str(alerta))}</div>"
+        for alerta in alertas
+    )
+
+
+
+
 def _html_retorno_para_estudo_bloco(resultado):
     retorno = _fmt_retorno_para_estudo(resultado)
     req_numero = _fmt_req(resultado)
 
     status = retorno.get("status_comparacao") or "Não executada"
+
+    tipo_re = (
+        retorno.get("descricao_tipo_re")
+        or retorno.get("tipo_re")
+        or "6. Manutenção tácita"
+    )
+
+    itens_analisados = retorno.get("itens_analisados_pela_automacao") or [
+        "Dados Técnicos do Produto",
+        "Relação de Arquivos Anexos",
+    ]
+
+    dados_tecnicos_alterados = retorno.get("dados_tecnicos_alterados")
+    documentos_novos_detectados = retorno.get("documentos_novos_detectados")
+
+    pode_enviar = (
+        retorno.get("pode_enviar_para_aprovacao")
+        if "pode_enviar_para_aprovacao" in retorno
+        else retorno.get("deve_enviar_para_aprovacao")
+    )
+
     alteracoes_dados = retorno.get("alteracoes_dados_tecnicos") or []
     alteracoes_especificacoes = retorno.get("alteracoes_especificacoes_complementares") or []
     docs_adicionados = retorno.get("documentos_adicionados") or []
     docs_removidos = retorno.get("documentos_removidos") or []
-    resultado_txt = retorno.get("resultado") or "Não informado."
-    acao = retorno.get("acao_recomendada") or "Revisar manualmente"
+    alertas = retorno.get("alertas") or []
 
-    classe = "ok" if str(acao).strip().lower() == "enviar para aprovação" else "alerta"
+    resultado_txt = retorno.get("resultado") or "Não informado."
+    acao = retorno.get("acao_recomendada") or "Não enviar para aprovação / Revisar manualmente"
+
+    classe_aprovacao = _classe_retorno_aprovacao(pode_enviar)
+
+    itens_html = "".join(
+        f"<li>{escape(str(item))}</li>"
+        for item in itens_analisados
+    )
 
     return f"""
         <h2>Relatório - Retorno Para Estudo</h2>
 
+        <div class="{classe_aprovacao}">
+            <h3>Conclusão da automação</h3>
+            <p>
+                <b>Pode enviar para aprovação?</b>
+                {_sim_nao_retorno(pode_enviar)}
+            </p>
+            <p>
+                <b>Ação recomendada:</b>
+                {escape(str(acao))}
+            </p>
+        </div>
+
+        <h3>Resumo da análise</h3>
         <table>
             <thead>
                 <tr><th>Item</th><th>Valor</th></tr>
             </thead>
             <tbody>
                 <tr><td>Requerimento</td><td>{escape(str(req_numero))}</td></tr>
+                <tr><td>Tipo de RE analisado</td><td>{escape(str(tipo_re))}</td></tr>
                 <tr><td>Status da comparação</td><td>{escape(str(status))}</td></tr>
+                <tr><td>Dados Técnicos do Produto alterados?</td><td>{_sim_nao_retorno(dados_tecnicos_alterados)}</td></tr>
+                <tr><td>Documento novo identificado?</td><td>{_sim_nao_retorno(documentos_novos_detectados)}</td></tr>
+                <tr><td>Documento removido identificado?</td><td>{_sim_nao_retorno(bool(docs_removidos))}</td></tr>
+                <tr><td>Pode enviar para aprovação?</td><td><b>{_sim_nao_retorno(pode_enviar)}</b></td></tr>
             </tbody>
         </table>
 
-        <h3>Alterações em Dados Técnicos</h3>
+        <h3>Itens analisados pela automação</h3>
+        <ul>
+            {itens_html}
+        </ul>
+
+        <h3>Regra aplicada</h3>
+        <p>
+            Para <b>manutenção tácita</b>, a automação recomenda envio para aprovação
+            somente quando <b>não houver alteração em Dados Técnicos do Produto</b>
+            e <b>houver documento novo anexado</b>.
+        </p>
+
+        <h3>Alertas</h3>
+        {_html_alertas_retorno(alertas)}
+
+        <h3>Alterações em Dados Técnicos do Produto</h3>
         {_html_lista_retorno(alteracoes_dados, "Nenhuma alteração técnica relevante identificada.")}
 
         <h3>Alterações em Especificações Complementares</h3>
@@ -1364,11 +1456,10 @@ def _html_retorno_para_estudo_bloco(resultado):
         <h3>Documentos removidos</h3>
         {_html_lista_retorno(docs_removidos, "Nenhum documento removido identificado.")}
 
-        <h3>Resultado</h3>
-        <div class="{classe}">{escape(str(resultado_txt))}</div>
-
-        <h3>Ação recomendada</h3>
-        <div class="{classe}"><b>{escape(str(acao))}</b></div>
+        <h3>Resultado detalhado</h3>
+        <div class="{classe_aprovacao}">
+            {escape(str(resultado_txt))}
+        </div>
     """
 
 
@@ -1427,20 +1518,16 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
 
     for idx, resultado in enumerate(resultados, start=1):
         retorno = _fmt_retorno_para_estudo(resultado)
-        acao = retorno.get("acao_recomendada") or "Revisar manualmente"
+        deve_enviar = (
+            retorno.get("pode_enviar_para_aprovacao")
+            if "pode_enviar_para_aprovacao" in retorno
+            else retorno.get("deve_enviar_para_aprovacao")
+        )
 
-        if str(acao).strip().lower() == "enviar para aprovação":
+        if _bool_retorno(deve_enviar):
             qtd_enviar += 1
         else:
             qtd_revisar += 1
-
-        itens_html.append(
-            f"""
-            <div class="break"></div>
-            <h1>{idx} Requerimento {escape(_fmt_req(resultado))}</h1>
-            {_html_retorno_para_estudo_bloco(resultado)}
-            """
-        )
 
     return f"""
     <html>

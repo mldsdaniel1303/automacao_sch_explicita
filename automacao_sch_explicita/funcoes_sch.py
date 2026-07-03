@@ -6125,227 +6125,87 @@ def _clicar_elemento_por_cdp(driver, elemento):
 
 def _clicar_botao_comparar_versao_modal(driver, wait):
     """
-    Clica no botão interno 'Comparar Versão' da janela 'Selecionar Requerimento'.
+    Clica no botão interno 'Comparar Versão' usando o mesmo comando
+    que funcionou no DevTools:
 
-    Diferença importante desta versão:
-    - espera os dois selects do modal carregarem;
-    - instala captura de URL antes do clique;
-    - usa clique CDP/nativo;
-    - aguarda a fila AJAX do PrimeFaces depois do clique.
+    document.getElementById("formAnalise:j_idt10:j_idt26").click()
     """
 
     id_botao = "formAnalise:j_idt10:j_idt26"
-
-    full_xpath_botao = (
-        "/html/body/span/form/div[1]/div/div[2]/div[2]/table/tbody/tr/td[1]/button"
-    )
-
-    def _aguardar_primefaces_estavel(timeout=20):
-        inicio = time.time()
-
-        while time.time() - inicio < timeout:
-            try:
-                pronto = driver.execute_script(
-                    """
-                    var pfOk = true;
-                    try {
-                        if (window.PrimeFaces && PrimeFaces.ajax && PrimeFaces.ajax.Queue) {
-                            pfOk = PrimeFaces.ajax.Queue.isEmpty();
-                        }
-                    } catch(e) {
-                        pfOk = true;
-                    }
-
-                    var jqOk = true;
-                    try {
-                        if (window.jQuery) {
-                            jqOk = jQuery.active === 0;
-                        }
-                    } catch(e) {
-                        jqOk = true;
-                    }
-
-                    return pfOk && jqOk;
-                    """
-                )
-
-                if pronto:
-                    return True
-
-            except Exception:
-                return True
-
-            time.sleep(0.25)
-
-        return False
-
-    def _aguardar_selects_modal():
-        inicio = time.time()
-
-        while time.time() - inicio < 20:
-            try:
-                entrar_iframe_detalhe_analise(driver, wait)
-
-                selects = driver.find_elements(By.XPATH, "//select")
-                valores_ok = 0
-                textos = []
-
-                for select in selects:
-                    try:
-                        if not select.is_displayed() or not select.is_enabled():
-                            continue
-
-                        valor = str(select.get_attribute("value") or "").strip()
-
-                        texto = driver.execute_script(
-                            """
-                            var s = arguments[0];
-                            if (!s || s.selectedIndex < 0) return '';
-                            return s.options[s.selectedIndex].text || '';
-                            """,
-                            select,
-                        ) or ""
-
-                        texto_norm = _normalizar_texto_comparacao(texto)
-                        textos.append(texto)
-
-                        if valor and "selecione" not in texto_norm:
-                            valores_ok += 1
-
-                    except Exception:
-                        continue
-
-                if valores_ok >= 2:
-                    print("[SCH][RETORNO] Selects do modal carregados:")
-                    for t in textos[:2]:
-                        print(f"[SCH][RETORNO] - {t}")
-
-                    return True
-
-            except Exception:
-                pass
-
-            time.sleep(0.3)
-
-        print("[SCH][RETORNO][WARN] Não foi possível confirmar os dois selects do modal.")
-        return False
-
-    def _disparar_eventos_dos_selects():
-        """
-        Força change/blur nos selects antes de clicar.
-        Isso ajuda o PrimeFaces a reconhecer os valores selecionados.
-        """
-        try:
-            selects = driver.find_elements(By.XPATH, "//select")
-
-            for select in selects:
-                try:
-                    if not select.is_displayed() or not select.is_enabled():
-                        continue
-
-                    driver.execute_script(
-                        """
-                        arguments[0].dispatchEvent(new Event('focus', {bubbles:true}));
-                        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-                        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
-                        """,
-                        select,
-                    )
-
-                except Exception:
-                    continue
-
-            esperar_tela_carregar(driver, 0.5)
-
-        except Exception:
-            pass
 
     try:
         entrar_iframe_detalhe_analise(driver, wait)
     except Exception:
         pass
 
-    _aguardar_selects_modal()
-    _disparar_eventos_dos_selects()
-    _aguardar_primefaces_estavel(timeout=15)
-    _instalar_captura_popup_comparacao_retorno(driver, wait)
+    print("[SCH][RETORNO] Clicando no botão interno 'Comparar Versão' via DOM click...")
 
-    # Pausa curta para o PrimeFaces terminar de preparar o submit.
-    time.sleep(1.5)
-
-    xpaths = [
-        f"//*[@id='{id_botao}']",
-        full_xpath_botao,
-        f"//*[@id='{id_botao}']/span/ancestor::button[1]",
-        "//button[.//span[normalize-space()='Comparar Versão']]",
-        "//button[normalize-space()='Comparar Versão']",
-    ]
-
-    ultimo_erro = None
-
-    for xpath in xpaths:
-        try:
-            entrar_iframe_detalhe_analise(driver, wait)
-
-            botao = WebDriverWait(driver, 10, poll_frequency=0.2).until(
-                EC.element_to_be_clickable((By.XPATH, xpath))
-            )
-
-            if not botao or not botao.is_displayed() or not botao.is_enabled():
-                continue
-
-            print(f"[SCH][RETORNO] Botão interno encontrado pelo XPath: {xpath}")
-
-            driver.execute_script(
+    try:
+        WebDriverWait(driver, 20, poll_frequency=0.2).until(
+            lambda d: d.execute_script(
                 """
-                arguments[0].scrollIntoView({block:'center', inline:'center'});
-                arguments[0].focus();
+                var el = document.getElementById(arguments[0]);
+
+                if (!el) return false;
+
+                var style = window.getComputedStyle(el);
+
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    !el.disabled
+                );
                 """,
-                botao,
+                id_botao,
             )
+        )
 
-            time.sleep(0.8)
+        driver.execute_script(
+            """
+            var el = document.getElementById(arguments[0]);
 
-            if _clicar_elemento_por_cdp(driver, botao):
-                print("[SCH][RETORNO] Clique CDP executado no botão Comparar Versão.")
-            else:
-                ActionChains(driver).move_to_element(botao).pause(0.4).click().perform()
-                print("[SCH][RETORNO] Clique ActionChains executado no botão Comparar Versão.")
+            if (!el) {
+                throw new Error("Botão Comparar Versão não encontrado pelo ID.");
+            }
 
-            _aguardar_primefaces_estavel(timeout=30)
-            esperar_tela_carregar(driver, 1.5)
+            el.scrollIntoView({block:'center', inline:'center'});
+            el.focus();
+            el.click();
 
-            return True
+            try {
+                el.blur();
+            } catch(e) {}
 
-        except Exception as e:
-            ultimo_erro = e
-            continue
+            return true;
+            """,
+            id_botao,
+        )
 
-    print(
-        "[SCH][RETORNO][WARN] Não foi possível clicar no botão interno "
-        f"'Comparar Versão'. Último erro: {ultimo_erro}"
-    )
+        print("[SCH][RETORNO] DOM click executado no botão interno 'Comparar Versão'.")
+        return True
 
-    return False
-
-
+    except Exception as e:
+        print(f"[SCH][RETORNO][WARN] DOM click no botão interno falhou: {e}")
+        return False
 
 
 def _corrigir_url_comparacao_sch(driver, url):
     """
     Corrige URL capturada pelo popup do SCH.
 
-    Às vezes o sistema retorna:
-    http://sistemasnet/mosaico/...
-
-    Mas o navegador está em:
-    https://sistemasnet.anatel.gov.br/mosaico/...
+    O SCH pode retornar:
+    - http://sistemasnet/mosaico/...
+    - https://sistemasnet/mosaico/...
+    - sistemasnet/mosaico/...
+    - /mosaico/sch/publicView/compare/...
     """
+
     url = str(url or "").strip()
 
     if not url:
         return ""
 
+    url = url.replace("\\", "/")
     url_lower = url.lower()
 
     if url_lower.startswith("http://sistemasnet/"):
@@ -6362,16 +6222,21 @@ def _corrigir_url_comparacao_sch(driver, url):
             1,
         )
 
+    if url_lower.startswith("sistemasnet/"):
+        resto = url.split("/", 1)[1] if "/" in url else ""
+        return "https://sistemasnet.anatel.gov.br/" + resto
+
     if url.startswith("/"):
-        try:
-            atual = str(driver.current_url or "")
-        except Exception:
-            atual = ""
+        return "https://sistemasnet.anatel.gov.br" + url
 
-        if "sistemasnet.anatel.gov.br" in atual:
-            return "https://sistemasnet.anatel.gov.br" + url
-
-        return url
+    if (
+        "mosaico/sch/publicview/compare/compareversoesrequerimento.xhtml"
+        in url_lower
+        and not url_lower.startswith("http")
+    ):
+        if url_lower.startswith("mosaico/"):
+            return "https://sistemasnet.anatel.gov.br/" + url
+        return "https://sistemasnet.anatel.gov.br/" + url.lstrip("/")
 
     return url
 
@@ -6675,21 +6540,84 @@ def executar_caminho_retorno_para_estudo_teste(
 
         return resultado
 
+
+
+def _aguardar_primefaces_estavel_no_iframe(driver, wait=None, timeout=60):
+    inicio = time.time()
+    estavel_seguidas = 0
+
+    while time.time() - inicio < timeout:
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+
+            info = driver.execute_script(
+                """
+                var jq = null;
+                var pf = null;
+
+                try {
+                    jq = window.jQuery ? window.jQuery.active : 0;
+                } catch (e) {
+                    jq = 0;
+                }
+
+                try {
+                    if (window.PrimeFaces && PrimeFaces.ajax && PrimeFaces.ajax.Queue) {
+                        pf = PrimeFaces.ajax.Queue.isEmpty();
+                    } else {
+                        pf = true;
+                    }
+                } catch (e) {
+                    pf = true;
+                }
+
+                return {
+                    jqueryActive: jq,
+                    pfQueueEmpty: pf,
+                    ok: (jq === 0 && pf === true)
+                };
+                """
+            ) or {}
+
+            if info.get("ok"):
+                estavel_seguidas += 1
+                if estavel_seguidas >= 3:
+                    print("[SCH][RETORNO] Ajax/PrimeFaces do iframe estabilizado.")
+                    return True
+            else:
+                estavel_seguidas = 0
+                print(
+                    "[SCH][RETORNO] Aguardando Ajax do iframe: "
+                    f"jqueryActive={info.get('jqueryActive')} | "
+                    f"pfQueueEmpty={info.get('pfQueueEmpty')}"
+                )
+
+        except Exception as e:
+            estavel_seguidas = 0
+            print(f"[SCH][RETORNO][WARN] Não consegui ler estado Ajax do iframe: {e}")
+
+        time.sleep(0.8)
+
+    print("[SCH][RETORNO][WARN] Timeout aguardando Ajax/PrimeFaces do iframe.")
+    return False
+
+
+
 def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
     """
-    Fluxo correto do Retorno Para Estudo:
+    Fluxo Retorno Para Estudo:
 
     1. Clica no botão superior "Comparar Versões".
     2. Espera abrir o modal "Selecionar Requerimento".
-    3. Clica no botão interno "Comparar Versão".
-    4. Espera o próprio SCH abrir a nova aba.
-    5. Troca para a nova aba.
-    6. Espera a tela real de comparação carregar.
+    3. Instala captura da URL do popup.
+    4. Clica no botão interno "Comparar Versão" via DOM click.
+    5. Espera a aba aberta pelo próprio SCH.
+    6. Carrega a URL capturada nessa mesma aba via CDP, sem criar nova aba.
+    7. Confirma se a tela real de comparação carregou.
 
-    Importante:
-    - NÃO usa window.open().
-    - NÃO usa driver.get().
-    - NÃO abre aba manualmente.
+    Não usa window.open().
+    Não cria aba controlada.
+    Não usa driver.get().
     """
 
     print("[SCH][RETORNO] Clicando no botão superior 'Comparar Versões'...")
@@ -6698,11 +6626,6 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         aba_origem = driver.current_window_handle
     except Exception:
         aba_origem = None
-
-    try:
-        handles_antes = set(driver.window_handles)
-    except Exception:
-        handles_antes = set()
 
     xpaths_botao_superior = [
         "//button[normalize-space()='Comparar Versões']",
@@ -6758,11 +6681,13 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         botao_superior,
     )
 
+    time.sleep(0.3)
+
     try:
-        botao_superior.click()
+        ActionChains(driver).move_to_element(botao_superior).pause(0.3).click().perform()
     except Exception:
         try:
-            ActionChains(driver).move_to_element(botao_superior).pause(0.3).click().perform()
+            botao_superior.click()
         except Exception:
             _clicar_com_fallback(driver, botao_superior)
 
@@ -6788,20 +6713,14 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
 
             texto_norm = _normalizar_texto_comparacao(texto)
 
-            return (
+            if (
                 "selecionar requerimento" in texto_norm
                 and "comparar versao" in texto_norm
-            )
+            ):
+                return True
+
         except Exception:
-            return False
-
-    modal_aberto = False
-    inicio_modal = time.time()
-
-    while time.time() - inicio_modal < 30:
-        if _modal_selecionar_requerimento_abriu():
-            modal_aberto = True
-            break
+            pass
 
         try:
             entrar_iframe_detalhe_analise(driver, wait)
@@ -6816,14 +6735,21 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
 
             texto_norm = _normalizar_texto_comparacao(texto)
 
-            if (
+            return (
                 "selecionar requerimento" in texto_norm
                 and "comparar versao" in texto_norm
-            ):
-                modal_aberto = True
-                break
+            )
+
         except Exception:
-            pass
+            return False
+
+    modal_aberto = False
+    inicio_modal = time.time()
+
+    while time.time() - inicio_modal < 30:
+        if _modal_selecionar_requerimento_abriu():
+            modal_aberto = True
+            break
 
         time.sleep(0.3)
 
@@ -6834,40 +6760,135 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         )
 
     print("[SCH][RETORNO] Modal detectado.")
-    print("[SCH][RETORNO] Clicando no botão interno 'Comparar Versão'...")
+    print("[SCH][RETORNO] Instalando captura da URL de comparação...")
 
     try:
         handles_antes_modal = set(driver.window_handles)
     except Exception:
         handles_antes_modal = set()
 
-    # Usa o clique mais robusto, próximo do clique manual, para evitar a aba about:blank.
-    clicou_modal = _clicar_botao_comparar_versao_modal(driver, wait)
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+    except Exception:
+        pass
 
-    if not clicou_modal:
-        raise Exception(
-            "Modal abriu, mas não foi possível clicar corretamente no botão interno "
-            "'Comparar Versão'."
+    try:
+        _instalar_captura_popup_comparacao_retorno(driver, wait)
+        print("[SCH][RETORNO] Captura de popup instalada.")
+    except Exception as e:
+        print(f"[SCH][RETORNO][WARN] Não foi possível instalar captura do popup: {e}")
+
+    print("[SCH][RETORNO] Preparando clique DOM no botão interno 'Comparar Versão'...")
+
+    id_botao_interno = "formAnalise:j_idt10:j_idt26"
+
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+    except Exception:
+        pass
+
+    try:
+        WebDriverWait(driver, 20, poll_frequency=0.2).until(
+            lambda d: d.execute_script(
+                """
+                var el = document.getElementById(arguments[0]);
+
+                if (!el) return false;
+
+                var style = window.getComputedStyle(el);
+
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    !el.disabled
+                );
+                """,
+                id_botao_interno,
+            )
         )
 
-    print("[SCH][RETORNO] Clique interno em 'Comparar Versão' executado pelo clique robusto.")
-    print("[SCH][RETORNO] Aguardando o SCH abrir a nova aba de comparação...")
+        driver.execute_script(
+            """
+            var el = document.getElementById(arguments[0]);
+
+            if (!el) {
+                throw new Error("Botão Comparar Versão não encontrado pelo ID.");
+            }
+
+            el.scrollIntoView({block:'center', inline:'center'});
+            el.focus();
+            el.click();
+
+            try {
+                el.blur();
+            } catch(e) {}
+
+            return true;
+            """,
+            id_botao_interno,
+        )
+
+        print("[SCH][RETORNO] DOM click executado no botão interno 'Comparar Versão'.")
+
+    except Exception as e:
+        raise Exception(
+            f"Falha ao executar DOM click no botão interno 'Comparar Versão': {e}"
+        )
+
+    print("[SCH][RETORNO] Clique interno executado. Capturando URL da comparação...")
+
+    url_comparacao_resolvida = ""
+
+    try:
+        for _ in range(40):
+            try:
+                if aba_origem and aba_origem in driver.window_handles:
+                    driver.switch_to.window(aba_origem)
+            except Exception:
+                pass
+
+            info_popup = _obter_popup_comparacao_capturado(driver, wait) or {}
+
+            url_bruta = (
+                info_popup.get("url")
+                or info_popup.get("windowOpenUrl")
+                or ""
+            )
+
+            url_comparacao_resolvida = _corrigir_url_comparacao_sch(
+                driver,
+                url_bruta,
+            )
+
+            if url_comparacao_resolvida:
+                print(
+                    "[SCH][RETORNO] URL da comparação capturada: "
+                    f"{url_comparacao_resolvida}"
+                )
+                break
+
+            time.sleep(0.25)
+
+    except Exception as e:
+        print(f"[SCH][RETORNO][WARN] Falha ao capturar URL da comparação: {e}")
+
+    print("[SCH][RETORNO] Aguardando aba aberta pelo SCH...")
 
     nova_aba = None
     inicio_abertura = time.time()
 
-    while time.time() - inicio_abertura < 120:
+    while time.time() - inicio_abertura < 60:
         try:
-            handles_depois = set(driver.window_handles)
+            handles_agora = set(driver.window_handles)
 
             novas = [
-                h for h in handles_depois
+                h for h in handles_agora
                 if h not in handles_antes_modal
             ]
 
             if novas:
                 nova_aba = novas[-1]
-                print("[SCH][RETORNO] Nova aba de comparação detectada.")
+                print("[SCH][RETORNO] Nova aba aberta pelo SCH detectada.")
                 break
 
         except Exception:
@@ -6877,67 +6898,138 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
 
     if not nova_aba:
         raise Exception(
-            "Cliquei no botão interno 'Comparar Versão', mas o SCH não abriu "
-            "nova aba dentro do tempo limite."
+            "Cliquei em 'Comparar Versão', mas nenhuma nova aba foi detectada."
         )
 
-    driver.switch_to.window(nova_aba)
-
     try:
-        driver.maximize_window()
-    except Exception:
-        pass
+        driver.switch_to.window(nova_aba)
+    except Exception as e:
+        raise Exception(
+            f"Nova aba foi detectada, mas não consegui alternar para ela: {e}"
+        )
 
-    print("[SCH][RETORNO] Nova aba aberta. Aguardando carregamento da comparação...")
+    print("[SCH][RETORNO] Aguardando carregamento da aba de comparação...")
 
-    inicio_carregamento = time.time()
-
-    while time.time() - inicio_carregamento < timeout_resultado:
+    def _url_atual_segura():
         try:
-            url_atual = str(driver.current_url or "").strip().lower()
+            return str(driver.current_url or "").strip()
+        except Exception:
+            return ""
 
-            if url_atual in {"", "about:blank"}:
-                print("[SCH][RETORNO] Nova aba ainda está em about:blank. Aguardando...")
-                time.sleep(1.0)
-                continue
+    def _navegar_url_capturada_na_aba_atual():
+        """
+        Carrega a URL capturada na própria aba que o SCH abriu.
+        Não cria nova aba e não usa driver.get().
+        """
+        if not url_comparacao_resolvida:
+            return False
 
-            try:
-                estado = driver.execute_script("return document.readyState")
-                if estado not in {"interactive", "complete"}:
-                    time.sleep(0.5)
-                    continue
-            except Exception:
-                pass
+        print(
+            "[SCH][RETORNO] Carregando URL capturada na própria aba aberta pelo SCH..."
+        )
 
-            if _eh_tela_real_comparacao_versoes(driver, wait):
-                esperar_tela_carregar(driver, 2.0)
-
-                print("[SCH][RETORNO] Página de comparação carregada com sucesso.")
-
-                return {
-                    "abriu": True,
-                    "aba_origem": aba_origem,
-                    "aba_atual": driver.current_window_handle,
-                    "nova_aba": True,
-                    "url_comparacao": driver.current_url,
-                }
-
+        try:
+            driver.execute_cdp_cmd("Page.stopLoading", {})
         except Exception:
             pass
 
-        time.sleep(0.7)
+        time.sleep(0.3)
 
-    try:
-        if aba_origem and aba_origem in driver.window_handles:
-            driver.switch_to.window(aba_origem)
-    except Exception:
-        pass
+        try:
+            driver.execute_cdp_cmd(
+                "Page.navigate",
+                {"url": url_comparacao_resolvida},
+            )
+
+            print("[SCH][RETORNO] Navegação CDP enviada para a aba do SCH.")
+            return True
+
+        except Exception as e:
+            texto_erro = str(e).lower()
+
+            if (
+                "read timed out" in texto_erro
+                or "timed out receiving message from renderer" in texto_erro
+                or "timeout" in texto_erro
+            ):
+                print(
+                    "[SCH][RETORNO][WARN] ChromeDriver deu timeout ao enviar "
+                    "a navegação, mas a página pode continuar carregando. Vou aguardar."
+                )
+                return True
+
+            print("[SCH][RETORNO][WARN] Page.navigate falhou sem timeout conhecido.")
+            return False
+
+    url_forcada_na_mesma_aba = False
+
+    if url_comparacao_resolvida:
+        url_forcada_na_mesma_aba = _navegar_url_capturada_na_aba_atual()
+        time.sleep(3.0)
+
+    inicio_carregamento = time.time()
+    avisou_blank = False
+    avisou_url = False
+
+    while time.time() - inicio_carregamento < timeout_resultado:
+        try:
+            try:
+                if nova_aba in driver.window_handles:
+                    driver.switch_to.window(nova_aba)
+            except Exception:
+                pass
+
+            try:
+                if _eh_tela_real_comparacao_versoes(driver, wait):
+                    esperar_tela_carregar(driver, 2)
+
+                    print("[SCH][RETORNO] Página de comparação carregada com sucesso.")
+
+                    url_final = _url_atual_segura() or url_comparacao_resolvida
+
+                    return {
+                        "abriu": True,
+                        "aba_origem": aba_origem,
+                        "aba_atual": driver.current_window_handle,
+                        "nova_aba": True,
+                        "url_comparacao": url_final,
+                        "url_capturada": url_comparacao_resolvida,
+                    }
+
+            except Exception:
+                if url_comparacao_resolvida and not url_forcada_na_mesma_aba:
+                    url_forcada_na_mesma_aba = _navegar_url_capturada_na_aba_atual()
+                    time.sleep(3.0)
+                    continue
+
+            url_atual = _url_atual_segura()
+            url_norm = url_atual.lower()
+
+            if url_norm in {"", "about:blank"}:
+                if not avisou_blank:
+                    print("[SCH][RETORNO] Aba ainda em about:blank.")
+                    avisou_blank = True
+
+                if url_comparacao_resolvida and not url_forcada_na_mesma_aba:
+                    url_forcada_na_mesma_aba = _navegar_url_capturada_na_aba_atual()
+                    time.sleep(3.0)
+                    continue
+
+            elif not avisou_url:
+                print(f"[SCH][RETORNO] URL atual da aba de comparação: {url_atual}")
+                avisou_url = True
+
+            time.sleep(0.7)
+
+        except Exception as e:
+            print(f"[SCH][RETORNO][WARN] Erro aguardando aba de comparação: {e}")
+            time.sleep(0.7)
 
     raise Exception(
-        "A nova aba foi aberta pelo SCH, mas a página de comparação não carregou "
-        "dentro do tempo limite."
+        "A aba de comparação abriu, mas a página não carregou dentro do tempo limite."
     )
 
+    
 def _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura):
     if not isinstance(info_abertura, dict):
         return False
@@ -6989,6 +7081,223 @@ def _montar_alteracao_retorno(campo, anterior, novo):
     }
 
 
+def _texto_parece_documento_anexo_retorno(texto):
+    texto_norm = _normalizar_texto_retorno(texto)
+
+    if not texto_norm:
+        return False
+
+    termos_documento = [
+        "art",
+        "cct",
+        "certificado de conformidade tecnica",
+        "ract",
+        "relatorio de avaliacao da conformidade",
+        "relatorio de ensaio",
+        "manual",
+        "foto",
+        "fotos",
+        "declaracao",
+        "decl",
+        "contrato social",
+        "selo anatel",
+        "carta de representacao",
+        "outros",
+        "ocd",
+        ".pdf",
+        "_nov",
+        "_m1",
+        "_01a",
+        "_2a",
+    ]
+
+    return any(t in texto_norm for t in termos_documento)
+
+
+def _texto_parece_alteracao_tecnica_retorno(texto):
+    texto_norm = _normalizar_texto_retorno(texto)
+
+    if not texto_norm:
+        return False
+
+    termos_tecnicos = [
+        "dados tecnicos do produto",
+        "especificacoes complementares",
+        "especificacao complementar",
+        "tensao",
+        "tensao de entrada",
+        "tensao de saida",
+        "corrente",
+        "potencia",
+        "frequencia",
+        "faixa de frequencia",
+        "faixa de frequencias",
+        "mhz",
+        "ghz",
+        "w",
+        "vdc",
+        "vac",
+        "usb",
+        "modelo",
+        "nome comercial",
+        "carregador",
+        "produto",
+        "categoria",
+    ]
+
+    return any(t in texto_norm for t in termos_tecnicos)
+
+
+def _extrair_textos_vermelhos_por_lado_retorno(captura, lado="direita"):
+    chave = "vermelhos_direita" if lado == "direita" else "vermelhos_esquerda"
+
+    saida = []
+
+    for item in captura.get(chave, []) or []:
+        if isinstance(item, dict):
+            texto = item.get("texto", "")
+        else:
+            texto = str(item or "")
+
+        texto = _texto_limpo(texto)
+
+        if texto:
+            saida.append(texto)
+
+    return _lista_unica_retorno(saida)
+
+
+def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
+    dados_antigos = _recortar_secao_retorno(
+        texto_antigo,
+        ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
+        [
+            "Laboratório",
+            "Laboratorio",
+            "Relação de Arquivos Anexos",
+            "Relacao de Arquivos Anexos",
+            "Garantias",
+        ],
+    )
+
+    dados_novos = _recortar_secao_retorno(
+        texto_novo,
+        ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
+        [
+            "Laboratório",
+            "Laboratorio",
+            "Relação de Arquivos Anexos",
+            "Relacao de Arquivos Anexos",
+            "Garantias",
+        ],
+    )
+
+    espec_antiga = _extrair_especificacoes_complementares_retorno(
+        dados_antigos or texto_antigo
+    )
+
+    espec_nova = _extrair_especificacoes_complementares_retorno(
+        dados_novos or texto_novo
+    )
+
+    dados_antigos_sem_espec = _remover_especificacoes_do_bloco_dados_tecnicos(
+        dados_antigos
+    )
+
+    dados_novos_sem_espec = _remover_especificacoes_do_bloco_dados_tecnicos(
+        dados_novos
+    )
+
+    alteracoes = []
+
+    if (
+        _normalizar_texto_retorno(dados_antigos_sem_espec)
+        != _normalizar_texto_retorno(dados_novos_sem_espec)
+    ):
+        if dados_antigos_sem_espec or dados_novos_sem_espec:
+            alteracoes.append(
+                _montar_alteracao_retorno(
+                    "Dados Técnicos do Produto",
+                    dados_antigos_sem_espec,
+                    dados_novos_sem_espec,
+                )
+            )
+
+    if _normalizar_texto_retorno(espec_antiga) != _normalizar_texto_retorno(espec_nova):
+        if espec_antiga or espec_nova:
+            alteracoes.append(
+                _montar_alteracao_retorno(
+                    "Especificações Complementares",
+                    espec_antiga,
+                    espec_nova,
+                )
+            )
+
+    return {
+        "dados_antigos": dados_antigos,
+        "dados_novos": dados_novos,
+        "especificacoes_antigas": espec_antiga,
+        "especificacoes_novas": espec_nova,
+        "alteracoes": alteracoes,
+        "alterado": bool(alteracoes),
+    }
+
+
+def _comparar_documentos_anexos_retorno(texto_antigo, texto_novo, vermelhos_direita, vermelhos_esquerda):
+    documentos_antigos = _extrair_documentos_comparar_versoes(texto_antigo)
+    documentos_novos = _extrair_documentos_comparar_versoes(texto_novo)
+
+    set_antigos = {
+        _normalizar_texto_retorno(x)
+        for x in documentos_antigos
+        if _normalizar_texto_retorno(x)
+    }
+
+    set_novos = {
+        _normalizar_texto_retorno(x)
+        for x in documentos_novos
+        if _normalizar_texto_retorno(x)
+    }
+
+    adicionados_por_diff = [
+        x for x in documentos_novos
+        if _normalizar_texto_retorno(x) not in set_antigos
+    ]
+
+    removidos_por_diff = [
+        x for x in documentos_antigos
+        if _normalizar_texto_retorno(x) not in set_novos
+    ]
+
+    vermelhos_docs_direita = [
+        x for x in vermelhos_direita
+        if _texto_parece_documento_anexo_retorno(x)
+    ]
+
+    vermelhos_docs_esquerda = [
+        x for x in vermelhos_esquerda
+        if _texto_parece_documento_anexo_retorno(x)
+    ]
+
+    docs_adicionados = _lista_unica_retorno(
+        vermelhos_docs_direita or adicionados_por_diff
+    )
+
+    docs_removidos = _lista_unica_retorno(
+        vermelhos_docs_esquerda or removidos_por_diff
+    )
+
+    return {
+        "documentos_antigos": documentos_antigos,
+        "documentos_novos": documentos_novos,
+        "documentos_adicionados": docs_adicionados,
+        "documentos_removidos": docs_removidos,
+        "tem_documento_adicionado": bool(docs_adicionados),
+        "tem_documento_removido": bool(docs_removidos),
+    }
+
+
+
 def analisar_retorno_para_estudo(
     driver,
     wait,
@@ -6997,13 +7306,20 @@ def analisar_retorno_para_estudo(
     executar_envio=False,
 ):
     """
-    Analisa a tela 'Comparar Versões' para requerimentos em Retorno Para Estudo.
+    Analisa Retorno Para Estudo tipo 6: manutenção tácita.
 
-    Regra de decisão:
-    - Sem alteração técnica relevante + documentos apenas adicionados => Enviar para aprovação.
-    - Alteração em Dados Técnicos, Especificações Complementares, documentos removidos
-      ou comparação inconclusiva => Revisar manualmente.
+    Regra:
+    - Se NÃO houve alteração em Dados Técnicos do Produto
+      E houve documento novo anexado
+      => Enviar para aprovação.
+
+    - Se houve alteração em Dados Técnicos do Produto
+      => Não enviar para aprovação.
+
+    - Se nenhum documento novo foi identificado
+      => Não enviar para aprovação.
     """
+
     req = req or {}
     anexos_baixados = anexos_baixados or []
 
@@ -7011,19 +7327,37 @@ def analisar_retorno_para_estudo(
 
     resultado = {
         "tipo_relatorio": "retorno_para_estudo",
+        "tipo_re": "manutencao_tacita",
+        "descricao_tipo_re": "6. Manutenção tácita",
         "requerimento": numero_req,
+
+        "itens_analisados_pela_automacao": [
+            "Dados Técnicos do Produto",
+            "Relação de Arquivos Anexos",
+        ],
+
         "status_comparacao": "nao_executada",
+
+        "dados_tecnicos_alterados": None,
         "alteracoes_dados_tecnicos": [],
         "alteracoes_especificacoes_complementares": [],
+
+        "documentos_novos_detectados": None,
         "documentos_adicionados": [],
         "documentos_removidos": [],
-        "resultado": "",
-        "acao_recomendada": "Revisar manualmente",
+
+        "pode_enviar_para_aprovacao": False,
         "deve_enviar_para_aprovacao": False,
+        "acao_recomendada": "Revisar manualmente",
+
+        "resultado": "",
+        "alertas": [],
+
         "envio_para_aprovacao": {
             "executado": False,
             "motivo": "execucao_desabilitada",
         },
+
         "captura": {},
         "erro": "",
     }
@@ -7049,135 +7383,107 @@ def analisar_retorno_para_estudo(
             texto_antigo = texto_total
             texto_novo = texto_total
 
-        dados_antigos = _recortar_secao_retorno(
+        vermelhos_direita = _extrair_textos_vermelhos_por_lado_retorno(
+            captura,
+            lado="direita",
+        )
+
+        vermelhos_esquerda = _extrair_textos_vermelhos_por_lado_retorno(
+            captura,
+            lado="esquerda",
+        )
+
+        comparacao_tecnica = _comparar_blocos_dados_tecnicos_retorno(
             texto_antigo,
-            ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
-            ["Laboratório", "Laboratorio", "Relação de Arquivos Anexos", "Relacao de Arquivos Anexos", "Garantias"],
-        )
-
-        dados_novos = _recortar_secao_retorno(
             texto_novo,
-            ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
-            ["Laboratório", "Laboratorio", "Relação de Arquivos Anexos", "Relacao de Arquivos Anexos", "Garantias"],
         )
 
-        espec_antiga = _extrair_especificacoes_complementares_retorno(dados_antigos or texto_antigo)
-        espec_nova = _extrair_especificacoes_complementares_retorno(dados_novos or texto_novo)
+        documentos = _comparar_documentos_anexos_retorno(
+            texto_antigo=texto_antigo,
+            texto_novo=texto_novo,
+            vermelhos_direita=vermelhos_direita,
+            vermelhos_esquerda=vermelhos_esquerda,
+        )
 
-        dados_antigos_sem_espec = _remover_especificacoes_do_bloco_dados_tecnicos(dados_antigos)
-        dados_novos_sem_espec = _remover_especificacoes_do_bloco_dados_tecnicos(dados_novos)
+        alteracoes_tecnicas_por_vermelho = [
+            texto for texto in vermelhos_direita
+            if (
+                _texto_parece_alteracao_tecnica_retorno(texto)
+                and not _texto_parece_documento_anexo_retorno(texto)
+            )
+        ]
+
+        resultado["alteracoes_dados_tecnicos"] = list(comparacao_tecnica.get("alteracoes", []))
+
+        for texto in alteracoes_tecnicas_por_vermelho:
+            resultado["alteracoes_dados_tecnicos"].append(
+                _montar_alteracao_retorno(
+                    "Texto técnico em vermelho no documento novo",
+                    "",
+                    texto,
+                )
+            )
+
+        resultado["alteracoes_dados_tecnicos"] = [
+            item for idx, item in enumerate(resultado["alteracoes_dados_tecnicos"])
+            if item not in resultado["alteracoes_dados_tecnicos"][:idx]
+        ]
+
+        resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", [])
+        resultado["documentos_removidos"] = documentos.get("documentos_removidos", [])
+
+        tem_alteracao_tecnica = bool(resultado["alteracoes_dados_tecnicos"])
+        tem_documento_adicionado = bool(resultado["documentos_adicionados"])
+        tem_documento_removido = bool(resultado["documentos_removidos"])
+
+        resultado["dados_tecnicos_alterados"] = tem_alteracao_tecnica
+        resultado["documentos_novos_detectados"] = tem_documento_adicionado
+
+        if tem_alteracao_tecnica:
+            resultado["alertas"].append(
+                "Houve alteração em Dados Técnicos do Produto. "
+                "Manutenção tácita não deve alterar dados técnicos."
+            )
+
+        if not tem_documento_adicionado:
+            resultado["alertas"].append(
+                "Nenhum documento novo foi identificado na Relação de Arquivos Anexos."
+            )
+
+        if tem_documento_removido:
+            resultado["alertas"].append(
+                "Foi identificada remoção de documento na Relação de Arquivos Anexos."
+            )
 
         if (
-            _normalizar_texto_retorno(dados_antigos_sem_espec)
-            != _normalizar_texto_retorno(dados_novos_sem_espec)
+            not tem_alteracao_tecnica
+            and tem_documento_adicionado
+            and not tem_documento_removido
         ):
-            if dados_antigos_sem_espec or dados_novos_sem_espec:
-                resultado["alteracoes_dados_tecnicos"].append(
-                    _montar_alteracao_retorno(
-                        "Dados Técnicos do Produto",
-                        dados_antigos_sem_espec,
-                        dados_novos_sem_espec,
-                    )
-                )
-
-        if _normalizar_texto_retorno(espec_antiga) != _normalizar_texto_retorno(espec_nova):
-            if espec_antiga or espec_nova:
-                resultado["alteracoes_especificacoes_complementares"].append(
-                    _montar_alteracao_retorno(
-                        "Especificações Complementares",
-                        espec_antiga,
-                        espec_nova,
-                    )
-                )
-
-        docs_antigos = _extrair_documentos_comparar_versoes(texto_antigo)
-        docs_novos = _extrair_documentos_comparar_versoes(texto_novo)
-
-        set_antigos = {_normalizar_texto_retorno(d) for d in docs_antigos}
-        set_novos = {_normalizar_texto_retorno(d) for d in docs_novos}
-
-        adicionados_por_diff = [
-            d for d in docs_novos
-            if _normalizar_texto_retorno(d) not in set_antigos
-        ]
-
-        removidos_por_diff = [
-            d for d in docs_antigos
-            if _normalizar_texto_retorno(d) not in set_novos
-        ]
-
-        vermelhos_direita = [
-            item.get("texto", "")
-            for item in (captura.get("vermelhos_direita", []) or [])
-            if isinstance(item, dict)
-        ]
-
-        vermelhos_esquerda = [
-            item.get("texto", "")
-            for item in (captura.get("vermelhos_esquerda", []) or [])
-            if isinstance(item, dict)
-        ]
-
-        # Preferência: o próprio SCH marca em vermelho o que mudou.
-        # Fallback: diferença entre listas extraídas da relação de anexos.
-        docs_adicionados = _lista_unica_retorno(
-            [
-                d for d in vermelhos_direita
-                if _normalizar_texto_retorno(d) in {_normalizar_texto_retorno(x) for x in adicionados_por_diff}
-            ]
-            or adicionados_por_diff
-        )
-
-        docs_removidos = _lista_unica_retorno(
-            [
-                d for d in vermelhos_esquerda
-                if _normalizar_texto_retorno(d) in {_normalizar_texto_retorno(x) for x in removidos_por_diff}
-            ]
-            or removidos_por_diff
-        )
-
-        resultado["documentos_adicionados"] = docs_adicionados
-        resultado["documentos_removidos"] = docs_removidos
-
-        tem_alteracao_tecnica = bool(
-            resultado["alteracoes_dados_tecnicos"]
-            or resultado["alteracoes_especificacoes_complementares"]
-        )
-
-        tem_remocao_documento = bool(resultado["documentos_removidos"])
-        tem_documento_adicionado = bool(resultado["documentos_adicionados"])
-
-        if not tem_alteracao_tecnica and not tem_remocao_documento and tem_documento_adicionado:
-            resultado["status_comparacao"] = "ok_apenas_documentos_adicionados"
+            resultado["status_comparacao"] = "manutencao_tacita_apta"
             resultado["resultado"] = (
-                "Foram identificadas apenas inclusões de documentos, "
-                "sem alteração técnica relevante."
+                "Análise de manutenção tácita concluída: não houve alteração em "
+                "Dados Técnicos do Produto e foram identificados documentos novos anexados."
             )
             resultado["acao_recomendada"] = "Enviar para aprovação"
+            resultado["pode_enviar_para_aprovacao"] = True
             resultado["deve_enviar_para_aprovacao"] = True
 
-        elif not tem_alteracao_tecnica and not tem_remocao_documento and not tem_documento_adicionado:
-            resultado["status_comparacao"] = "sem_alteracao_identificada"
-            resultado["resultado"] = (
-                "Não foi identificada alteração técnica nem inclusão/remoção de documentos. "
-                "Revisão manual recomendada para confirmar o retorno."
-            )
-            resultado["acao_recomendada"] = "Revisar manualmente"
-            resultado["deve_enviar_para_aprovacao"] = False
-
         else:
-            resultado["status_comparacao"] = "revisar"
+            resultado["status_comparacao"] = "manutencao_tacita_nao_apta"
             resultado["resultado"] = (
-                "Foi identificada alteração relevante ou situação inconclusiva "
-                "no retorno para estudo."
+                "Análise de manutenção tácita concluída: o processo não deve ser "
+                "enviado para aprovação automaticamente."
             )
-            resultado["acao_recomendada"] = "Revisar manualmente"
+            resultado["acao_recomendada"] = "Não enviar para aprovação / Revisar manualmente"
+            resultado["pode_enviar_para_aprovacao"] = False
             resultado["deve_enviar_para_aprovacao"] = False
-
-        _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
 
         if executar_envio and resultado["deve_enviar_para_aprovacao"]:
-            resultado["envio_para_aprovacao"] = clicar_aprovar_retorno_para_estudo(driver, wait)
+            resultado["envio_para_aprovacao"] = clicar_aprovar_retorno_para_estudo(
+                driver,
+                wait,
+            )
         elif not executar_envio:
             resultado["envio_para_aprovacao"] = {
                 "executado": False,
@@ -7191,25 +7497,39 @@ def analisar_retorno_para_estudo(
 
         print(
             "[SCH][RETORNO] Resultado da comparação: "
-            f"{resultado['status_comparacao']} | ação={resultado['acao_recomendada']}"
+            f"{resultado['status_comparacao']} | "
+            f"ação={resultado['acao_recomendada']}"
+        )
+
+        print(
+            "[SCH][RETORNO] Pode enviar para aprovação: "
+            f"{'SIM' if resultado['deve_enviar_para_aprovacao'] else 'NÃO'}"
         )
 
         return resultado
 
     except Exception as e:
+        resultado["status_comparacao"] = "erro"
+        resultado["resultado"] = (
+            "Não foi possível concluir automaticamente a análise de manutenção tácita."
+        )
+        resultado["acao_recomendada"] = "Não enviar para aprovação / Revisar manualmente"
+        resultado["pode_enviar_para_aprovacao"] = False
+        resultado["deve_enviar_para_aprovacao"] = False
+        resultado["erro"] = str(e)
+        resultado["alertas"].append(
+            "Erro durante a análise automática. Revisão manual obrigatória."
+        )
+
+        print(f"[SCH][RETORNO][WARN] Falha na análise de Retorno Para Estudo: {e}")
+
+        return resultado
+
+    finally:
         try:
             _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
         except Exception:
             pass
-
-        resultado["status_comparacao"] = "erro"
-        resultado["resultado"] = "Não foi possível concluir automaticamente a comparação de versões."
-        resultado["acao_recomendada"] = "Revisar manualmente"
-        resultado["deve_enviar_para_aprovacao"] = False
-        resultado["erro"] = str(e)
-
-        print(f"[SCH][RETORNO][WARN] Falha na análise de Retorno Para Estudo: {e}")
-        return resultado
 
 
 def clicar_aprovar_retorno_para_estudo(driver, wait):
