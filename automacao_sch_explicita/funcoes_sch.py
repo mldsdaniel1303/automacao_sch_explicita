@@ -7167,6 +7167,61 @@ def _extrair_textos_vermelhos_por_lado_retorno(captura, lado="direita"):
     return _lista_unica_retorno(saida)
 
 
+def _normalizar_dados_tecnicos_para_comparacao_retorno(texto):
+    """
+    Normaliza texto de Dados Técnicos do Produto para evitar falso positivo
+    quando o OCD apenas reescreve o mesmo conteúdo com formatação diferente.
+
+    Exemplos tratados como equivalentes:
+    - Vca = VAC
+    - Vcc = VDC
+    - 0,9 A = 0,9A
+    - ponto, vírgula e ponto e vírgula não alteram o sentido técnico
+    """
+
+    texto = _normalizar_texto_retorno(texto)
+
+    if not texto:
+        return ""
+
+    # Remove rótulos que não alteram o conteúdo técnico
+    texto = texto.replace("dados tecnicos do produto", " ")
+    texto = texto.replace("especificacoes complementares", " ")
+    texto = texto.replace("especificacao complementar", " ")
+
+    # Normaliza unidades equivalentes
+    texto = re.sub(r"\bvca\b", "vac", texto)
+    texto = re.sub(r"\bvac\b", "vac", texto)
+    texto = re.sub(r"\bvcc\b", "vdc", texto)
+    texto = re.sub(r"\bvdc\b", "vdc", texto)
+
+    # Normaliza decimal brasileiro para comparação
+    texto = re.sub(r"(\d),(\d)", r"\1.\2", texto)
+
+    # Remove espaço entre número e unidade
+    # Ex: 0.9 A -> 0.9a | 100-240 VAC -> 100-240vac
+    texto = re.sub(
+        r"(\d)\s+(vac|vdc|v|a|ma|w|kw|hz|khz|mhz|ghz)",
+        r"\1\2",
+        texto,
+    )
+
+    # Normaliza separadores semânticos
+    texto = texto.replace(";", " ")
+    texto = texto.replace(":", " ")
+    texto = texto.replace(".", " ")
+    texto = texto.replace(",", " ")
+
+    # Remove caracteres que não mudam o conteúdo
+    texto = re.sub(r"[^a-z0-9\-]+", " ", texto)
+
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    return texto
+
+
+
+
 def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
     dados_antigos = _recortar_secao_retorno(
         texto_antigo,
@@ -7210,10 +7265,23 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
 
     alteracoes = []
 
-    if (
-        _normalizar_texto_retorno(dados_antigos_sem_espec)
-        != _normalizar_texto_retorno(dados_novos_sem_espec)
-    ):
+    norm_dados_antigos = _normalizar_dados_tecnicos_para_comparacao_retorno(
+        dados_antigos_sem_espec
+    )
+
+    norm_dados_novos = _normalizar_dados_tecnicos_para_comparacao_retorno(
+        dados_novos_sem_espec
+    )
+
+    norm_espec_antiga = _normalizar_dados_tecnicos_para_comparacao_retorno(
+        espec_antiga
+    )
+
+    norm_espec_nova = _normalizar_dados_tecnicos_para_comparacao_retorno(
+        espec_nova
+    )
+
+    if norm_dados_antigos != norm_dados_novos:
         if dados_antigos_sem_espec or dados_novos_sem_espec:
             alteracoes.append(
                 _montar_alteracao_retorno(
@@ -7223,7 +7291,7 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
                 )
             )
 
-    if _normalizar_texto_retorno(espec_antiga) != _normalizar_texto_retorno(espec_nova):
+    if norm_espec_antiga != norm_espec_nova:
         if espec_antiga or espec_nova:
             alteracoes.append(
                 _montar_alteracao_retorno(
@@ -7238,6 +7306,10 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         "dados_novos": dados_novos,
         "especificacoes_antigas": espec_antiga,
         "especificacoes_novas": espec_nova,
+        "normalizado_dados_antigos": norm_dados_antigos,
+        "normalizado_dados_novos": norm_dados_novos,
+        "normalizado_especificacoes_antigas": norm_espec_antiga,
+        "normalizado_especificacoes_novas": norm_espec_nova,
         "alteracoes": alteracoes,
         "alterado": bool(alteracoes),
     }
@@ -7308,16 +7380,27 @@ def analisar_retorno_para_estudo(
     """
     Analisa Retorno Para Estudo tipo 6: manutenção tácita.
 
-    Regra:
-    - Se NÃO houve alteração em Dados Técnicos do Produto
-      E houve documento novo anexado
-      => Enviar para aprovação.
+    Regra aplicada:
 
-    - Se houve alteração em Dados Técnicos do Produto
+    - Se NÃO houve alteração real em Dados Técnicos do Produto
+      E houve documento novo anexado
+      E não houve documento removido
+      => Pode enviar para aprovação.
+
+    - Se houve alteração real em Dados Técnicos do Produto
       => Não enviar para aprovação.
 
     - Se nenhum documento novo foi identificado
       => Não enviar para aprovação.
+
+    - Se houve documento removido
+      => Não enviar para aprovação.
+
+    Observação importante:
+    Texto vermelho em Dados Técnicos do Produto NÃO é considerado alteração
+    automaticamente. O vermelho pode ocorrer quando o OCD reescreve o mesmo
+    conteúdo com formatação diferente. A decisão técnica é feita pela comparação
+    normalizada do bloco.
     """
 
     req = req or {}
@@ -7348,7 +7431,7 @@ def analisar_retorno_para_estudo(
 
         "pode_enviar_para_aprovacao": False,
         "deve_enviar_para_aprovacao": False,
-        "acao_recomendada": "Revisar manualmente",
+        "acao_recomendada": "Não enviar para aprovação / Revisar manualmente",
 
         "resultado": "",
         "alertas": [],
@@ -7366,6 +7449,7 @@ def analisar_retorno_para_estudo(
 
     try:
         info_abertura = clicar_comparar_versoes(driver, wait)
+
         captura = _capturar_comparar_versoes(driver, wait)
 
         resultado["captura"] = {
@@ -7382,6 +7466,10 @@ def analisar_retorno_para_estudo(
             texto_total = captura.get("texto_total", "") or ""
             texto_antigo = texto_total
             texto_novo = texto_total
+
+            resultado["alertas"].append(
+                "Não foi possível separar com segurança o lado antigo e o lado novo da comparação."
+            )
 
         vermelhos_direita = _extrair_textos_vermelhos_por_lado_retorno(
             captura,
@@ -7405,32 +7493,34 @@ def analisar_retorno_para_estudo(
             vermelhos_esquerda=vermelhos_esquerda,
         )
 
-        alteracoes_tecnicas_por_vermelho = [
-            texto for texto in vermelhos_direita
+        # Importante:
+        # A partir daqui, NÃO usamos mais os textos vermelhos de Dados Técnicos
+        # como prova automática de alteração técnica.
+        #
+        # O vermelho pode indicar apenas que o OCD reescreveu a mesma informação
+        # com formatação diferente, como:
+        # - Vca x VAC
+        # - Vcc x VDC
+        # - 0,9 A x 0,9A
+        # - vírgula, ponto, ponto e vírgula etc.
+        #
+        # A alteração técnica real vem da comparação normalizada feita em:
+        # _comparar_blocos_dados_tecnicos_retorno()
+
+        alteracoes_tecnicas = list(comparacao_tecnica.get("alteracoes", []) or [])
+
+        resultado["alteracoes_dados_tecnicos"] = alteracoes_tecnicas
+
+        resultado["alteracoes_especificacoes_complementares"] = [
+            item for item in alteracoes_tecnicas
             if (
-                _texto_parece_alteracao_tecnica_retorno(texto)
-                and not _texto_parece_documento_anexo_retorno(texto)
+                isinstance(item, dict)
+                and "especifica" in str(item.get("campo", "")).lower()
             )
         ]
 
-        resultado["alteracoes_dados_tecnicos"] = list(comparacao_tecnica.get("alteracoes", []))
-
-        for texto in alteracoes_tecnicas_por_vermelho:
-            resultado["alteracoes_dados_tecnicos"].append(
-                _montar_alteracao_retorno(
-                    "Texto técnico em vermelho no documento novo",
-                    "",
-                    texto,
-                )
-            )
-
-        resultado["alteracoes_dados_tecnicos"] = [
-            item for idx, item in enumerate(resultado["alteracoes_dados_tecnicos"])
-            if item not in resultado["alteracoes_dados_tecnicos"][:idx]
-        ]
-
-        resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", [])
-        resultado["documentos_removidos"] = documentos.get("documentos_removidos", [])
+        resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", []) or []
+        resultado["documentos_removidos"] = documentos.get("documentos_removidos", []) or []
 
         tem_alteracao_tecnica = bool(resultado["alteracoes_dados_tecnicos"])
         tem_documento_adicionado = bool(resultado["documentos_adicionados"])
@@ -7441,7 +7531,7 @@ def analisar_retorno_para_estudo(
 
         if tem_alteracao_tecnica:
             resultado["alertas"].append(
-                "Houve alteração em Dados Técnicos do Produto. "
+                "Houve alteração real em Dados Técnicos do Produto. "
                 "Manutenção tácita não deve alterar dados técnicos."
             )
 
@@ -7462,7 +7552,7 @@ def analisar_retorno_para_estudo(
         ):
             resultado["status_comparacao"] = "manutencao_tacita_apta"
             resultado["resultado"] = (
-                "Análise de manutenção tácita concluída: não houve alteração em "
+                "Análise de manutenção tácita concluída: não houve alteração real em "
                 "Dados Técnicos do Produto e foram identificados documentos novos anexados."
             )
             resultado["acao_recomendada"] = "Enviar para aprovação"
@@ -7484,11 +7574,13 @@ def analisar_retorno_para_estudo(
                 driver,
                 wait,
             )
+
         elif not executar_envio:
             resultado["envio_para_aprovacao"] = {
                 "executado": False,
                 "motivo": "execucao_desabilitada_no_fluxo",
             }
+
         else:
             resultado["envio_para_aprovacao"] = {
                 "executado": False,
@@ -7499,6 +7591,16 @@ def analisar_retorno_para_estudo(
             "[SCH][RETORNO] Resultado da comparação: "
             f"{resultado['status_comparacao']} | "
             f"ação={resultado['acao_recomendada']}"
+        )
+
+        print(
+            "[SCH][RETORNO] Dados Técnicos alterados: "
+            f"{'SIM' if resultado['dados_tecnicos_alterados'] else 'NÃO'}"
+        )
+
+        print(
+            "[SCH][RETORNO] Documento novo identificado: "
+            f"{'SIM' if resultado['documentos_novos_detectados'] else 'NÃO'}"
         )
 
         print(
@@ -7530,7 +7632,6 @@ def analisar_retorno_para_estudo(
             _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
         except Exception:
             pass
-
 
 def clicar_aprovar_retorno_para_estudo(driver, wait):
     """
