@@ -7369,6 +7369,664 @@ def _comparar_documentos_anexos_retorno(texto_antigo, texto_novo, vermelhos_dire
     }
 
 
+def _normalizar_bloco_para_comparacao_retorno(texto):
+    texto = _normalizar_texto_retorno(texto)
+
+    if not texto:
+        return ""
+
+    texto = texto.replace(":", " ")
+    texto = texto.replace(";", " ")
+    texto = texto.replace(",", " ")
+    texto = texto.replace(".", " ")
+    texto = texto.replace("/", " ")
+
+    texto = re.sub(r"[^a-z0-9\-]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    return texto
+
+
+def _compactar_texto_produto_retorno(texto):
+    texto = str(texto or "")
+    texto = texto.replace("\r", "\n")
+    texto = texto.replace("\xa0", " ")
+    texto = texto.replace("–", "-").replace("—", "-")
+    texto = re.sub(r"[ \t]+", " ", texto)
+    return texto.strip()
+
+
+def _texto_tem_bloqueio_produto_retorno(trecho_antes):
+    trecho_norm = _normalizar_texto_retorno(trecho_antes)
+
+    bloqueios = [
+        "nome do produto",
+        "dados tecnicos do produto",
+        "homologacao de produto",
+        "homologacao do produto",
+        "produto para telecomunicacoes",
+        "requerimento para homologacao de produto",
+    ]
+
+    return any(b in trecho_norm for b in bloqueios)
+
+
+def _formatar_modelo_produto_retorno(modelo):
+    modelo = _texto_limpo(modelo)
+
+    if not modelo:
+        return ""
+
+    modelo = re.sub(
+        r"(?i)([A-Z0-9][A-Z0-9.\-_/]*)(descontinuado)\b",
+        r"\1 Descontinuado",
+        modelo,
+    )
+
+    modelo = re.sub(r"\s+", " ", modelo).strip(" :-;,.")
+    return modelo
+
+
+def _extrair_campos_produto_retorno(bloco):
+    bloco = _compactar_texto_produto_retorno(bloco)
+
+    if not bloco:
+        return {
+            "modelos": [],
+            "tipo": "",
+            "categoria": "",
+        }
+
+    plano = re.sub(r"\s+", " ", bloco).strip()
+
+    # Remove cabeçalho "Produto:" quando vier presente.
+    plano = re.sub(r"^\s*Produto\s*:?\s*", "", plano, flags=re.I)
+
+    stop_labels = (
+        r"Produto\s*:|Modelo\s*:|Tipo\s*:|Categoria\s*:|"
+        r"Dados\s+T[eé]cnicos\s+do\s+Produto|Dados\s+Tecnicos\s+do\s+Produto|"
+        r"Dados\s+T[eé]cnicos|Dados\s+Tecnicos|"
+        r"Especifica[cç][oõ]es\s+Complementares|Especificacoes\s+Complementares|"
+        r"Laborat[oó]rio|Laboratorio|"
+        r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Relacao\s+de\s+Arquivos\s+Anexos|"
+        r"Outras\s+Unidades\s+Fabris|Garantias|Declara[cç][oõ]es|Declaracoes|"
+        r"Solicitante\s+declara|Hist[oó]rico|Historico"
+    )
+
+    modelos = []
+
+    for m in re.finditer(
+        rf"\bModelo\s*:?\s*(.*?)(?=\s+(?:{stop_labels})|$)",
+        plano,
+        flags=re.I | re.S,
+    ):
+        modelo = _formatar_modelo_produto_retorno(m.group(1))
+
+        if not modelo:
+            continue
+
+        modelo_norm = _normalizar_texto_retorno(modelo)
+
+        # Evita capturar "Descontinuado" sozinho, que aparece como ruído visual
+        # em alguns PDFs/telas do Comparar Versões.
+        if modelo_norm in {"descontinuado", "modelo", "modelos"}:
+            continue
+
+        # Evita texto longo de declaração/solicitante capturado por acidente.
+        if len(modelo) > 120:
+            continue
+
+        modelos.append(modelo)
+
+    modelos = _lista_unica_retorno(modelos)
+
+    tipo = ""
+
+    for m in re.finditer(
+        rf"\bTipo\s*:?\s*(.*?)(?=\s+(?:Categoria\s*:|Tipo\s*:|Modelo\s*:|{stop_labels})|$)",
+        plano,
+        flags=re.I | re.S,
+    ):
+        candidato = _texto_limpo(m.group(1))
+        candidato = re.sub(r"\s+", " ", candidato).strip(" :-;,.")
+        candidato_norm = _normalizar_texto_retorno(candidato)
+
+        if not candidato or candidato_norm in {"categoria", "tipo", "i"}:
+            continue
+
+        if len(candidato) > 160:
+            continue
+
+        tipo = candidato
+        break
+
+    categoria = ""
+
+    m_cat = re.search(
+        r"\bCategoria\s*:?\s*([A-Za-z0-9IVXLC]+)",
+        plano,
+        flags=re.I,
+    )
+
+    if m_cat:
+        categoria = _texto_limpo(m_cat.group(1)).strip(" :-;,.").upper()
+
+    return {
+        "modelos": modelos,
+        "tipo": tipo,
+        "categoria": categoria,
+    }
+
+
+def _formatar_bloco_produto_retorno(bloco):
+    campos = _extrair_campos_produto_retorno(bloco)
+
+    modelos = campos.get("modelos", []) or []
+    tipo = campos.get("tipo", "")
+    categoria = campos.get("categoria", "")
+
+    linhas = ["Produto:"]
+
+    for modelo in modelos:
+        linhas.append(f"Modelo: {modelo}")
+
+    if tipo:
+        linhas.append(f"Tipo: {tipo}")
+
+    if categoria:
+        linhas.append(f"Categoria: {categoria}")
+
+    # Só considera produto válido se houver modelo e pelo menos tipo ou categoria.
+    if not modelos or not (tipo or categoria):
+        return ""
+
+    return "\n".join(linhas).strip()
+
+
+def _indice_fim_bloco_produto_retorno(plano, inicio):
+    finais = [
+        r"Dados\s+T[eé]cnicos\s+do\s+Produto",
+        r"Dados\s+Tecnicos\s+do\s+Produto",
+        r"Dados\s+T[eé]cnicos",
+        r"Dados\s+Tecnicos",
+        r"Especifica[cç][oõ]es\s+Complementares",
+        r"Especificacoes\s+Complementares",
+        r"Laborat[oó]rio",
+        r"Laboratorio",
+        r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos",
+        r"Relacao\s+de\s+Arquivos\s+Anexos",
+        r"Outras\s+Unidades\s+Fabris",
+        r"Garantias",
+        r"Declara[cç][oõ]es",
+        r"Declaracoes",
+        r"Solicitante\s+declara",
+        r"Hist[oó]rico",
+        r"Historico",
+    ]
+
+    fim = len(plano)
+
+    for padrao in finais:
+        m = re.search(padrao, plano[inicio:], flags=re.I)
+        if m:
+            pos = inicio + m.start()
+            if pos > inicio and pos < fim:
+                fim = pos
+
+    return fim
+
+
+def _recortar_bloco_produto_retorno(texto):
+    """
+    Recorta somente a seção real de Produto do Comparar Versões.
+
+    O SCH/OCD pode entregar o texto quase todo em uma única linha. Por isso,
+    esta função não procura qualquer palavra "Produto"; ela só aceita:
+    - título isolado "Produto:" seguido de Modelo/Tipo/Categoria; ou
+    - bloco logo após "Dados do Certificado" / "Nº do Certificado" / "Data de Emissão",
+      antes de "Especificações Complementares" ou "Dados Técnicos".
+
+    Ignora ocorrências como:
+    - Nome do Produto:
+    - Dados Técnicos do Produto:
+    - REQUERIMENTO PARA HOMOLOGAÇÃO DE PRODUTO...
+    """
+    texto = _compactar_texto_produto_retorno(texto)
+
+    if not texto:
+        return ""
+
+    plano = re.sub(r"\s+", " ", texto).strip()
+
+    # Tentativa 1: título real "Produto:".
+    # Não aceita "Nome do Produto:" nem "Dados Técnicos do Produto:".
+    for m in re.finditer(r"\bProduto\s*:\s*", plano, flags=re.I):
+        antes = plano[max(0, m.start() - 90):m.start()]
+
+        if _texto_tem_bloqueio_produto_retorno(antes):
+            continue
+
+        depois = plano[m.end():m.end() + 180]
+
+        if not re.search(r"\bModelo\s*:", depois, flags=re.I):
+            continue
+
+        inicio = m.start()
+        fim = _indice_fim_bloco_produto_retorno(plano, inicio)
+        bloco = plano[inicio:fim].strip()
+        bloco_formatado = _formatar_bloco_produto_retorno(bloco)
+
+        if bloco_formatado:
+            return bloco_formatado
+
+    # Tentativa 2: quando o título "Produto:" não aparece na captura,
+    # usa o trecho entre Dados do Certificado e Especificações Complementares.
+    marcadores_inicio = [
+        r"Dados\s+do\s+Certificado",
+        r"N[º°o]\s+do\s+Certificado",
+        r"N\s*o\s+do\s+Certificado",
+        r"N[uú]mero\s+do\s+Certificado",
+        r"Data\s+de\s+Emiss[aã]o",
+        r"Data\s+de\s+Emissao",
+    ]
+
+    candidatos_inicio = []
+
+    for padrao in marcadores_inicio:
+        for m in re.finditer(padrao, plano, flags=re.I):
+            candidatos_inicio.append(m.end())
+
+    # Também usa "Certificado:" como ponto de corte, mas só depois de aparecer
+    # "Dados do Certificado" ou "Nº do Certificado" no texto.
+    if not candidatos_inicio:
+        m_cert = re.search(
+            r"(?:Dados\s+do\s+Certificado|N[º°o]\s+do\s+Certificado).*?Certificado\s*:",
+            plano,
+            flags=re.I | re.S,
+        )
+        if m_cert:
+            candidatos_inicio.append(m_cert.end())
+
+    candidatos_inicio = sorted(set(candidatos_inicio))
+
+    for inicio_base in reversed(candidatos_inicio):
+        trecho = plano[inicio_base:]
+        m_modelo = re.search(r"\bModelo\s*:", trecho, flags=re.I)
+
+        if not m_modelo:
+            continue
+
+        inicio = inicio_base + m_modelo.start()
+        fim = _indice_fim_bloco_produto_retorno(plano, inicio)
+        bloco = "Produto: " + plano[inicio:fim].strip()
+
+        bloco_formatado = _formatar_bloco_produto_retorno(bloco)
+
+        if bloco_formatado:
+            return bloco_formatado
+
+    # Tentativa 3: fallback controlado. Pega a primeira sequência compacta
+    # "Modelo: ... Tipo: ... Categoria: ..." que não esteja dentro de "Nome do Produto".
+    padrao_compacto = re.compile(
+        r"\bModelo\s*:.*?\bTipo\s*:.*?(?:\bCategoria\s*:[A-Za-z0-9IVXLC]+)?",
+        flags=re.I | re.S,
+    )
+
+    for m in padrao_compacto.finditer(plano):
+        antes = plano[max(0, m.start() - 120):m.start()]
+
+        if _texto_tem_bloqueio_produto_retorno(antes):
+            continue
+
+        fim = _indice_fim_bloco_produto_retorno(plano, m.start())
+        bloco = "Produto: " + plano[m.start():fim].strip()
+        bloco_formatado = _formatar_bloco_produto_retorno(bloco)
+
+        if bloco_formatado:
+            return bloco_formatado
+
+    return ""
+
+
+def _normalizar_modelo_produto_retorno(modelo):
+    modelo = _normalizar_texto_retorno(modelo)
+    modelo = re.sub(r"\bdescontinuado\b", " ", modelo)
+    modelo = re.sub(r"[^a-z0-9.\-]+", "", modelo)
+    return modelo.strip()
+
+
+def _normalizar_produto_para_comparacao_retorno(texto):
+    campos = _extrair_campos_produto_retorno(texto)
+
+    modelos = sorted(
+        {
+            _normalizar_modelo_produto_retorno(modelo)
+            for modelo in (campos.get("modelos") or [])
+            if _normalizar_modelo_produto_retorno(modelo)
+        }
+    )
+
+    tipo = _normalizar_texto_retorno(campos.get("tipo", ""))
+    tipo = re.sub(r"[^a-z0-9]+", " ", tipo)
+    tipo = re.sub(r"\s+", " ", tipo).strip()
+
+    categoria = _normalizar_texto_retorno(campos.get("categoria", ""))
+    categoria = re.sub(r"[^a-z0-9]+", "", categoria)
+
+    if not modelos and not tipo and not categoria:
+        return ""
+
+    return (
+        f"modelos={'|'.join(modelos)};"
+        f"tipo={tipo};"
+        f"categoria={categoria}"
+    )
+
+
+def _comparar_bloco_produto_retorno(texto_antigo, texto_novo):
+    produto_antigo = _recortar_bloco_produto_retorno(texto_antigo)
+    produto_novo = _recortar_bloco_produto_retorno(texto_novo)
+
+    norm_antigo = _normalizar_produto_para_comparacao_retorno(produto_antigo)
+    norm_novo = _normalizar_produto_para_comparacao_retorno(produto_novo)
+
+    captura_incompleta = not produto_antigo or not produto_novo
+
+    alterado = captura_incompleta or norm_antigo != norm_novo
+
+    alteracoes = []
+
+    if alterado:
+        if captura_incompleta:
+            alteracoes.append(
+                {
+                    "campo": "Produto",
+                    "anterior": produto_antigo or "Produto não identificado com segurança na versão anterior.",
+                    "novo": produto_novo or "Produto não identificado com segurança na versão nova.",
+                }
+            )
+        else:
+            alteracoes.append(
+                _montar_alteracao_retorno(
+                    "Produto",
+                    produto_antigo,
+                    produto_novo,
+                )
+            )
+
+    return {
+        "produto_antigo": produto_antigo,
+        "produto_novo": produto_novo,
+        "normalizado_antigo": norm_antigo,
+        "normalizado_novo": norm_novo,
+        "captura_incompleta": captura_incompleta,
+        "alterado": alterado,
+        "alteracoes": alteracoes,
+    }
+
+
+def _comparar_bloco_unidade_fabril_retorno(texto_antigo, texto_novo):
+    unidade_antiga = _recortar_secao_retorno(
+        texto_antigo,
+        ["Outras Unidades Fabris", "Unidades Fabris"],
+        [
+            "Dados do Certificado",
+            "Produto",
+            "Dados Técnicos do Produto",
+            "Dados Tecnicos do Produto",
+            "Laboratório",
+            "Laboratorio",
+        ],
+    )
+
+    unidade_nova = _recortar_secao_retorno(
+        texto_novo,
+        ["Outras Unidades Fabris", "Unidades Fabris"],
+        [
+            "Dados do Certificado",
+            "Produto",
+            "Dados Técnicos do Produto",
+            "Dados Tecnicos do Produto",
+            "Laboratório",
+            "Laboratorio",
+        ],
+    )
+
+    norm_antiga = _normalizar_bloco_para_comparacao_retorno(unidade_antiga)
+    norm_nova = _normalizar_bloco_para_comparacao_retorno(unidade_nova)
+
+    alterada = bool(norm_antiga or norm_nova) and norm_antiga != norm_nova
+
+    alteracoes = []
+
+    if alterada:
+        alteracoes.append(
+            _montar_alteracao_retorno(
+                "Outras Unidades Fabris",
+                unidade_antiga,
+                unidade_nova,
+            )
+        )
+
+    return {
+        "unidade_fabril_antiga": unidade_antiga,
+        "unidade_fabril_nova": unidade_nova,
+        "normalizado_antigo": norm_antiga,
+        "normalizado_novo": norm_nova,
+        "alterada": alterada,
+        "alteracoes": alteracoes,
+    }
+
+
+def _doc_match_retorno(documento, aliases):
+    doc_norm = _normalizar_texto_retorno(documento)
+
+    if not doc_norm:
+        return False
+
+    for alias in aliases:
+        alias_norm = _normalizar_texto_retorno(alias)
+
+        if alias_norm and alias_norm in doc_norm:
+            return True
+
+    return False
+
+
+def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
+    documentos_adicionados = documentos_adicionados or []
+
+    regras_obrigatorias = [
+        {
+            "chave": "cct",
+            "nome": "CCT",
+            "aliases": [
+                "CCT",
+                "Certificado de Conformidade Técnica",
+                "Certificado de Conformidade Tecnica",
+            ],
+        },
+        {
+            "chave": "ract",
+            "nome": "RACT",
+            "aliases": [
+                "RACT",
+                "Relatório de Avaliação da Conformidade",
+                "Relatorio de Avaliacao da Conformidade",
+            ],
+        },
+        {
+            "chave": "fotos_externas",
+            "nome": "Fotos externas atualizadas",
+            "aliases": [
+                "Fotos externas",
+                "Foto externa",
+                "Fotos do produto",
+                "Foto do produto",
+                "externas",
+                "selo anatel",
+            ],
+        },
+        {
+            "chave": "fotos_internas",
+            "nome": "Fotos internas atualizadas",
+            "aliases": [
+                "Fotos internas",
+                "Foto interna",
+                "internas",
+            ],
+        },
+        {
+            "chave": "declaracao_manutencao",
+            "nome": "Declaração de manutenção",
+            "aliases": [
+                "Declaração de manutenção",
+                "Declaracao de manutencao",
+                "Decl. de manutenção",
+                "Decl de manutencao",
+                "Declaração manutenção",
+                "Declaracao manutencao",
+                "manutenção",
+                "manutencao",
+            ],
+        },
+        {
+            "chave": "relatorios_ensaio_falha",
+            "nome": "Relatórios de ensaios por falha no processo anterior",
+            "aliases": [
+                "Relatório de Ensaio",
+                "Relatorio de Ensaio",
+                "Relatórios de Ensaios",
+                "Relatorios de Ensaios",
+                "falha no processo anterior",
+                "processo anterior",
+                "ensaio por falha",
+                "ensaios por falha",
+            ],
+        },
+        {
+            "chave": "art",
+            "nome": "ART",
+            "aliases": [
+                "ART",
+                "Anotação de Responsabilidade Técnica",
+                "Anotacao de Responsabilidade Tecnica",
+            ],
+        },
+    ]
+
+    regras_condicionais = [
+        {
+            "chave": "iso_ou_auditoria_ocd",
+            "nome": "Cópia da ISO ou relatório de auditoria do OCD",
+            "aliases": [
+                "ISO",
+                "auditoria",
+                "relatório de auditoria",
+                "relatorio de auditoria",
+                "OCD",
+            ],
+        },
+        {
+            "chave": "traducao_juramentada",
+            "nome": "Tradução juramentada",
+            "aliases": [
+                "Tradução juramentada",
+                "Traducao juramentada",
+                "tradução",
+                "traducao",
+            ],
+        },
+        {
+            "chave": "ensaios_seguranca_eletrica",
+            "nome": "Relatórios de ensaios de segurança elétrica",
+            "aliases": [
+                "segurança elétrica",
+                "seguranca eletrica",
+                "ensaio de segurança elétrica",
+                "ensaio de seguranca eletrica",
+            ],
+        },
+        {
+            "chave": "alteracao_laboratorio",
+            "nome": "Alteração de laboratório",
+            "aliases": [
+                "Alteração de laboratório",
+                "Alteracao de laboratorio",
+                "laboratório",
+                "laboratorio",
+            ],
+        },
+        {
+            "chave": "declaracao_rastreabilidade",
+            "nome": "Declaração de rastreabilidade",
+            "aliases": [
+                "Declaração de rastreabilidade",
+                "Declaracao de rastreabilidade",
+                "rastreabilidade",
+            ],
+        },
+        {
+            "chave": "outros",
+            "nome": "Outros",
+            "aliases": [
+                "Outros",
+                "Outro",
+            ],
+        },
+    ]
+
+    encontrados = []
+    faltantes = []
+
+    for regra in regras_obrigatorias:
+        docs_match = [
+            doc for doc in documentos_adicionados
+            if _doc_match_retorno(doc, regra["aliases"])
+        ]
+
+        if docs_match:
+            encontrados.append(
+                {
+                    "chave": regra["chave"],
+                    "nome": regra["nome"],
+                    "documentos": _lista_unica_retorno(docs_match),
+                }
+            )
+        else:
+            faltantes.append(
+                {
+                    "chave": regra["chave"],
+                    "nome": regra["nome"],
+                }
+            )
+
+    condicionais_encontrados = []
+
+    for regra in regras_condicionais:
+        docs_match = [
+            doc for doc in documentos_adicionados
+            if _doc_match_retorno(doc, regra["aliases"])
+        ]
+
+        if docs_match:
+            condicionais_encontrados.append(
+                {
+                    "chave": regra["chave"],
+                    "nome": regra["nome"],
+                    "documentos": _lista_unica_retorno(docs_match),
+                }
+            )
+
+    return {
+        "obrigatorios_ok": not bool(faltantes),
+        "obrigatorios_encontrados": encontrados,
+        "obrigatorios_faltantes": faltantes,
+        "condicionais_encontrados": condicionais_encontrados,
+        "documentos_analisados": documentos_adicionados,
+    }
+
+
 
 def analisar_retorno_para_estudo(
     driver,
@@ -7382,10 +8040,15 @@ def analisar_retorno_para_estudo(
 
     Regra aplicada:
 
-    - Se NÃO houve alteração real em Dados Técnicos do Produto
+    - Se Produto NÃO mudou
+      E Dados Técnicos do Produto NÃO mudaram
       E houve documento novo anexado
       E não houve documento removido
+      E os documentos obrigatórios da manutenção tácita foram identificados
       => Pode enviar para aprovação.
+
+    - Se Produto mudou
+      => Não enviar para aprovação.
 
     - Se houve alteração real em Dados Técnicos do Produto
       => Não enviar para aprovação.
@@ -7395,6 +8058,9 @@ def analisar_retorno_para_estudo(
 
     - Se houve documento removido
       => Não enviar para aprovação.
+
+    - Unidade Fabril é comparada e registrada em relatório. Nesta versão,
+      alteração de Unidade Fabril gera alerta, mas não bloqueia automaticamente.
 
     Observação importante:
     Texto vermelho em Dados Técnicos do Produto NÃO é considerado alteração
@@ -7415,15 +8081,29 @@ def analisar_retorno_para_estudo(
         "requerimento": numero_req,
 
         "itens_analisados_pela_automacao": [
+            "Produto",
             "Dados Técnicos do Produto",
+            "Outras Unidades Fabris",
             "Relação de Arquivos Anexos",
+            "Documentos obrigatórios da manutenção tácita",
         ],
 
         "status_comparacao": "nao_executada",
 
+        "produto_alterado": None,
+        "alteracoes_produto": [],
+
         "dados_tecnicos_alterados": None,
         "alteracoes_dados_tecnicos": [],
         "alteracoes_especificacoes_complementares": [],
+
+        "unidade_fabril_alterada": None,
+        "alteracoes_unidade_fabril": [],
+
+        "documentos_obrigatorios_ok": None,
+        "documentos_obrigatorios_encontrados": [],
+        "documentos_obrigatorios_faltantes": [],
+        "documentos_condicionais_encontrados": [],
 
         "documentos_novos_detectados": None,
         "documentos_adicionados": [],
@@ -7492,6 +8172,15 @@ def analisar_retorno_para_estudo(
             vermelhos_direita=vermelhos_direita,
             vermelhos_esquerda=vermelhos_esquerda,
         )
+        comparacao_produto = _comparar_bloco_produto_retorno(
+            texto_antigo,
+            texto_novo,
+        )
+        comparacao_unidade_fabril = _comparar_bloco_unidade_fabril_retorno(
+            texto_antigo,
+            texto_novo,
+        )
+
 
         # Importante:
         # A partir daqui, NÃO usamos mais os textos vermelhos de Dados Técnicos
@@ -7522,12 +8211,65 @@ def analisar_retorno_para_estudo(
         resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", []) or []
         resultado["documentos_removidos"] = documentos.get("documentos_removidos", []) or []
 
+        validacao_documentos = _validar_documentos_obrigatorios_manutencao_tacita(
+            resultado["documentos_adicionados"]
+        )
+
+        resultado["produto_alterado"] = bool(comparacao_produto.get("alterado"))
+        resultado["alteracoes_produto"] = comparacao_produto.get("alteracoes", [])
+
+        resultado["unidade_fabril_alterada"] = bool(
+            comparacao_unidade_fabril.get("alterada")
+        )
+        resultado["alteracoes_unidade_fabril"] = comparacao_unidade_fabril.get("alteracoes", [])
+
+        resultado["documentos_obrigatorios_ok"] = bool(
+            validacao_documentos.get("obrigatorios_ok")
+        )
+        resultado["documentos_obrigatorios_encontrados"] = (
+            validacao_documentos.get("obrigatorios_encontrados", [])
+        )
+        resultado["documentos_obrigatorios_faltantes"] = (
+            validacao_documentos.get("obrigatorios_faltantes", [])
+        )
+        resultado["documentos_condicionais_encontrados"] = (
+            validacao_documentos.get("condicionais_encontrados", [])
+        )
+
+
+
         tem_alteracao_tecnica = bool(resultado["alteracoes_dados_tecnicos"])
         tem_documento_adicionado = bool(resultado["documentos_adicionados"])
         tem_documento_removido = bool(resultado["documentos_removidos"])
 
+        tem_alteracao_produto = bool(resultado["produto_alterado"])
+        tem_alteracao_unidade_fabril = bool(resultado["unidade_fabril_alterada"])
+        documentos_obrigatorios_ok = bool(resultado["documentos_obrigatorios_ok"])
+
         resultado["dados_tecnicos_alterados"] = tem_alteracao_tecnica
         resultado["documentos_novos_detectados"] = tem_documento_adicionado
+
+        if tem_alteracao_produto:
+            resultado["alertas"].append(
+                "Houve alteração no bloco Produto. Manutenção tácita não deve alterar produto."
+            )
+        if tem_alteracao_unidade_fabril:
+            resultado["alertas"].append(
+                "Houve alteração em Outras Unidades Fabris. A alteração foi registrada para conferência."
+            )
+        if not documentos_obrigatorios_ok:
+            faltantes_txt = ", ".join(
+                item.get("nome", "")
+                for item in resultado["documentos_obrigatorios_faltantes"]
+                if item.get("nome")
+            )
+
+            resultado["alertas"].append(
+                "Documentos obrigatórios de manutenção tácita não identificados: "
+                f"{faltantes_txt or 'não especificado'}."
+            )
+
+    
 
         if tem_alteracao_tecnica:
             resultado["alertas"].append(
@@ -7546,14 +8288,17 @@ def analisar_retorno_para_estudo(
             )
 
         if (
-            not tem_alteracao_tecnica
+            not tem_alteracao_produto
+            and not tem_alteracao_tecnica
             and tem_documento_adicionado
             and not tem_documento_removido
+            and documentos_obrigatorios_ok
         ):
             resultado["status_comparacao"] = "manutencao_tacita_apta"
             resultado["resultado"] = (
-                "Análise de manutenção tácita concluída: não houve alteração real em "
-                "Dados Técnicos do Produto e foram identificados documentos novos anexados."
+                "Análise de manutenção tácita concluída: não houve alteração em Produto "
+                "nem em Dados Técnicos do Produto, e os documentos obrigatórios foram "
+                "identificados entre os anexos novos."
             )
             resultado["acao_recomendada"] = "Enviar para aprovação"
             resultado["pode_enviar_para_aprovacao"] = True
@@ -7570,6 +8315,21 @@ def analisar_retorno_para_estudo(
             resultado["deve_enviar_para_aprovacao"] = False
 
         if executar_envio and resultado["deve_enviar_para_aprovacao"]:
+            print(
+                "[SCH][RETORNO] Processo apto para envio. "
+                "Fechando comparação e voltando ao requerimento antes de aprovar..."
+            )
+
+            try:
+                _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
+                info_abertura = {}
+                esperar_tela_carregar(driver, 1.0)
+            except Exception as e:
+                print(
+                    "[SCH][RETORNO][WARN] Não foi possível fechar a comparação antes do envio: "
+                    f"{e}"
+                )
+
             resultado["envio_para_aprovacao"] = clicar_aprovar_retorno_para_estudo(
                 driver,
                 wait,

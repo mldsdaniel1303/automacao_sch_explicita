@@ -1356,6 +1356,37 @@ def _html_alertas_retorno(alertas):
 
 
 
+def _html_documentos_validacao_retorno(itens, vazio="Nenhum."):
+    """
+    Monta lista/tabela simples para documentos obrigatórios/condicionais
+    da manutenção tácita.
+    """
+    if not itens:
+        return f"<div class='ok'>{escape(vazio)}</div>"
+
+    linhas = ["<ul>"]
+
+    for item in itens:
+        if isinstance(item, dict):
+            nome = item.get("nome") or item.get("chave") or "Documento"
+            documentos = item.get("documentos") or []
+
+            linhas.append(f"<li><b>{escape(str(nome))}</b>")
+
+            if documentos:
+                linhas.append("<ul>")
+                for doc in documentos:
+                    linhas.append(f"<li>{escape(str(doc))}</li>")
+                linhas.append("</ul>")
+
+            linhas.append("</li>")
+        else:
+            linhas.append(f"<li>{escape(str(item))}</li>")
+
+    linhas.append("</ul>")
+    return "".join(linhas)
+
+
 def _html_retorno_para_estudo_bloco(resultado):
     retorno = _fmt_retorno_para_estudo(resultado)
     req_numero = _fmt_req(resultado)
@@ -1369,12 +1400,37 @@ def _html_retorno_para_estudo_bloco(resultado):
     )
 
     itens_analisados = retorno.get("itens_analisados_pela_automacao") or [
+        "Produto",
         "Dados Técnicos do Produto",
+        "Outras Unidades Fabris",
         "Relação de Arquivos Anexos",
+        "Documentos obrigatórios da manutenção tácita",
     ]
 
-    dados_tecnicos_alterados = retorno.get("dados_tecnicos_alterados")
-    documentos_novos_detectados = retorno.get("documentos_novos_detectados")
+    produto_alterado = retorno.get("produto_alterado", False)
+    dados_tecnicos_alterados = retorno.get("dados_tecnicos_alterados", False)
+    unidade_fabril_alterada = retorno.get("unidade_fabril_alterada", False)
+    documentos_novos_detectados = retorno.get("documentos_novos_detectados", False)
+
+    docs_adicionados = retorno.get("documentos_adicionados") or []
+    docs_removidos = retorno.get("documentos_removidos") or []
+
+    documentos_obrigatorios_encontrados = (
+        retorno.get("documentos_obrigatorios_encontrados") or []
+    )
+    documentos_obrigatorios_faltantes = (
+        retorno.get("documentos_obrigatorios_faltantes") or []
+    )
+    documentos_condicionais_encontrados = (
+        retorno.get("documentos_condicionais_encontrados") or []
+    )
+
+    documentos_obrigatorios_ok = retorno.get("documentos_obrigatorios_ok")
+    if documentos_obrigatorios_ok is None:
+        if documentos_obrigatorios_encontrados or documentos_obrigatorios_faltantes:
+            documentos_obrigatorios_ok = not bool(documentos_obrigatorios_faltantes)
+        else:
+            documentos_obrigatorios_ok = False
 
     pode_enviar = (
         retorno.get("pode_enviar_para_aprovacao")
@@ -1382,14 +1438,19 @@ def _html_retorno_para_estudo_bloco(resultado):
         else retorno.get("deve_enviar_para_aprovacao")
     )
 
+    alteracoes_produto = retorno.get("alteracoes_produto") or []
     alteracoes_dados = retorno.get("alteracoes_dados_tecnicos") or []
     alteracoes_especificacoes = retorno.get("alteracoes_especificacoes_complementares") or []
-    docs_adicionados = retorno.get("documentos_adicionados") or []
-    docs_removidos = retorno.get("documentos_removidos") or []
+    alteracoes_unidade_fabril = retorno.get("alteracoes_unidade_fabril") or []
+
     alertas = retorno.get("alertas") or []
 
     resultado_txt = retorno.get("resultado") or "Não informado."
     acao = retorno.get("acao_recomendada") or "Não enviar para aprovação / Revisar manualmente"
+
+    envio = retorno.get("envio_para_aprovacao") or {}
+    envio_executado = envio.get("executado")
+    envio_motivo = envio.get("motivo") or envio.get("erro") or ""
 
     classe_aprovacao = _classe_retorno_aprovacao(pode_enviar)
 
@@ -1397,6 +1458,13 @@ def _html_retorno_para_estudo_bloco(resultado):
         f"<li>{escape(str(item))}</li>"
         for item in itens_analisados
     )
+
+    envio_linhas = ""
+    if envio:
+        envio_linhas = (
+            f"<tr><td>Envio automático executado?</td><td>{_sim_nao_retorno(envio_executado)}</td></tr>"
+            f"<tr><td>Detalhe do envio automático</td><td>{escape(str(envio_motivo or 'Não informado'))}</td></tr>"
+        )
 
     return f"""
         <h2>Relatório - Retorno Para Estudo</h2>
@@ -1422,10 +1490,14 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Requerimento</td><td>{escape(str(req_numero))}</td></tr>
                 <tr><td>Tipo de RE analisado</td><td>{escape(str(tipo_re))}</td></tr>
                 <tr><td>Status da comparação</td><td>{escape(str(status))}</td></tr>
+                <tr><td>Produto alterado?</td><td>{_sim_nao_retorno(produto_alterado)}</td></tr>
                 <tr><td>Dados Técnicos do Produto alterados?</td><td>{_sim_nao_retorno(dados_tecnicos_alterados)}</td></tr>
+                <tr><td>Unidade fabril alterada?</td><td>{_sim_nao_retorno(unidade_fabril_alterada)}</td></tr>
                 <tr><td>Documento novo identificado?</td><td>{_sim_nao_retorno(documentos_novos_detectados)}</td></tr>
                 <tr><td>Documento removido identificado?</td><td>{_sim_nao_retorno(bool(docs_removidos))}</td></tr>
+                <tr><td>Documentos obrigatórios OK?</td><td>{_sim_nao_retorno(documentos_obrigatorios_ok)}</td></tr>
                 <tr><td>Pode enviar para aprovação?</td><td><b>{_sim_nao_retorno(pode_enviar)}</b></td></tr>
+                {envio_linhas}
             </tbody>
         </table>
 
@@ -1437,18 +1509,37 @@ def _html_retorno_para_estudo_bloco(resultado):
         <h3>Regra aplicada</h3>
         <p>
             Para <b>manutenção tácita</b>, a automação recomenda envio para aprovação
-            somente quando <b>não houver alteração em Dados Técnicos do Produto</b>
-            e <b>houver documento novo anexado</b>.
+            somente quando <b>não houver alteração em Produto</b>,
+            <b>não houver alteração em Dados Técnicos do Produto</b>,
+            <b>houver documento novo anexado</b>,
+            <b>não houver documento removido</b> e
+            <b>os documentos obrigatórios da manutenção tácita forem identificados</b>.
+            A alteração de Unidade Fabril é registrada no relatório para conferência.
         </p>
 
         <h3>Alertas</h3>
         {_html_alertas_retorno(alertas)}
+
+        <h3>Alterações no Produto</h3>
+        {_html_lista_retorno(alteracoes_produto, "Nenhuma alteração em Produto identificada.")}
 
         <h3>Alterações em Dados Técnicos do Produto</h3>
         {_html_lista_retorno(alteracoes_dados, "Nenhuma alteração técnica relevante identificada.")}
 
         <h3>Alterações em Especificações Complementares</h3>
         {_html_lista_retorno(alteracoes_especificacoes, "Nenhuma alteração identificada.")}
+
+        <h3>Alterações em Unidade Fabril</h3>
+        {_html_lista_retorno(alteracoes_unidade_fabril, "Nenhuma alteração em Unidade Fabril identificada.")}
+
+        <h3>Documentos obrigatórios encontrados</h3>
+        {_html_documentos_validacao_retorno(documentos_obrigatorios_encontrados, "Nenhum documento obrigatório encontrado.")}
+
+        <h3>Documentos obrigatórios faltantes</h3>
+        {_html_documentos_validacao_retorno(documentos_obrigatorios_faltantes, "Nenhum documento obrigatório faltante.")}
+
+        <h3>Documentos condicionais/informativos encontrados</h3>
+        {_html_documentos_validacao_retorno(documentos_condicionais_encontrados, "Nenhum documento condicional identificado.")}
 
         <h3>Documentos adicionados</h3>
         {_html_lista_retorno(docs_adicionados, "Nenhum documento adicionado identificado.")}
@@ -1461,7 +1552,6 @@ def _html_retorno_para_estudo_bloco(resultado):
             {escape(str(resultado_txt))}
         </div>
     """
-
 
 def _html_requerimento_retorno_para_estudo(resultado):
     req_numero = _fmt_req(resultado)
