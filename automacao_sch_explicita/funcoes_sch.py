@@ -5591,47 +5591,162 @@ def _remover_especificacoes_do_bloco_dados_tecnicos(texto):
 
 
 def _extrair_documentos_comparar_versoes(texto):
-    bloco = _recortar_secao_retorno(
-        texto,
-        ["Relação de Arquivos Anexos", "Relacao de Arquivos Anexos"],
-        [
-            "Garantias",
-            "Declarações",
-            "Declaracoes",
-            "Solicitante declara",
-            "Histórico",
-            "Historico",
-        ],
-    )
+    """
+    Extrai documentos SOMENTE da seção/tabela 'Relação de Arquivos Anexos'.
 
-    if not bloco:
+    Não deve capturar texto vermelho de outros blocos, como:
+    - Laboratórios
+    - Responsável Técnico
+    - Garantias
+    - Produto
+    - Dados Técnicos
+    """
+    texto = str(texto or "")
+
+    if not texto.strip():
         return []
 
-    ignorar = {
-        "relacao de arquivos anexos",
-        "relação de arquivos anexos",
-        "nome do arquivo",
-        "descricao",
-        "descrição",
-    }
+    linhas = [
+        _texto_limpo(linha)
+        for linha in texto.replace("\r", "\n").splitlines()
+        if _texto_limpo(linha)
+    ]
 
-    documentos = []
-    for linha in bloco.splitlines():
-        linha = _texto_limpo(linha)
-        if not linha:
-            continue
+    def _eh_inicio_relacao(linha):
+        linha_norm = _normalizar_texto_retorno(linha)
+        return (
+            "relacao de arquivos anexos" in linha_norm
+            or "relação de arquivos anexos" in linha_norm
+        )
 
+    def _eh_fim_relacao(linha):
         linha_norm = _normalizar_texto_retorno(linha)
 
-        if any(x in linha_norm for x in ignorar):
-            continue
+        finais = [
+            "garantias",
+            "declaracoes",
+            "declarações",
+            "solicitante declara",
+            "historico",
+            "histórico",
+            "produto",
+            "dados tecnicos do produto",
+            "dados técnicos do produto",
+            "laboratorios",
+            "laboratórios",
+            "outras unidades fabris",
+            "dados do certificado",
+        ]
+
+        return any(
+            linha_norm == fim or linha_norm.startswith(fim + ":")
+            for fim in finais
+        )
+
+    def _ignorar_linha_relacao(linha):
+        linha_norm = _normalizar_texto_retorno(linha)
+
+        if not linha_norm:
+            return True
+
+        ignorar_exatos = {
+            "relacao de arquivos anexos",
+            "relação de arquivos anexos",
+            "nome do arquivo",
+            "descricao",
+            "descrição",
+            "nome do arquivo descricao",
+            "nome do arquivo descrição",
+        }
+
+        if linha_norm in ignorar_exatos:
+            return True
+
+        # Cabeçalhos misturados numa linha só.
+        if "nome do arquivo" in linha_norm and "descr" in linha_norm:
+            return True
+
+        # Evita que campos de outras seções entrem como documento.
+        bloqueios = [
+            "responsavel tecnico",
+            "responsável técnico",
+            "laboratorio",
+            "laboratório",
+            "email",
+            "telefone",
+            "endereco",
+            "endereço",
+            "cidade",
+            "bairro",
+            "cep",
+            "cnpj",
+            "cpf/cnpj",
+            "solicitante",
+            "fabricante",
+            "garantia",
+            "garantira",
+            "declaro que",
+            "local e data",
+        ]
+
+        if any(b in linha_norm for b in bloqueios):
+            return True
+
+        # Linha composta só por nomes de pessoas, comum no bloco Laboratórios.
+        # Documento real normalmente contém termos/códigos, PDF, ART, CCT, RACT,
+        # fotos, relatório, declaração etc.
+        if "," in linha and not _texto_parece_documento_anexo_retorno(linha):
+            return True
 
         if len(linha_norm) <= 2:
+            return True
+
+        return False
+
+    bloco = []
+    coletando = False
+
+    for linha in linhas:
+        if not coletando:
+            if _eh_inicio_relacao(linha):
+                coletando = True
             continue
 
-        documentos.append(linha)
+        if _eh_fim_relacao(linha):
+            break
 
-    return _lista_unica_retorno(documentos)
+        if _ignorar_linha_relacao(linha):
+            continue
+
+        bloco.append(linha)
+
+    # Fallback para quando o texto vem todo em uma linha só.
+    if not bloco:
+        plano = re.sub(r"\s+", " ", texto).strip()
+
+        m = re.search(
+            r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos\s*(?P<bloco>.*?)(?=\s+(?:Garantias|Declara[cç][oõ]es|Solicitante\s+declara|Hist[oó]rico|Laborat[oó]rios?)\b|$)",
+            plano,
+            flags=re.I | re.S,
+        )
+
+        if m:
+            trecho = m.group("bloco")
+
+            # Divide antes de categorias comuns da tabela.
+            trecho = re.sub(
+                r"\s+(ART|Certificado\s+de\s+Conformidade\s+T[eé]cnica\s*-\s*CCT|Fotos\s+do\s+produto|Fotos\s+internas|Manual\s+do\s+Produto|Outros\s*\(OCD\)|Relat[oó]rio\s+de\s+Avalia[cç][aã]o\s+da\s+Conformidade\s*-\s*RACT|Relat[oó]rio\s+de\s+Ensaio|Contrato\s+Social|Selo\s+ANATEL|Cart[aã]o\s+CNPJ|Carta\s+de\s+Representa[cç][aã]o\s+Comercial)\b",
+                r"\n\1",
+                trecho,
+                flags=re.I,
+            )
+
+            for linha in trecho.splitlines():
+                linha = _texto_limpo(linha)
+                if linha and not _ignorar_linha_relacao(linha):
+                    bloco.append(linha)
+
+    return _lista_unica_retorno(bloco)
 
 
 def _eh_cor_vermelha_retorno(cor):
@@ -5649,8 +5764,10 @@ def _eh_cor_vermelha_retorno(cor):
 def _coletar_visao_comparar_versoes(driver):
     """
     Coleta textos da tela Comparar Versões.
-    Divide visualmente em lado esquerdo (versão anterior) e lado direito (versão nova)
-    e também captura trechos em vermelho.
+
+    Além do texto por lado, captura a tabela real "Relação de Arquivos Anexos"
+    por lado. Isso é importante porque documentos novos/removidos devem vir
+    somente dessa tabela, e não de outros textos vermelhos da página.
     """
     script = r"""
     const vw = Math.max(
@@ -5658,6 +5775,15 @@ def _coletar_visao_comparar_versoes(driver):
         document.documentElement ? document.documentElement.clientWidth : 0,
         1
     );
+
+    function normText(txt) {
+        return String(txt || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
 
     function visible(el) {
         const st = window.getComputedStyle(el);
@@ -5677,7 +5803,107 @@ def _coletar_visao_comparar_versoes(driver):
         return r >= 150 && g <= 90 && b <= 90;
     }
 
-    const nodes = Array.from(document.querySelectorAll('td, th, span, font, div, p, li, label, a, b, strong'));
+    function sideOf(el) {
+        const r = el.getBoundingClientRect();
+        return (r.left + (r.width / 2)) < (vw / 2) ? 'esquerda' : 'direita';
+    }
+
+    function elementIsRed(el) {
+        try {
+            const st = window.getComputedStyle(el);
+            return isRed((st && st.color) || el.getAttribute('color') || '');
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function rowIsRed(tr) {
+        try {
+            const nodes = Array.from(tr.querySelectorAll('td, th, span, font, div, p, b, strong'));
+            if (elementIsRed(tr)) return true;
+            return nodes.some(elementIsRed);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function clean(txt) {
+        return String(txt || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function extractAttachmentRows(sideWanted) {
+        const out = [];
+        const tables = Array.from(document.querySelectorAll('table'));
+
+        for (const table of tables) {
+            try {
+                if (!visible(table)) continue;
+
+                const tableText = clean(table.innerText || table.textContent || '');
+                const tableNorm = normText(tableText);
+
+                // A tabela de anexos tem as colunas "Nome do Arquivo" e "Descrição".
+                if (!(tableNorm.includes('nome do arquivo') && tableNorm.includes('descr'))) {
+                    continue;
+                }
+
+                const side = sideOf(table);
+                if (side !== sideWanted) continue;
+
+                const trs = Array.from(table.querySelectorAll('tr'));
+
+                for (const tr of trs) {
+                    if (!visible(tr)) continue;
+
+                    const cells = Array.from(tr.querySelectorAll('th, td'));
+                    const vals = cells.map(c => clean(c.innerText || c.textContent || '')).filter(Boolean);
+                    if (!vals.length) continue;
+
+                    const linhaNorm = normText(vals.join(' '));
+                    if (!linhaNorm) continue;
+
+                    if (
+                        linhaNorm === 'nome do arquivo descricao' ||
+                        linhaNorm === 'nome do arquivo descrição' ||
+                        (linhaNorm.includes('nome do arquivo') && linhaNorm.includes('descr'))
+                    ) {
+                        continue;
+                    }
+
+                    const nome = vals[0] || '';
+                    const descricao = vals.slice(1).join(' | ') || '';
+                    const texto = descricao ? `${nome} | ${descricao}` : nome;
+
+                    if (!texto || normText(texto).length <= 2) continue;
+
+                    const r = tr.getBoundingClientRect();
+
+                    out.push({
+                        texto: texto,
+                        nome: nome,
+                        descricao: descricao,
+                        red: rowIsRed(tr),
+                        side: side,
+                        top: r.top + window.scrollY,
+                        left: r.left,
+                        width: r.width,
+                        height: r.height,
+                        origem: 'tabela_relacao_arquivos_anexos'
+                    });
+                }
+            } catch (e) {}
+        }
+
+        out.sort((a, b) => (a.top - b.top) || (a.left - b.left));
+
+        // IMPORTANTE: não remover duplicados aqui.
+        // Na tela Comparar Versões, um documento pode já existir em preto e
+        // aparecer novamente em vermelho como novo anexo. Se deduplicar aqui,
+        // a linha vermelha some e a automação deixa de identificar o documento novo.
+        return out;
+    }
+
+    const nodes = Array.from(document.querySelectorAll('td, th, span, font, div, p, li, label, a, b, strong, legend'));
     const items = [];
 
     for (const el of nodes) {
@@ -5708,6 +5934,69 @@ def _coletar_visao_comparar_versoes(driver):
 
     items.sort((a, b) => (a.top - b.top) || (a.left - b.left));
 
+    function extractProductBlock(sideWanted) {
+        const arr = items.filter(x => x.side === sideWanted).sort((a, b) => (a.top - b.top) || (a.left - b.left));
+
+        function isTitleProduct(txt) {
+            const n = normText(txt);
+            if (!n) return false;
+            if (n.includes('nome do produto')) return false;
+            if (n.includes('dados tecnicos do produto')) return false;
+            if (n.includes('homologacao de produto')) return false;
+            if (n.includes('produto para telecomunicacoes')) return false;
+            return n === 'produto' || n === 'produto:';
+        }
+
+        function isEndProduct(txt) {
+            const n = normText(txt);
+            return n === 'dados tecnicos do produto' ||
+                   n.startsWith('dados tecnicos do produto') ||
+                   n === 'laboratorios' || n === 'laboratorio' ||
+                   n.startsWith('laboratorios') || n.startsWith('laboratorio') ||
+                   n.startsWith('relacao de arquivos anexos') ||
+                   n.startsWith('garantias') ||
+                   n.startsWith('outras unidades fabris') ||
+                   n.startsWith('dados do certificado');
+        }
+
+        for (let i = 0; i < arr.length; i++) {
+            if (!isTitleProduct(arr[i].texto)) continue;
+
+            const baseTop = arr[i].top;
+            const lines = [arr[i].texto];
+
+            for (let j = i + 1; j < arr.length; j++) {
+                const it = arr[j];
+                if ((it.top - baseTop) > 450) break;
+                if (isEndProduct(it.texto)) break;
+
+                const n = normText(it.texto);
+                if (n.includes('modelo') || n.includes('tipo') || n.includes('categoria') || n.includes('descontinuado')) {
+                    lines.push(it.texto);
+                    continue;
+                }
+
+                if (lines.length > 1 && it.top > baseTop + 180) break;
+            }
+
+            const joined = clean(lines.join('\n'));
+            const normJoined = normText(joined);
+            if (normJoined.includes('modelo') && (normJoined.includes('tipo') || normJoined.includes('categoria'))) {
+                return lines.join('\n');
+            }
+        }
+
+        // Fallback: procurar diretamente uma sequência Modelo/Tipo/Categoria no texto do lado.
+        const sideText = arr.map(x => x.texto).join('\n');
+        const flat = clean(sideText);
+        const m = flat.match(/Produto\s*:?\s*Modelo\s*:.*?(?=\s+(?:Dados\s+T[eé]cnicos\s+do\s+Produto|Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Garantias)\b|$)/i);
+        if (m && normText(m[0]).includes('modelo')) {
+            return m[0];
+        }
+
+        return '';
+    }
+
     function joinSide(side) {
         const seen = new Set();
         const lines = [];
@@ -5721,6 +6010,9 @@ def _coletar_visao_comparar_versoes(driver):
         return lines.join('\n');
     }
 
+    const docsEsquerda = extractAttachmentRows('esquerda');
+    const docsDireita = extractAttachmentRows('direita');
+
     return {
         url: String(window.location.href || ''),
         title: String(document.title || ''),
@@ -5728,7 +6020,13 @@ def _coletar_visao_comparar_versoes(driver):
         texto_esquerda: joinSide('esquerda'),
         texto_direita: joinSide('direita'),
         vermelhos_esquerda: items.filter(x => x.side === 'esquerda' && x.red),
-        vermelhos_direita: items.filter(x => x.side === 'direita' && x.red)
+        vermelhos_direita: items.filter(x => x.side === 'direita' && x.red),
+        documentos_anexos_esquerda: docsEsquerda,
+        documentos_anexos_direita: docsDireita,
+        documentos_anexos_vermelhos_esquerda: docsEsquerda.filter(x => x.red),
+        documentos_anexos_vermelhos_direita: docsDireita.filter(x => x.red),
+        produto_esquerda: extractProductBlock('esquerda'),
+        produto_direita: extractProductBlock('direita')
     };
     """
 
@@ -6608,16 +6906,12 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
     Fluxo Retorno Para Estudo:
 
     1. Clica no botão superior "Comparar Versões".
-    2. Espera abrir o modal "Selecionar Requerimento".
+    2. Confirma o modal "Selecionar Requerimento" pelo texto OU pelo botão interno.
     3. Instala captura da URL do popup.
-    4. Clica no botão interno "Comparar Versão" via DOM click.
+    4. Clica no botão interno "Comparar Versão".
     5. Espera a aba aberta pelo próprio SCH.
     6. Carrega a URL capturada nessa mesma aba via CDP, sem criar nova aba.
     7. Confirma se a tela real de comparação carregou.
-
-    Não usa window.open().
-    Não cria aba controlada.
-    Não usa driver.get().
     """
 
     print("[SCH][RETORNO] Clicando no botão superior 'Comparar Versões'...")
@@ -6627,91 +6921,109 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
     except Exception:
         aba_origem = None
 
-    xpaths_botao_superior = [
-        "//button[normalize-space()='Comparar Versões']",
-        "//a[normalize-space()='Comparar Versões']",
-        "//input[@type='button' and normalize-space(@value)='Comparar Versões']",
-        "//*[self::a or self::button][normalize-space()='Comparar Versões']",
-        "//*[contains(normalize-space(), 'Comparar Versões')][self::a or self::button or self::input]",
-        "//*[contains(normalize-space(), 'Comparar Versões')]/ancestor::*[self::a or self::button][1]",
-    ]
-
-    botao_superior = None
-    ultimo_erro = None
-
-    for usar_iframe in [False, True]:
+    def _normalizar_comp_local(valor):
         try:
-            if usar_iframe:
+            return _normalizar_texto_comparacao(valor)
+        except Exception:
+            return str(valor or "").lower().strip()
+
+    def _contextos_comparacao():
+        """Tenta default content e iframe de detalhe, preservando robustez."""
+        yield "default"
+        yield "iframe"
+
+    def _ir_contexto(nome):
+        try:
+            if nome == "iframe":
                 entrar_iframe_detalhe_analise(driver, wait)
             else:
                 driver.switch_to.default_content()
+            return True
         except Exception:
-            pass
+            return False
 
-        for xpath in xpaths_botao_superior:
-            try:
-                elementos = driver.find_elements(By.XPATH, xpath)
+    def _elemento_clicavel(el):
+        try:
+            return el.is_displayed() and el.is_enabled()
+        except Exception:
+            return False
 
-                for el in elementos:
-                    try:
-                        if el.is_displayed() and el.is_enabled():
-                            botao_superior = el
-                            break
-                    except Exception:
-                        continue
+    def _localizar_botao_superior():
+        xpaths_botao_superior = [
+            "//button[normalize-space()='Comparar Versões']",
+            "//a[normalize-space()='Comparar Versões']",
+            "//input[@type='button' and normalize-space(@value)='Comparar Versões']",
+            "//input[@type='submit' and normalize-space(@value)='Comparar Versões']",
+            "//span[normalize-space()='Comparar Versões']/ancestor::button[1]",
+            "//span[normalize-space()='Comparar Versões']/ancestor::a[1]",
+            "//*[self::a or self::button][normalize-space()='Comparar Versões']",
+            "//*[self::a or self::button or self::input][contains(normalize-space(), 'Comparar Versões') or contains(@value, 'Comparar Versões')]",
+            "//*[contains(normalize-space(), 'Comparar Versões')]/ancestor::*[self::a or self::button][1]",
+        ]
 
-                if botao_superior:
-                    break
+        ultimo_erro = None
 
-            except Exception as e:
-                ultimo_erro = e
+        for contexto in _contextos_comparacao():
+            if not _ir_contexto(contexto):
                 continue
 
-        if botao_superior:
-            break
+            for xpath in xpaths_botao_superior:
+                try:
+                    elementos = driver.find_elements(By.XPATH, xpath)
 
-    if not botao_superior:
-        raise Exception(
-            "Não foi possível localizar o botão superior 'Comparar Versões'. "
-            f"Último erro: {ultimo_erro}"
-        )
+                    for el in elementos:
+                        try:
+                            if not _elemento_clicavel(el):
+                                continue
 
-    driver.execute_script(
-        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
-        botao_superior,
-    )
+                            texto_el = " ".join(
+                                [
+                                    el.text or "",
+                                    el.get_attribute("value") or "",
+                                    el.get_attribute("title") or "",
+                                    el.get_attribute("aria-label") or "",
+                                ]
+                            )
 
-    time.sleep(0.3)
+                            texto_norm = _normalizar_comp_local(texto_el)
 
-    try:
-        ActionChains(driver).move_to_element(botao_superior).pause(0.3).click().perform()
-    except Exception:
+                            # Evita confundir com o botão interno singular do modal.
+                            if "comparar versao" in texto_norm and "comparar versoes" not in texto_norm:
+                                continue
+
+                            return el
+
+                        except Exception as e:
+                            ultimo_erro = e
+                            continue
+
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+        if ultimo_erro:
+            print(f"[SCH][RETORNO][WARN] Último erro localizando botão superior: {ultimo_erro}")
+
+        return None
+
+    def _texto_contexto_atual():
         try:
-            botao_superior.click()
-        except Exception:
-            _clicar_com_fallback(driver, botao_superior)
-
-    esperar_tela_carregar(driver, 0.8)
-
-    print("[SCH][RETORNO] Clique superior executado.")
-    print("[SCH][RETORNO] Aguardando modal 'Selecionar Requerimento'...")
-
-    def _modal_selecionar_requerimento_abriu():
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-
-        try:
-            texto = driver.execute_script(
+            return driver.execute_script(
                 """
                 return document.body
                     ? (document.body.innerText || document.body.textContent || '')
                     : '';
                 """
             ) or ""
+        except Exception:
+            return ""
 
-            texto_norm = _normalizar_texto_comparacao(texto)
+    def _modal_por_texto():
+        for contexto in _contextos_comparacao():
+            if not _ir_contexto(contexto):
+                continue
+
+            texto_norm = _normalizar_comp_local(_texto_contexto_atual())
 
             if (
                 "selecionar requerimento" in texto_norm
@@ -6719,45 +7031,161 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
             ):
                 return True
 
+        return False
+
+    def _localizar_botao_interno_comparar():
+        id_botao_interno = "formAnalise:j_idt10:j_idt26"
+
+        xpaths_interno = [
+            f"//*[@id='{id_botao_interno}']",
+            "//button[normalize-space()='Comparar Versão']",
+            "//a[normalize-space()='Comparar Versão']",
+            "//input[normalize-space(@value)='Comparar Versão']",
+            "//span[normalize-space()='Comparar Versão']/ancestor::button[1]",
+            "//span[normalize-space()='Comparar Versão']/ancestor::a[1]",
+            "//*[self::a or self::button][contains(normalize-space(), 'Comparar Versão')]",
+            "//input[contains(@value, 'Comparar Versão')]",
+        ]
+
+        for contexto in ["iframe", "default"]:
+            if not _ir_contexto(contexto):
+                continue
+
+            # Primeiro tenta o ID validado no DevTools.
+            try:
+                el = driver.execute_script(
+                    "return document.getElementById(arguments[0]);",
+                    id_botao_interno,
+                )
+
+                if el is not None and _elemento_clicavel(el):
+                    return el
+            except Exception:
+                pass
+
+            for xpath in xpaths_interno:
+                try:
+                    elementos = driver.find_elements(By.XPATH, xpath)
+
+                    for el in elementos:
+                        try:
+                            if _elemento_clicavel(el):
+                                return el
+                        except Exception:
+                            continue
+
+                except Exception:
+                    continue
+
+        return None
+
+    def _modal_ou_botao_interno_disponivel():
+        if _modal_por_texto():
+            return True
+
+        return _localizar_botao_interno_comparar() is not None
+
+    def _clicar_botao_superior_com_retry():
+        ultimo_erro = None
+
+        for tentativa in range(1, 5):
+            botao = _localizar_botao_superior()
+
+            if not botao:
+                ultimo_erro = "botao_superior_nao_encontrado"
+                print(
+                    f"[SCH][RETORNO][WARN] Botão superior 'Comparar Versões' não encontrado "
+                    f"na tentativa {tentativa}/4."
+                )
+                esperar_tela_carregar(driver, 0.8)
+                continue
+
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                    botao,
+                )
+                time.sleep(0.2)
+
+                try:
+                    ActionChains(driver).move_to_element(botao).pause(0.15).click().perform()
+                except Exception:
+                    try:
+                        botao.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", botao)
+
+                esperar_tela_carregar(driver, 1.0)
+
+                print(f"[SCH][RETORNO] Clique superior executado. Tentativa {tentativa}/4.")
+                print("[SCH][RETORNO] Aguardando modal 'Selecionar Requerimento'...")
+
+                inicio = time.time()
+                while time.time() - inicio < 12:
+                    if _modal_ou_botao_interno_disponivel():
+                        return True
+                    time.sleep(0.3)
+
+                print(
+                    "[SCH][RETORNO][WARN] Modal ainda não detectado após clique superior. "
+                    "Tentando novamente..."
+                )
+                ultimo_erro = "modal_nao_detectado_apos_clique"
+
+            except Exception as e:
+                ultimo_erro = e
+                print(
+                    f"[SCH][RETORNO][WARN] Falha no clique superior tentativa {tentativa}/4: {e}"
+                )
+                esperar_tela_carregar(driver, 0.8)
+
+        raise Exception(
+            "Cliquei em 'Comparar Versões', mas o modal 'Selecionar Requerimento' "
+            f"não apareceu. Último erro: {ultimo_erro}"
+        )
+
+    def _clicar_botao_interno_comparar():
+        botao_interno = _localizar_botao_interno_comparar()
+
+        if not botao_interno:
+            raise Exception("Botão interno 'Comparar Versão' não encontrado no modal.")
+
+        try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                botao_interno,
+            )
+            time.sleep(0.2)
         except Exception:
             pass
 
         try:
-            entrar_iframe_detalhe_analise(driver, wait)
-
-            texto = driver.execute_script(
+            driver.execute_script(
                 """
-                return document.body
-                    ? (document.body.innerText || document.body.textContent || '')
-                    : '';
-                """
-            ) or ""
+                var el = arguments[0];
+                el.focus();
+                el.click();
+                try { el.blur(); } catch(e) {}
+                return true;
+                """,
+                botao_interno,
+            )
+            print("[SCH][RETORNO] DOM click executado no botão interno 'Comparar Versão'.")
+            return True
 
-            texto_norm = _normalizar_texto_comparacao(texto)
+        except Exception as e_js:
+            print(f"[SCH][RETORNO][WARN] DOM click no botão interno falhou: {e_js}")
 
-            return (
-                "selecionar requerimento" in texto_norm
-                and "comparar versao" in texto_norm
+        try:
+            ActionChains(driver).move_to_element(botao_interno).pause(0.15).click().perform()
+            print("[SCH][RETORNO] Clique físico executado no botão interno 'Comparar Versão'.")
+            return True
+        except Exception as e_action:
+            raise Exception(
+                f"Falha ao clicar no botão interno 'Comparar Versão': {e_action}"
             )
 
-        except Exception:
-            return False
-
-    modal_aberto = False
-    inicio_modal = time.time()
-
-    while time.time() - inicio_modal < 30:
-        if _modal_selecionar_requerimento_abriu():
-            modal_aberto = True
-            break
-
-        time.sleep(0.3)
-
-    if not modal_aberto:
-        raise Exception(
-            "Cliquei em 'Comparar Versões', mas o modal "
-            "'Selecionar Requerimento' não apareceu."
-        )
+    _clicar_botao_superior_com_retry()
 
     print("[SCH][RETORNO] Modal detectado.")
     print("[SCH][RETORNO] Instalando captura da URL de comparação...")
@@ -6768,11 +7196,6 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         handles_antes_modal = set()
 
     try:
-        entrar_iframe_detalhe_analise(driver, wait)
-    except Exception:
-        pass
-
-    try:
         _instalar_captura_popup_comparacao_retorno(driver, wait)
         print("[SCH][RETORNO] Captura de popup instalada.")
     except Exception as e:
@@ -6780,60 +7203,8 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
 
     print("[SCH][RETORNO] Preparando clique DOM no botão interno 'Comparar Versão'...")
 
-    id_botao_interno = "formAnalise:j_idt10:j_idt26"
+    _clicar_botao_interno_comparar()
 
-    try:
-        entrar_iframe_detalhe_analise(driver, wait)
-    except Exception:
-        pass
-
-    try:
-        WebDriverWait(driver, 20, poll_frequency=0.2).until(
-            lambda d: d.execute_script(
-                """
-                var el = document.getElementById(arguments[0]);
-
-                if (!el) return false;
-
-                var style = window.getComputedStyle(el);
-
-                return (
-                    style.display !== 'none' &&
-                    style.visibility !== 'hidden' &&
-                    !el.disabled
-                );
-                """,
-                id_botao_interno,
-            )
-        )
-
-        driver.execute_script(
-            """
-            var el = document.getElementById(arguments[0]);
-
-            if (!el) {
-                throw new Error("Botão Comparar Versão não encontrado pelo ID.");
-            }
-
-            el.scrollIntoView({block:'center', inline:'center'});
-            el.focus();
-            el.click();
-
-            try {
-                el.blur();
-            } catch(e) {}
-
-            return true;
-            """,
-            id_botao_interno,
-        )
-
-        print("[SCH][RETORNO] DOM click executado no botão interno 'Comparar Versão'.")
-
-    except Exception as e:
-        raise Exception(
-            f"Falha ao executar DOM click no botão interno 'Comparar Versão': {e}"
-        )
 
     print("[SCH][RETORNO] Clique interno executado. Capturando URL da comparação...")
 
@@ -7029,7 +7400,6 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         "A aba de comparação abriu, mas a página não carregou dentro do tempo limite."
     )
 
-    
 def _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura):
     if not isinstance(info_abertura, dict):
         return False
@@ -7169,57 +7539,50 @@ def _extrair_textos_vermelhos_por_lado_retorno(captura, lado="direita"):
 
 def _normalizar_dados_tecnicos_para_comparacao_retorno(texto):
     """
-    Normaliza texto de Dados Técnicos do Produto para evitar falso positivo
-    quando o OCD apenas reescreve o mesmo conteúdo com formatação diferente.
+    Normaliza Dados Técnicos para evitar falso positivo quando o OCD apenas
+    reescreve a mesma especificação elétrica com unidades/formatos diferentes.
 
-    Exemplos tratados como equivalentes:
-    - Vca = VAC
-    - Vcc = VDC
-    - 0,9 A = 0,9A
-    - ponto, vírgula e ponto e vírgula não alteram o sentido técnico
+    Exemplo tratado como equivalente:
+    - 5,0 VDC (3,0 A) == 5V/3A
+    - 9,0 VDC (2,77 A) == 9V/2,77A
+    - 3,3 VDC - 11,0 VDC (2,25 A) == 3,3V - 11V / 2,25A
+    - VDC/VCC/VAC/VCA são normalizados para V quando a comparação é de grandeza.
     """
-
     texto = _normalizar_texto_retorno(texto)
 
     if not texto:
         return ""
 
-    # Remove rótulos que não alteram o conteúdo técnico
     texto = texto.replace("dados tecnicos do produto", " ")
     texto = texto.replace("especificacoes complementares", " ")
     texto = texto.replace("especificacao complementar", " ")
 
-    # Normaliza unidades equivalentes
-    texto = re.sub(r"\bvca\b", "vac", texto)
-    texto = re.sub(r"\bvac\b", "vac", texto)
-    texto = re.sub(r"\bvcc\b", "vdc", texto)
-    texto = re.sub(r"\bvdc\b", "vdc", texto)
-
-    # Normaliza decimal brasileiro para comparação
     texto = re.sub(r"(\d),(\d)", r"\1.\2", texto)
 
-    # Remove espaço entre número e unidade
-    # Ex: 0.9 A -> 0.9a | 100-240 VAC -> 100-240vac
-    texto = re.sub(
-        r"(\d)\s+(vac|vdc|v|a|ma|w|kw|hz|khz|mhz|ghz)",
-        r"\1\2",
-        texto,
-    )
+    # Unidades equivalentes no contexto da comparação de especificações.
+    texto = re.sub(r"\bvca\b|\bvac\b|\bvcc\b|\bvdc\b", "v", texto)
 
-    # Normaliza separadores semânticos
+    # Frequência de rede e termos comerciais não devem bloquear sozinhos.
+    texto = re.sub(r"\b\d+\s*-\s*\d+\s*hz\b", " ", texto)
+    texto = re.sub(r"\b(pdo|pps|usb|type|tipo|carregador|saida|entrada|tensao|com|uma|um|01|1|de|da|do|e|ou)\b", " ", texto)
+
+    # Remove espaços em faixas e entre número/unidade.
+    texto = re.sub(r"(\d)\s*-\s*(\d)", r"\1-\2", texto)
+    texto = re.sub(r"(\d)\s+(v|a|ma|w|kw|hz|khz|mhz|ghz)", r"\1\2", texto)
+
+    # 5.0v -> 5v | 3.0a -> 3a | 11.0v -> 11v
+    texto = re.sub(r"(?<!\d)(\d+)\.0+(?=(v|a|ma|w|kw|hz|khz|mhz|ghz|\b))", r"\1", texto)
+
     texto = texto.replace(";", " ")
     texto = texto.replace(":", " ")
-    texto = texto.replace(".", " ")
     texto = texto.replace(",", " ")
+    texto = texto.replace("/", " ")
+    texto = texto.replace("(", " ").replace(")", " ")
 
-    # Remove caracteres que não mudam o conteúdo
-    texto = re.sub(r"[^a-z0-9\-]+", " ", texto)
-
+    texto = re.sub(r"[^a-z0-9\.\-]+", " ", texto)
     texto = re.sub(r"\s+", " ", texto).strip()
 
     return texto
-
-
 
 
 def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
@@ -7315,9 +7678,90 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
     }
 
 
-def _comparar_documentos_anexos_retorno(texto_antigo, texto_novo, vermelhos_direita, vermelhos_esquerda):
-    documentos_antigos = _extrair_documentos_comparar_versoes(texto_antigo)
-    documentos_novos = _extrair_documentos_comparar_versoes(texto_novo)
+
+def _texto_documento_anexo_capturado_retorno(item):
+    """
+    Converte uma linha capturada da tabela Relação de Arquivos Anexos em texto.
+    Aceita tanto strings quanto dicionários vindos do JavaScript.
+    """
+    if isinstance(item, dict):
+        nome = _texto_limpo(item.get("nome") or "")
+        descricao = _texto_limpo(item.get("descricao") or "")
+        texto = _texto_limpo(item.get("texto") or "")
+
+        if nome and descricao:
+            return f"{nome} | {descricao}"
+
+        return texto or nome or descricao
+
+    return _texto_limpo(item)
+
+
+def _lista_docs_capturados_tabela_retorno(valores, somente_vermelhos=False):
+    docs = []
+
+    for item in valores or []:
+        if somente_vermelhos and isinstance(item, dict) and not item.get("red"):
+            continue
+
+        texto = _texto_documento_anexo_capturado_retorno(item)
+
+        if not texto:
+            continue
+
+        docs.append(texto)
+
+    return _lista_unica_retorno(docs)
+
+
+def _comparar_documentos_anexos_retorno(
+    texto_antigo,
+    texto_novo,
+    vermelhos_direita,
+    vermelhos_esquerda,
+    docs_tabela_esquerda=None,
+    docs_tabela_direita=None,
+    docs_tabela_vermelhos_esquerda=None,
+    docs_tabela_vermelhos_direita=None,
+):
+    """
+    Compara somente a seção/tabela 'Relação de Arquivos Anexos'.
+
+    Prioridade de captura:
+    1. Linhas reais da tabela Relação de Arquivos Anexos capturadas pelo DOM.
+    2. Fallback pelo texto recortado da seção.
+
+    Para documentos adicionados/removidos, quando houver linhas vermelhas na tabela,
+    elas são a fonte mais confiável. Isso evita capturar texto vermelho de Laboratórios,
+    Garantias ou outros blocos que não fazem parte dos anexos.
+    """
+    documentos_antigos_tabela = _lista_docs_capturados_tabela_retorno(
+        docs_tabela_esquerda,
+        somente_vermelhos=False,
+    )
+    documentos_novos_tabela = _lista_docs_capturados_tabela_retorno(
+        docs_tabela_direita,
+        somente_vermelhos=False,
+    )
+
+    documentos_antigos = documentos_antigos_tabela or _extrair_documentos_comparar_versoes(texto_antigo)
+    documentos_novos = documentos_novos_tabela or _extrair_documentos_comparar_versoes(texto_novo)
+
+    adicionados_por_vermelho_tabela = _lista_docs_capturados_tabela_retorno(
+        docs_tabela_vermelhos_direita,
+        somente_vermelhos=False,
+    ) or _lista_docs_capturados_tabela_retorno(
+        docs_tabela_direita,
+        somente_vermelhos=True,
+    )
+
+    removidos_por_vermelho_tabela = _lista_docs_capturados_tabela_retorno(
+        docs_tabela_vermelhos_esquerda,
+        somente_vermelhos=False,
+    ) or _lista_docs_capturados_tabela_retorno(
+        docs_tabela_esquerda,
+        somente_vermelhos=True,
+    )
 
     set_antigos = {
         _normalizar_texto_retorno(x)
@@ -7341,23 +7785,72 @@ def _comparar_documentos_anexos_retorno(texto_antigo, texto_novo, vermelhos_dire
         if _normalizar_texto_retorno(x) not in set_novos
     ]
 
-    vermelhos_docs_direita = [
-        x for x in vermelhos_direita
-        if _texto_parece_documento_anexo_retorno(x)
-    ]
+    set_adicionados = {
+        _normalizar_texto_retorno(x)
+        for x in adicionados_por_diff
+        if _normalizar_texto_retorno(x)
+    }
 
-    vermelhos_docs_esquerda = [
-        x for x in vermelhos_esquerda
-        if _texto_parece_documento_anexo_retorno(x)
-    ]
+    set_removidos = {
+        _normalizar_texto_retorno(x)
+        for x in removidos_por_diff
+        if _normalizar_texto_retorno(x)
+    }
 
-    docs_adicionados = _lista_unica_retorno(
-        vermelhos_docs_direita or adicionados_por_diff
-    )
+    vermelhos_docs_direita_na_relacao = []
+    for item in vermelhos_direita or []:
+        texto = _texto_documento_anexo_capturado_retorno(item)
+        texto_norm = _normalizar_texto_retorno(texto)
+        if texto_norm and texto_norm in set_adicionados:
+            vermelhos_docs_direita_na_relacao.append(texto)
 
-    docs_removidos = _lista_unica_retorno(
-        vermelhos_docs_esquerda or removidos_por_diff
-    )
+    vermelhos_docs_esquerda_na_relacao = []
+    for item in vermelhos_esquerda or []:
+        texto = _texto_documento_anexo_capturado_retorno(item)
+        texto_norm = _normalizar_texto_retorno(texto)
+        if texto_norm and texto_norm in set_removidos:
+            vermelhos_docs_esquerda_na_relacao.append(texto)
+
+    # Quando a tabela DOM foi capturada e há linhas vermelhas, a fonte oficial
+    # para inclusão/exclusão é a cor da linha na própria tabela:
+    # - vermelho no lado novo/direito = documento adicionado;
+    # - vermelho no lado antigo/esquerdo = documento removido.
+    # Não usar diff por conjunto nesse cenário, porque documentos repetidos
+    # podem existir antes e serem anexados novamente.
+    if documentos_antigos_tabela or documentos_novos_tabela:
+        if adicionados_por_vermelho_tabela or removidos_por_vermelho_tabela:
+            docs_adicionados = _lista_unica_retorno(adicionados_por_vermelho_tabela)
+            docs_removidos = _lista_unica_retorno(removidos_por_vermelho_tabela)
+        else:
+            docs_adicionados = _lista_unica_retorno(adicionados_por_diff)
+            docs_removidos = _lista_unica_retorno(removidos_por_diff)
+    else:
+        docs_adicionados = _lista_unica_retorno(
+            vermelhos_docs_direita_na_relacao
+            or adicionados_por_diff
+        )
+
+        docs_removidos = _lista_unica_retorno(
+            vermelhos_docs_esquerda_na_relacao
+            or removidos_por_diff
+        )
+
+    norm_add = {
+        _normalizar_texto_retorno(x)
+        for x in docs_adicionados
+        if _normalizar_texto_retorno(x)
+    }
+    norm_rem = {
+        _normalizar_texto_retorno(x)
+        for x in docs_removidos
+        if _normalizar_texto_retorno(x)
+    }
+
+    # Proteção contra falso positivo: em algumas capturas o mesmo bloco vermelho
+    # pode ser associado aos dois lados por causa de scroll/posição. Se a lista
+    # de removidos ficou idêntica à lista de adicionados, não tratar como remoção.
+    if norm_add and norm_add == norm_rem:
+        docs_removidos = []
 
     return {
         "documentos_antigos": documentos_antigos,
@@ -7366,6 +7859,15 @@ def _comparar_documentos_anexos_retorno(texto_antigo, texto_novo, vermelhos_dire
         "documentos_removidos": docs_removidos,
         "tem_documento_adicionado": bool(docs_adicionados),
         "tem_documento_removido": bool(docs_removidos),
+        "origem_documentos": (
+            "tabela_dom_relacao_arquivos_anexos"
+            if (documentos_antigos_tabela or documentos_novos_tabela)
+            else "texto_recortado_relacao_arquivos_anexos"
+        ),
+        "qtd_linhas_tabela_antiga": len(documentos_antigos_tabela),
+        "qtd_linhas_tabela_nova": len(documentos_novos_tabela),
+        "qtd_linhas_vermelhas_tabela_nova": len(adicionados_por_vermelho_tabela),
+        "qtd_linhas_vermelhas_tabela_antiga": len(removidos_por_vermelho_tabela),
     }
 
 
@@ -7387,340 +7889,186 @@ def _normalizar_bloco_para_comparacao_retorno(texto):
     return texto
 
 
-def _compactar_texto_produto_retorno(texto):
-    texto = str(texto or "")
-    texto = texto.replace("\r", "\n")
-    texto = texto.replace("\xa0", " ")
-    texto = texto.replace("–", "-").replace("—", "-")
-    texto = re.sub(r"[ \t]+", " ", texto)
-    return texto.strip()
-
-
-def _texto_tem_bloqueio_produto_retorno(trecho_antes):
-    trecho_norm = _normalizar_texto_retorno(trecho_antes)
-
-    bloqueios = [
-        "nome do produto",
-        "dados tecnicos do produto",
-        "homologacao de produto",
-        "homologacao do produto",
-        "produto para telecomunicacoes",
-        "requerimento para homologacao de produto",
-    ]
-
-    return any(b in trecho_norm for b in bloqueios)
-
-
-def _formatar_modelo_produto_retorno(modelo):
-    modelo = _texto_limpo(modelo)
-
-    if not modelo:
-        return ""
-
-    modelo = re.sub(
-        r"(?i)([A-Z0-9][A-Z0-9.\-_/]*)(descontinuado)\b",
-        r"\1 Descontinuado",
-        modelo,
-    )
-
-    modelo = re.sub(r"\s+", " ", modelo).strip(" :-;,.")
-    return modelo
-
-
-def _extrair_campos_produto_retorno(bloco):
-    bloco = _compactar_texto_produto_retorno(bloco)
+def _formatar_bloco_produto_retorno(bloco):
+    bloco = str(bloco or "").strip()
 
     if not bloco:
-        return {
-            "modelos": [],
-            "tipo": "",
-            "categoria": "",
-        }
+        return ""
 
-    plano = re.sub(r"\s+", " ", bloco).strip()
+    bloco = re.sub(r"\s+", " ", bloco).strip()
 
-    # Remove cabeçalho "Produto:" quando vier presente.
-    plano = re.sub(r"^\s*Produto\s*:?\s*", "", plano, flags=re.I)
-
-    stop_labels = (
-        r"Produto\s*:|Modelo\s*:|Tipo\s*:|Categoria\s*:|"
-        r"Dados\s+T[eé]cnicos\s+do\s+Produto|Dados\s+Tecnicos\s+do\s+Produto|"
-        r"Dados\s+T[eé]cnicos|Dados\s+Tecnicos|"
-        r"Especifica[cç][oõ]es\s+Complementares|Especificacoes\s+Complementares|"
-        r"Laborat[oó]rio|Laboratorio|"
-        r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Relacao\s+de\s+Arquivos\s+Anexos|"
-        r"Outras\s+Unidades\s+Fabris|Garantias|Declara[cç][oõ]es|Declaracoes|"
-        r"Solicitante\s+declara|Hist[oó]rico|Historico"
-    )
-
-    modelos = []
-
-    for m in re.finditer(
-        rf"\bModelo\s*:?\s*(.*?)(?=\s+(?:{stop_labels})|$)",
-        plano,
-        flags=re.I | re.S,
-    ):
-        modelo = _formatar_modelo_produto_retorno(m.group(1))
-
-        if not modelo:
-            continue
-
-        modelo_norm = _normalizar_texto_retorno(modelo)
-
-        # Evita capturar "Descontinuado" sozinho, que aparece como ruído visual
-        # em alguns PDFs/telas do Comparar Versões.
-        if modelo_norm in {"descontinuado", "modelo", "modelos"}:
-            continue
-
-        # Evita texto longo de declaração/solicitante capturado por acidente.
-        if len(modelo) > 120:
-            continue
-
-        modelos.append(modelo)
-
-    modelos = _lista_unica_retorno(modelos)
-
-    tipo = ""
-
-    for m in re.finditer(
-        rf"\bTipo\s*:?\s*(.*?)(?=\s+(?:Categoria\s*:|Tipo\s*:|Modelo\s*:|{stop_labels})|$)",
-        plano,
-        flags=re.I | re.S,
-    ):
-        candidato = _texto_limpo(m.group(1))
-        candidato = re.sub(r"\s+", " ", candidato).strip(" :-;,.")
-        candidato_norm = _normalizar_texto_retorno(candidato)
-
-        if not candidato or candidato_norm in {"categoria", "tipo", "i"}:
-            continue
-
-        if len(candidato) > 160:
-            continue
-
-        tipo = candidato
-        break
-
-    categoria = ""
-
-    m_cat = re.search(
-        r"\bCategoria\s*:?\s*([A-Za-z0-9IVXLC]+)",
-        plano,
+    bloco = re.sub(
+        r"^\s*Produto\s*:?\s*",
+        "Produto:\n",
+        bloco,
         flags=re.I,
     )
 
-    if m_cat:
-        categoria = _texto_limpo(m_cat.group(1)).strip(" :-;,.").upper()
+    bloco = re.sub(r"\s+(Modelo\s*:)", r"\n\1", bloco, flags=re.I)
+    bloco = re.sub(r"\s+(Tipo\s*:)", r"\n\1", bloco, flags=re.I)
+    bloco = re.sub(r"\s+(Categoria\s*:)", r"\n\1", bloco, flags=re.I)
 
-    return {
-        "modelos": modelos,
-        "tipo": tipo,
-        "categoria": categoria,
-    }
-
-
-def _formatar_bloco_produto_retorno(bloco):
-    campos = _extrair_campos_produto_retorno(bloco)
-
-    modelos = campos.get("modelos", []) or []
-    tipo = campos.get("tipo", "")
-    categoria = campos.get("categoria", "")
-
-    linhas = ["Produto:"]
-
-    for modelo in modelos:
-        linhas.append(f"Modelo: {modelo}")
-
-    if tipo:
-        linhas.append(f"Tipo: {tipo}")
-
-    if categoria:
-        linhas.append(f"Categoria: {categoria}")
-
-    # Só considera produto válido se houver modelo e pelo menos tipo ou categoria.
-    if not modelos or not (tipo or categoria):
-        return ""
+    linhas = [
+        linha.strip()
+        for linha in bloco.splitlines()
+        if linha.strip()
+    ]
 
     return "\n".join(linhas).strip()
 
 
-def _indice_fim_bloco_produto_retorno(plano, inicio):
-    finais = [
-        r"Dados\s+T[eé]cnicos\s+do\s+Produto",
-        r"Dados\s+Tecnicos\s+do\s+Produto",
-        r"Dados\s+T[eé]cnicos",
-        r"Dados\s+Tecnicos",
-        r"Especifica[cç][oõ]es\s+Complementares",
-        r"Especificacoes\s+Complementares",
-        r"Laborat[oó]rio",
-        r"Laboratorio",
-        r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos",
-        r"Relacao\s+de\s+Arquivos\s+Anexos",
-        r"Outras\s+Unidades\s+Fabris",
-        r"Garantias",
-        r"Declara[cç][oõ]es",
-        r"Declaracoes",
-        r"Solicitante\s+declara",
-        r"Hist[oó]rico",
-        r"Historico",
-    ]
-
-    fim = len(plano)
-
-    for padrao in finais:
-        m = re.search(padrao, plano[inicio:], flags=re.I)
-        if m:
-            pos = inicio + m.start()
-            if pos > inicio and pos < fim:
-                fim = pos
-
-    return fim
-
-
 def _recortar_bloco_produto_retorno(texto):
     """
-    Recorta somente a seção real de Produto do Comparar Versões.
+    Recorta somente a seção real:
 
-    O SCH/OCD pode entregar o texto quase todo em uma única linha. Por isso,
-    esta função não procura qualquer palavra "Produto"; ela só aceita:
-    - título isolado "Produto:" seguido de Modelo/Tipo/Categoria; ou
-    - bloco logo após "Dados do Certificado" / "Nº do Certificado" / "Data de Emissão",
-      antes de "Especificações Complementares" ou "Dados Técnicos".
+    Produto:
+    Modelo: ...
+    Modelo: ...
+    Tipo: ...
+    Categoria: ...
 
     Ignora ocorrências como:
-    - Nome do Produto:
-    - Dados Técnicos do Produto:
+    - Nome do Produto
+    - Dados Técnicos do Produto
     - REQUERIMENTO PARA HOMOLOGAÇÃO DE PRODUTO...
     """
-    texto = _compactar_texto_produto_retorno(texto)
+    texto = str(texto or "").replace("\r", "\n")
 
-    if not texto:
+    if not texto.strip():
         return ""
 
-    plano = re.sub(r"\s+", " ", texto).strip()
+    texto = re.sub(r"[ \t]+", " ", texto)
 
-    # Tentativa 1: título real "Produto:".
-    # Não aceita "Nome do Produto:" nem "Dados Técnicos do Produto:".
-    for m in re.finditer(r"\bProduto\s*:\s*", plano, flags=re.I):
-        antes = plano[max(0, m.start() - 90):m.start()]
+    def _eh_titulo_produto_isolado(linha):
+        linha_norm = _normalizar_texto_retorno(linha)
 
-        if _texto_tem_bloqueio_produto_retorno(antes):
-            continue
+        if not linha_norm:
+            return False
 
-        depois = plano[m.end():m.end() + 180]
+        bloqueios = [
+            "nome do produto",
+            "dados tecnicos do produto",
+            "homologacao de produto",
+            "produto para telecomunicacoes",
+            "requerimento para homologacao de produto",
+        ]
 
-        if not re.search(r"\bModelo\s*:", depois, flags=re.I):
-            continue
+        if any(b in linha_norm for b in bloqueios):
+            return False
 
-        inicio = m.start()
-        fim = _indice_fim_bloco_produto_retorno(plano, inicio)
-        bloco = plano[inicio:fim].strip()
-        bloco_formatado = _formatar_bloco_produto_retorno(bloco)
+        return bool(re.fullmatch(r"produto\s*:?", linha_norm))
 
-        if bloco_formatado:
-            return bloco_formatado
+    def _eh_fim_bloco_produto(linha):
+        linha_norm = _normalizar_texto_retorno(linha)
 
-    # Tentativa 2: quando o título "Produto:" não aparece na captura,
-    # usa o trecho entre Dados do Certificado e Especificações Complementares.
-    marcadores_inicio = [
-        r"Dados\s+do\s+Certificado",
-        r"N[º°o]\s+do\s+Certificado",
-        r"N\s*o\s+do\s+Certificado",
-        r"N[uú]mero\s+do\s+Certificado",
-        r"Data\s+de\s+Emiss[aã]o",
-        r"Data\s+de\s+Emissao",
+        finais = [
+            "dados tecnicos do produto",
+            "dados tecnicos",
+            "especificacoes complementares",
+            "laboratorio",
+            "relacao de arquivos anexos",
+            "garantias",
+            "declaracoes",
+            "solicitante declara",
+            "historico",
+            "outras unidades fabris",
+            "dados do certificado",
+        ]
+
+        return any(
+            re.fullmatch(rf"{re.escape(fim)}\s*:?", linha_norm)
+            for fim in finais
+        )
+
+    # Tentativa 1: texto com quebras de linha.
+    linhas = [
+        linha.strip()
+        for linha in texto.splitlines()
+        if linha.strip()
     ]
 
-    candidatos_inicio = []
-
-    for padrao in marcadores_inicio:
-        for m in re.finditer(padrao, plano, flags=re.I):
-            candidatos_inicio.append(m.end())
-
-    # Também usa "Certificado:" como ponto de corte, mas só depois de aparecer
-    # "Dados do Certificado" ou "Nº do Certificado" no texto.
-    if not candidatos_inicio:
-        m_cert = re.search(
-            r"(?:Dados\s+do\s+Certificado|N[º°o]\s+do\s+Certificado).*?Certificado\s*:",
-            plano,
-            flags=re.I | re.S,
-        )
-        if m_cert:
-            candidatos_inicio.append(m_cert.end())
-
-    candidatos_inicio = sorted(set(candidatos_inicio))
-
-    for inicio_base in reversed(candidatos_inicio):
-        trecho = plano[inicio_base:]
-        m_modelo = re.search(r"\bModelo\s*:", trecho, flags=re.I)
-
-        if not m_modelo:
+    for idx, linha in enumerate(linhas):
+        if not _eh_titulo_produto_isolado(linha):
             continue
 
-        inicio = inicio_base + m_modelo.start()
-        fim = _indice_fim_bloco_produto_retorno(plano, inicio)
-        bloco = "Produto: " + plano[inicio:fim].strip()
+        bloco = [linha]
 
-        bloco_formatado = _formatar_bloco_produto_retorno(bloco)
+        for prox in linhas[idx + 1:]:
+            if _eh_fim_bloco_produto(prox):
+                break
 
-        if bloco_formatado:
-            return bloco_formatado
+            prox_norm = _normalizar_texto_retorno(prox)
 
-    # Tentativa 3: fallback controlado. Pega a primeira sequência compacta
-    # "Modelo: ... Tipo: ... Categoria: ..." que não esteja dentro de "Nome do Produto".
-    padrao_compacto = re.compile(
-        r"\bModelo\s*:.*?\bTipo\s*:.*?(?:\bCategoria\s*:[A-Za-z0-9IVXLC]+)?",
+            # Mantém somente linhas realmente relacionadas ao Produto.
+            if (
+                "modelo" in prox_norm
+                or "tipo" in prox_norm
+                or "categoria" in prox_norm
+                or "descontinuado" in prox_norm
+            ):
+                bloco.append(prox)
+                continue
+
+            # Se já coletou algo útil e encontrou linha estranha, encerra.
+            if len(bloco) > 1:
+                break
+
+        bloco_txt = "\n".join(bloco).strip()
+        bloco_norm = _normalizar_texto_retorno(bloco_txt)
+
+        if "modelo" in bloco_norm and (
+            "tipo" in bloco_norm or "categoria" in bloco_norm
+        ):
+            return _formatar_bloco_produto_retorno(bloco_txt)
+
+    # Tentativa 2: texto veio todo em uma linha só.
+    plano = re.sub(r"\s+", " ", texto).strip()
+
+    padrao = re.compile(
+        r"(Produto\s*:?\s*Modelo\s*:.*?)(?=\s+"
+        r"(?:Dados\s+T[eé]cnicos\s+do\s+Produto|Dados\s+Tecnicos\s+do\s+Produto|"
+        r"Dados\s+T[eé]cnicos|Dados\s+Tecnicos|"
+        r"Especifica[cç][oõ]es\s+Complementares|Especificacoes\s+Complementares|"
+        r"Laborat[oó]rio|Laboratorio|"
+        r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Relacao\s+de\s+Arquivos\s+Anexos|"
+        r"Garantias|Declara[cç][oõ]es|Declaracoes|"
+        r"Solicitante\s+declara|Hist[oó]rico|Historico|"
+        r"Outras\s+Unidades\s+Fabris)"
+        r"\b|$)",
         flags=re.I | re.S,
     )
 
-    for m in padrao_compacto.finditer(plano):
-        antes = plano[max(0, m.start() - 120):m.start()]
+    m = padrao.search(plano)
 
-        if _texto_tem_bloqueio_produto_retorno(antes):
-            continue
+    if m:
+        bloco_txt = m.group(1).strip()
+        bloco_norm = _normalizar_texto_retorno(bloco_txt)
 
-        fim = _indice_fim_bloco_produto_retorno(plano, m.start())
-        bloco = "Produto: " + plano[m.start():fim].strip()
-        bloco_formatado = _formatar_bloco_produto_retorno(bloco)
-
-        if bloco_formatado:
-            return bloco_formatado
+        if "modelo" in bloco_norm and (
+            "tipo" in bloco_norm or "categoria" in bloco_norm
+        ):
+            return _formatar_bloco_produto_retorno(bloco_txt)
 
     return ""
 
 
-def _normalizar_modelo_produto_retorno(modelo):
-    modelo = _normalizar_texto_retorno(modelo)
-    modelo = re.sub(r"\bdescontinuado\b", " ", modelo)
-    modelo = re.sub(r"[^a-z0-9.\-]+", "", modelo)
-    return modelo.strip()
-
-
 def _normalizar_produto_para_comparacao_retorno(texto):
-    campos = _extrair_campos_produto_retorno(texto)
+    texto = _normalizar_texto_retorno(texto)
 
-    modelos = sorted(
-        {
-            _normalizar_modelo_produto_retorno(modelo)
-            for modelo in (campos.get("modelos") or [])
-            if _normalizar_modelo_produto_retorno(modelo)
-        }
-    )
-
-    tipo = _normalizar_texto_retorno(campos.get("tipo", ""))
-    tipo = re.sub(r"[^a-z0-9]+", " ", tipo)
-    tipo = re.sub(r"\s+", " ", tipo).strip()
-
-    categoria = _normalizar_texto_retorno(campos.get("categoria", ""))
-    categoria = re.sub(r"[^a-z0-9]+", "", categoria)
-
-    if not modelos and not tipo and not categoria:
+    if not texto:
         return ""
 
-    return (
-        f"modelos={'|'.join(modelos)};"
-        f"tipo={tipo};"
-        f"categoria={categoria}"
-    )
+    texto = texto.replace("produto", " ")
+    texto = texto.replace("modelo s", "modelo")
+    texto = texto.replace("modelo:", "modelo ")
+    texto = texto.replace("tipo:", "tipo ")
+    texto = texto.replace("categoria:", "categoria ")
+
+    texto = re.sub(r"\bdescontinuado\b", " ", texto)
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    return texto
 
 
 def _comparar_bloco_produto_retorno(texto_antigo, texto_novo):
@@ -7827,73 +8175,254 @@ def _doc_match_retorno(documento, aliases):
     for alias in aliases:
         alias_norm = _normalizar_texto_retorno(alias)
 
-        if alias_norm and alias_norm in doc_norm:
+        if not alias_norm:
+            continue
+
+        # Aliases curtos, como ART, CCT e ISO, precisam bater como termo isolado.
+        # Isso evita falso positivo como ART dentro de "Carta de Representação".
+        if len(alias_norm) <= 4 and re.fullmatch(r"[a-z0-9]+", alias_norm):
+            if re.search(rf"(?<![a-z0-9]){re.escape(alias_norm)}(?![a-z0-9])", doc_norm):
+                return True
+            continue
+
+        if alias_norm in doc_norm:
             return True
 
     return False
 
 
-def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
-    documentos_adicionados = documentos_adicionados or []
+def _extrair_texto_informacoes_adicionais_retorno(driver, wait):
+    """
+    Captura o texto visível da aba Informações Adicionais do Retorno Para Estudo.
 
-    regras_obrigatorias = [
-        {
-            "chave": "cct",
-            "nome": "CCT",
-            "aliases": [
-                "CCT",
-                "Certificado de Conformidade Técnica",
-                "Certificado de Conformidade Tecnica",
-            ],
-        },
-        {
-            "chave": "ract",
-            "nome": "RACT",
-            "aliases": [
-                "RACT",
-                "Relatório de Avaliação da Conformidade",
-                "Relatorio de Avaliacao da Conformidade",
-            ],
-        },
-        {
-            "chave": "fotos_externas",
-            "nome": "Fotos externas atualizadas",
-            "aliases": [
+    Essa aba é usada como fonte auxiliar de segurança: a automação procura
+    números de tipo de análise RE citados na justificativa do OCD.
+    """
+    resultado = {
+        "capturado": False,
+        "texto": "",
+        "erro": "",
+    }
+
+    try:
+        clicar_aba_informacoes_adicionais(driver, wait)
+        entrar_iframe_detalhe_analise(driver, wait)
+        esperar_tela_carregar(driver, 0.35)
+
+        texto_js = """
+        const partes = [];
+
+        function add(txt) {
+            txt = String(txt || '').replace(/\s+/g, ' ').trim();
+            if (txt) partes.push(txt);
+        }
+
+        if (document.body) {
+            add(document.body.innerText || document.body.textContent || '');
+        }
+
+        document.querySelectorAll('input, textarea, select').forEach(function(el) {
+            try {
+                const tag = String(el.tagName || '').toLowerCase();
+                if (tag === 'select') {
+                    const opts = Array.from(el.selectedOptions || []);
+                    opts.forEach(function(opt) {
+                        add(opt.textContent || opt.innerText || opt.value || '');
+                    });
+                    add(el.value || '');
+                    return;
+                }
+
+                add(el.value || '');
+                add(el.getAttribute('title') || '');
+                add(el.getAttribute('aria-label') || '');
+            } catch (e) {}
+        });
+
+        document.querySelectorAll('td, th, label, span, div').forEach(function(el) {
+            try {
+                add(el.innerText || el.textContent || '');
+            } catch (e) {}
+        });
+
+        const seen = new Set();
+        const out = [];
+        for (const p of partes) {
+            const key = p.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(p);
+        }
+        return out.join('\n');
+        """
+
+        try:
+            texto = driver.execute_script(texto_js) or ""
+        except Exception:
+            texto = _texto_visivel_sch(driver)
+
+        texto = str(texto or "").strip()
+
+        resultado["capturado"] = bool(texto)
+        resultado["texto"] = texto
+        return resultado
+
+    except Exception as e:
+        resultado["erro"] = str(e)
+        return resultado
+
+
+def _mapa_tipos_re_informacoes_adicionais():
+    return {
+        "1": "Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
+        "2": "Inclusão/exclusão de interfaces",
+        "3": "Inclusão/exclusão de fontes",
+        "4": "Inclusão da 2ª fase de bateria",
+        "5": "Inclusão/exclusão de modelo de bateria",
+        "6": "Manutenção tácita",
+        "7": "Inclusão/exclusão de modelos",
+        "8": "Inclusão/exclusão de nome comercial",
+        "9": "Alteração de características técnicas",
+        "10": "Alteração de dados de entidade com atualização do CH",
+        "11": "Troca de OCD",
+        "12": "Recertificação",
+        "13": "Manutenção com alteração do CH",
+        "14": "Troca de OCD - manutenção precária",
+        "15": "Manutenção para assistência técnica/garantias",
+        "16": "Declaração de conformidade com relatório de ensaio",
+    }
+
+
+def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
+    """
+    Procura números de tipo de análise RE na aba Informações Adicionais.
+
+    Para o fluxo atual, os números aceitos são: 1, 5, 6, 10 e 12.
+    Qualquer outro número encontrado no formato "9. Alteração..." gera alerta
+    e bloqueia aprovação automática.
+
+    A regex evita capturar datas, CEP, CNPJ, telefone, número de requerimento etc.
+    """
+    texto = str(texto_info or "")
+    mapa = _mapa_tipos_re_informacoes_adicionais()
+
+    permitidos = {"1", "5", "6", "10", "12"}
+
+    padrao = re.compile(
+        r"(?<!\d)\b(1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16)"
+        r"\s*[\.\-\)]\s*"
+        r"(?=[A-Za-zÀ-ÿ])",
+        flags=re.I,
+    )
+
+    numeros = []
+
+    for m in padrao.finditer(texto):
+        numero = str(m.group(1)).strip()
+        if numero not in numeros:
+            numeros.append(numero)
+
+    numeros_permitidos = [n for n in numeros if n in permitidos]
+    numeros_nao_permitidos = [n for n in numeros if n not in permitidos]
+
+    def _tipo(numero):
+        return {
+            "numero": numero,
+            "nome": mapa.get(numero, "Tipo de análise não mapeado"),
+            "permitido": numero in permitidos,
+        }
+
+    return {
+        "numeros_detectados": numeros,
+        "tipos_detectados": [_tipo(n) for n in numeros],
+        "numeros_permitidos": numeros_permitidos,
+        "tipos_permitidos": [_tipo(n) for n in numeros_permitidos],
+        "numeros_nao_permitidos": numeros_nao_permitidos,
+        "tipos_nao_permitidos": [_tipo(n) for n in numeros_nao_permitidos],
+        "tem_numero_nao_permitido": bool(numeros_nao_permitidos),
+        "permitidos_esperados": sorted(permitidos, key=lambda x: int(x)),
+        "nomes_permitidos_esperados": [
+            f"{n}. {mapa.get(n, '')}" for n in sorted(permitidos, key=lambda x: int(x))
+        ],
+    }
+
+
+def _regra_doc_retorno(chave, nome, aliases, obrigatorio=True, tipos=None):
+    return {
+        "chave": chave,
+        "nome": nome,
+        "aliases": aliases,
+        "obrigatorio": obrigatorio,
+        "tipos": tipos or [],
+    }
+
+
+def _regras_documentos_por_tipo_re_retorno():
+    """
+    Mapa resumido da planilha RE_DOCS para os tipos tratados neste fluxo.
+
+    Importante:
+    - A automação usa os obrigatórios principais para bloqueio.
+    - Itens marcados como "se aplicável" ficam como condicionais/informativos.
+    """
+    base_cct = _regra_doc_retorno(
+        "cct",
+        "CCT",
+        ["CCT", "Certificado de Conformidade Técnica", "Certificado de Conformidade Tecnica"],
+    )
+    base_ract = _regra_doc_retorno(
+        "ract",
+        "RACT",
+        ["RACT", "Relatório de Avaliação da Conformidade", "Relatorio de Avaliacao da Conformidade"],
+    )
+    base_art = _regra_doc_retorno(
+        "art",
+        "ART",
+        ["ART", "Anotação de Responsabilidade Técnica", "Anotacao de Responsabilidade Tecnica"],
+    )
+
+    manutencao_obrigatorios = [
+        base_cct,
+        base_ract,
+        _regra_doc_retorno(
+            "fotos_externas",
+            "Fotos externas com selo Anatel atualizadas",
+            [
                 "Fotos externas",
                 "Foto externa",
                 "Fotos do produto",
                 "Foto do produto",
-                "externas",
+                "FOTOS EXTERNAS",
                 "selo anatel",
             ],
-        },
-        {
-            "chave": "fotos_internas",
-            "nome": "Fotos internas atualizadas",
-            "aliases": [
-                "Fotos internas",
-                "Foto interna",
-                "internas",
-            ],
-        },
-        {
-            "chave": "declaracao_manutencao",
-            "nome": "Declaração de manutenção",
-            "aliases": [
+        ),
+        _regra_doc_retorno(
+            "fotos_internas",
+            "Fotos internas atualizadas",
+            ["Fotos internas", "Foto interna", "FOTOS INTERNAS", "internas"],
+        ),
+        _regra_doc_retorno(
+            "declaracao_manutencao",
+            "Declaração de manutenção",
+            [
                 "Declaração de manutenção",
                 "Declaracao de manutencao",
                 "Decl. de manutenção",
                 "Decl de manutencao",
                 "Declaração manutenção",
                 "Declaracao manutencao",
+                "DECL. DE ALTERAÇÃO",
+                "DECL DE ALTERACAO",
+                "Declaração de alteração",
+                "Declaracao de alteracao",
                 "manutenção",
                 "manutencao",
             ],
-        },
-        {
-            "chave": "relatorios_ensaio_falha",
-            "nome": "Relatórios de ensaios por falha no processo anterior",
-            "aliases": [
+        ),
+        _regra_doc_retorno(
+            "relatorios_ensaio_falha",
+            "Relatórios de ensaios por falha no processo anterior",
+            [
                 "Relatório de Ensaio",
                 "Relatorio de Ensaio",
                 "Relatórios de Ensaios",
@@ -7903,78 +8432,243 @@ def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
                 "ensaio por falha",
                 "ensaios por falha",
             ],
-        },
-        {
-            "chave": "art",
-            "nome": "ART",
-            "aliases": [
-                "ART",
-                "Anotação de Responsabilidade Técnica",
-                "Anotacao de Responsabilidade Tecnica",
-            ],
-        },
+        ),
+        base_art,
     ]
 
-    regras_condicionais = [
-        {
-            "chave": "iso_ou_auditoria_ocd",
-            "nome": "Cópia da ISO ou relatório de auditoria do OCD",
-            "aliases": [
-                "ISO",
-                "auditoria",
-                "relatório de auditoria",
-                "relatorio de auditoria",
-                "OCD",
-            ],
-        },
-        {
-            "chave": "traducao_juramentada",
-            "nome": "Tradução juramentada",
-            "aliases": [
-                "Tradução juramentada",
-                "Traducao juramentada",
-                "tradução",
-                "traducao",
-            ],
-        },
-        {
-            "chave": "ensaios_seguranca_eletrica",
-            "nome": "Relatórios de ensaios de segurança elétrica",
-            "aliases": [
-                "segurança elétrica",
-                "seguranca eletrica",
-                "ensaio de segurança elétrica",
-                "ensaio de seguranca eletrica",
-            ],
-        },
-        {
-            "chave": "alteracao_laboratorio",
-            "nome": "Alteração de laboratório",
-            "aliases": [
-                "Alteração de laboratório",
-                "Alteracao de laboratorio",
-                "laboratório",
-                "laboratorio",
-            ],
-        },
-        {
-            "chave": "declaracao_rastreabilidade",
-            "nome": "Declaração de rastreabilidade",
-            "aliases": [
-                "Declaração de rastreabilidade",
-                "Declaracao de rastreabilidade",
-                "rastreabilidade",
-            ],
-        },
-        {
-            "chave": "outros",
-            "nome": "Outros",
-            "aliases": [
-                "Outros",
-                "Outro",
-            ],
-        },
+    manutencao_condicionais = [
+        _regra_doc_retorno(
+            "iso_ou_auditoria_ocd",
+            "Cópia da ISO ou relatório de auditoria do OCD",
+            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "traducao_juramentada",
+            "Tradução juramentada",
+            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "ensaios_seguranca_eletrica",
+            "Relatórios de ensaios de segurança elétrica",
+            ["segurança elétrica", "seguranca eletrica", "ensaio de segurança elétrica", "ensaio de seguranca eletrica"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "alteracao_laboratorio",
+            "Alteração de laboratório",
+            ["Alteração de laboratório", "Alteracao de laboratorio", "laboratório", "laboratorio"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "declaracao_rastreabilidade",
+            "Declaração de rastreabilidade",
+            ["Declaração de rastreabilidade", "Declaracao de rastreabilidade", "rastreabilidade", "controle de rast"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "outros",
+            "Outros",
+            ["Outros", "Outro", "Outros (OCD)"],
+            obrigatorio=False,
+        ),
     ]
+
+    tipo_1_obrigatorios = [base_cct, base_ract, base_art]
+    tipo_1_condicionais = [
+        _regra_doc_retorno(
+            "iso_ou_auditoria_ocd",
+            "Cópia da ISO ou relatório de auditoria do OCD",
+            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "traducao_juramentada",
+            "Tradução juramentada",
+            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "outros",
+            "Outros",
+            ["Outros", "Outro", "Outros (OCD)"],
+            obrigatorio=False,
+        ),
+    ]
+
+    tipo_5_obrigatorios = [
+        _regra_doc_retorno(
+            "fotos_externas",
+            "Fotos externas atualizadas",
+            [
+                "Fotos externas",
+                "Foto externa",
+                "Fotos do produto",
+                "Foto do produto",
+                "FOTOS EXTERNAS",
+            ],
+        ),
+        base_cct,
+        base_ract,
+        base_art,
+    ]
+
+    tipo_5_condicionais = [
+        _regra_doc_retorno(
+            "iso_ou_auditoria_ocd",
+            "Cópia da ISO ou relatório de auditoria do OCD, se aplicável",
+            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "traducao_juramentada",
+            "Tradução juramentada, se aplicável",
+            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "outros",
+            "Outros",
+            ["Outros", "Outro", "Outros (OCD)"],
+            obrigatorio=False,
+        ),
+    ]
+
+    tipo_10_obrigatorios = [base_cct, base_ract, base_art]
+    tipo_10_condicionais = [
+        _regra_doc_retorno(
+            "fotos_externas",
+            "Fotos externas atualizadas / fotos do selo, se aplicável",
+            ["Fotos externas", "Foto externa", "Fotos do produto", "Foto do produto", "selo anatel"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "manual_especificacao_tecnica",
+            "Manual/especificação técnica, se aplicável",
+            ["Manual", "Manual do Produto", "Especificação Técnica", "Especificacao Tecnica", "ESPECIFICAÇÃO TÉCNICA"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "declaracao_alteracao_dados_fabricante",
+            "Declaração de alteração dos dados do fabricante, se aplicável",
+            ["Declaração de alteração", "Declaracao de alteracao", "DECL. DE ALTERAÇÃO", "alteração dos dados do fabricante"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "contrato_social_atualizado",
+            "Contrato social atualizado, se aplicável",
+            ["Contrato Social", "contrato social atualizado"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "carta_representacao_comercial",
+            "Carta de representação comercial, se aplicável",
+            ["Carta de Representação Comercial", "Carta de Representacao Comercial", "representação comercial"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "iso_ou_auditoria_ocd",
+            "Cópia da ISO ou relatório de auditoria do OCD, se aplicável",
+            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "traducao_juramentada",
+            "Tradução juramentada, se aplicável",
+            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
+            obrigatorio=False,
+        ),
+        _regra_doc_retorno(
+            "outros",
+            "Outros",
+            ["Outros", "Outro", "Outros (OCD)"],
+            obrigatorio=False,
+        ),
+    ]
+
+    return {
+        "1": {
+            "numero": "1",
+            "nome": "Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
+            "obrigatorios": tipo_1_obrigatorios,
+            "condicionais": tipo_1_condicionais,
+        },
+        "5": {
+            "numero": "5",
+            "nome": "Inclusão/exclusão de modelo de bateria no CCT do celular, sem alteração do CH",
+            "obrigatorios": tipo_5_obrigatorios,
+            "condicionais": tipo_5_condicionais,
+        },
+        "6": {
+            "numero": "6",
+            "nome": "Manutenção tácita",
+            "obrigatorios": manutencao_obrigatorios,
+            "condicionais": manutencao_condicionais,
+        },
+        "10": {
+            "numero": "10",
+            "nome": "Alteração de dados de entidade com atualização do CH",
+            "obrigatorios": tipo_10_obrigatorios,
+            "condicionais": tipo_10_condicionais,
+        },
+        "12": {
+            "numero": "12",
+            "nome": "Recertificação (documentos idem manutenção tácita)",
+            "obrigatorios": manutencao_obrigatorios,
+            "condicionais": manutencao_condicionais,
+        },
+    }
+
+
+def _tipos_re_para_validacao_documentos(analise_numeros_info):
+    analise_numeros_info = analise_numeros_info or {}
+    permitidos = analise_numeros_info.get("numeros_permitidos", []) or []
+
+    # Se não houver número explícito na justificativa, mantém o comportamento antigo:
+    # tratar como manutenção tácita.
+    if not permitidos:
+        return ["6"]
+
+    return [str(n) for n in permitidos if str(n) in {"1", "5", "6", "10", "12"}]
+
+
+def _validar_documentos_obrigatorios_por_tipos_re(documentos_adicionados, tipos_re=None):
+    documentos_adicionados = documentos_adicionados or []
+    tipos_re = [str(t) for t in (tipos_re or ["6"])]
+
+    mapa = _regras_documentos_por_tipo_re_retorno()
+
+    regras_obrigatorias = []
+    regras_condicionais = []
+    tipos_usados = []
+
+    def _add_regra(destino, regra, tipo_numero, tipo_nome):
+        chave_base = regra.get("chave") or regra.get("nome") or "documento"
+        chave = f"{tipo_numero}:{chave_base}"
+        destino.append({
+            **regra,
+            "chave": chave,
+            "chave_base": chave_base,
+            "tipo_re_numero": tipo_numero,
+            "tipo_re_nome": tipo_nome,
+        })
+
+    for tipo in tipos_re:
+        regra_tipo = mapa.get(tipo)
+        if not regra_tipo:
+            continue
+
+        tipos_usados.append({
+            "numero": tipo,
+            "nome": regra_tipo.get("nome", ""),
+        })
+
+        for regra in regra_tipo.get("obrigatorios", []) or []:
+            _add_regra(regras_obrigatorias, regra, tipo, regra_tipo.get("nome", ""))
+
+        for regra in regra_tipo.get("condicionais", []) or []:
+            _add_regra(regras_condicionais, regra, tipo, regra_tipo.get("nome", ""))
 
     encontrados = []
     faltantes = []
@@ -7982,43 +8676,43 @@ def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
     for regra in regras_obrigatorias:
         docs_match = [
             doc for doc in documentos_adicionados
-            if _doc_match_retorno(doc, regra["aliases"])
+            if _doc_match_retorno(doc, regra.get("aliases", []))
         ]
 
+        item = {
+            "chave": regra.get("chave"),
+            "chave_base": regra.get("chave_base"),
+            "nome": regra.get("nome"),
+            "tipo_re_numero": regra.get("tipo_re_numero"),
+            "tipo_re_nome": regra.get("tipo_re_nome"),
+        }
+
         if docs_match:
-            encontrados.append(
-                {
-                    "chave": regra["chave"],
-                    "nome": regra["nome"],
-                    "documentos": _lista_unica_retorno(docs_match),
-                }
-            )
+            item["documentos"] = _lista_unica_retorno(docs_match)
+            encontrados.append(item)
         else:
-            faltantes.append(
-                {
-                    "chave": regra["chave"],
-                    "nome": regra["nome"],
-                }
-            )
+            faltantes.append(item)
 
     condicionais_encontrados = []
 
     for regra in regras_condicionais:
         docs_match = [
             doc for doc in documentos_adicionados
-            if _doc_match_retorno(doc, regra["aliases"])
+            if _doc_match_retorno(doc, regra.get("aliases", []))
         ]
 
         if docs_match:
-            condicionais_encontrados.append(
-                {
-                    "chave": regra["chave"],
-                    "nome": regra["nome"],
-                    "documentos": _lista_unica_retorno(docs_match),
-                }
-            )
+            condicionais_encontrados.append({
+                "chave": regra.get("chave"),
+                "chave_base": regra.get("chave_base"),
+                "nome": regra.get("nome"),
+                "tipo_re_numero": regra.get("tipo_re_numero"),
+                "tipo_re_nome": regra.get("tipo_re_nome"),
+                "documentos": _lista_unica_retorno(docs_match),
+            })
 
     return {
+        "tipos_re_usados": tipos_usados,
         "obrigatorios_ok": not bool(faltantes),
         "obrigatorios_encontrados": encontrados,
         "obrigatorios_faltantes": faltantes,
@@ -8027,6 +8721,15 @@ def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
     }
 
 
+def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
+    """
+    Compatibilidade com chamadas antigas.
+    A validação padrão sem número informado continua usando o tipo 6.
+    """
+    return _validar_documentos_obrigatorios_por_tipos_re(
+        documentos_adicionados=documentos_adicionados,
+        tipos_re=["6"],
+    )
 
 def analisar_retorno_para_estudo(
     driver,
@@ -8085,7 +8788,8 @@ def analisar_retorno_para_estudo(
             "Dados Técnicos do Produto",
             "Outras Unidades Fabris",
             "Relação de Arquivos Anexos",
-            "Documentos obrigatórios da manutenção tácita",
+            "Documentos obrigatórios conforme tipo RE citado",
+            "Informações Adicionais / justificativa do Retorno Para Estudo",
         ],
 
         "status_comparacao": "nao_executada",
@@ -8104,6 +8808,13 @@ def analisar_retorno_para_estudo(
         "documentos_obrigatorios_encontrados": [],
         "documentos_obrigatorios_faltantes": [],
         "documentos_condicionais_encontrados": [],
+        "tipos_re_documentos_usados": [],
+
+        "informacoes_adicionais_retorno": {},
+        "analise_numeros_informacoes_adicionais": {},
+        "numeros_tipo_re_detectados": [],
+        "numeros_tipo_re_nao_permitidos": [],
+        "info_adicionais_tem_numero_nao_permitido": False,
 
         "documentos_novos_detectados": None,
         "documentos_adicionados": [],
@@ -8128,6 +8839,43 @@ def analisar_retorno_para_estudo(
     info_abertura = {}
 
     try:
+        print("[SCH][RETORNO] Capturando Informações Adicionais do retorno para estudo...")
+
+        info_adicionais_retorno = _extrair_texto_informacoes_adicionais_retorno(
+            driver,
+            wait,
+        )
+
+        resultado["informacoes_adicionais_retorno"] = info_adicionais_retorno
+
+        if info_adicionais_retorno.get("capturado"):
+            print("[SCH][RETORNO] Informações Adicionais capturadas.")
+        else:
+            print(
+                "[SCH][RETORNO][WARN] Não foi possível capturar Informações Adicionais: "
+                f"{info_adicionais_retorno.get('erro', '')}"
+            )
+
+        print("[SCH][RETORNO] Retornando para Dados Gerais antes de abrir Comparar Versões...")
+
+        try:
+            clicar_aba_dados_gerais(driver, wait)
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+            esperar_tela_carregar(driver, 0.6)
+            print("[SCH][RETORNO] Tela base pronta para abrir Comparar Versões.")
+        except Exception as e:
+            print(
+                "[SCH][RETORNO][WARN] Não foi possível retornar para Dados Gerais "
+                f"antes do Comparar Versões: {e}"
+            )
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
         info_abertura = clicar_comparar_versoes(driver, wait)
 
         captura = _capturar_comparar_versoes(driver, wait)
@@ -8137,6 +8885,10 @@ def analisar_retorno_para_estudo(
             "title": captura.get("title", ""),
             "qtd_vermelhos_esquerda": len(captura.get("vermelhos_esquerda", []) or []),
             "qtd_vermelhos_direita": len(captura.get("vermelhos_direita", []) or []),
+            "qtd_anexos_tabela_esquerda": len(captura.get("documentos_anexos_esquerda", []) or []),
+            "qtd_anexos_tabela_direita": len(captura.get("documentos_anexos_direita", []) or []),
+            "qtd_anexos_vermelhos_direita": len(captura.get("documentos_anexos_vermelhos_direita", []) or []),
+            "qtd_anexos_vermelhos_esquerda": len(captura.get("documentos_anexos_vermelhos_esquerda", []) or []),
         }
 
         texto_antigo = captura.get("texto_esquerda", "") or ""
@@ -8171,10 +8923,17 @@ def analisar_retorno_para_estudo(
             texto_novo=texto_novo,
             vermelhos_direita=vermelhos_direita,
             vermelhos_esquerda=vermelhos_esquerda,
+            docs_tabela_esquerda=captura.get("documentos_anexos_esquerda", []) or [],
+            docs_tabela_direita=captura.get("documentos_anexos_direita", []) or [],
+            docs_tabela_vermelhos_esquerda=captura.get("documentos_anexos_vermelhos_esquerda", []) or [],
+            docs_tabela_vermelhos_direita=captura.get("documentos_anexos_vermelhos_direita", []) or [],
         )
+        texto_produto_antigo = captura.get("produto_esquerda", "") or texto_antigo
+        texto_produto_novo = captura.get("produto_direita", "") or texto_novo
+
         comparacao_produto = _comparar_bloco_produto_retorno(
-            texto_antigo,
-            texto_novo,
+            texto_produto_antigo,
+            texto_produto_novo,
         )
         comparacao_unidade_fabril = _comparar_bloco_unidade_fabril_retorno(
             texto_antigo,
@@ -8211,8 +8970,37 @@ def analisar_retorno_para_estudo(
         resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", []) or []
         resultado["documentos_removidos"] = documentos.get("documentos_removidos", []) or []
 
-        validacao_documentos = _validar_documentos_obrigatorios_manutencao_tacita(
-            resultado["documentos_adicionados"]
+        print(
+            "[SCH][RETORNO] Relação de Arquivos Anexos capturada: "
+            f"antigos={len(documentos.get('documentos_antigos', []) or [])} | "
+            f"novos={len(documentos.get('documentos_novos', []) or [])} | "
+            f"adicionados={len(resultado['documentos_adicionados'])} | "
+            f"removidos={len(resultado['documentos_removidos'])} | "
+            f"origem={documentos.get('origem_documentos', '')}"
+        )
+
+        analise_numeros_info = _analisar_numeros_tipo_re_informacoes_adicionais(
+            resultado.get("informacoes_adicionais_retorno", {}).get("texto", "")
+        )
+
+        resultado["analise_numeros_informacoes_adicionais"] = analise_numeros_info
+        resultado["numeros_tipo_re_detectados"] = (
+            analise_numeros_info.get("numeros_detectados", []) or []
+        )
+        resultado["numeros_tipo_re_nao_permitidos"] = (
+            analise_numeros_info.get("numeros_nao_permitidos", []) or []
+        )
+        resultado["info_adicionais_tem_numero_nao_permitido"] = bool(
+            analise_numeros_info.get("tem_numero_nao_permitido")
+        )
+
+        tipos_re_para_validacao = _tipos_re_para_validacao_documentos(
+            analise_numeros_info
+        )
+
+        validacao_documentos = _validar_documentos_obrigatorios_por_tipos_re(
+            documentos_adicionados=resultado["documentos_adicionados"],
+            tipos_re=tipos_re_para_validacao,
         )
 
         resultado["produto_alterado"] = bool(comparacao_produto.get("alterado"))
@@ -8234,6 +9022,9 @@ def analisar_retorno_para_estudo(
         )
         resultado["documentos_condicionais_encontrados"] = (
             validacao_documentos.get("condicionais_encontrados", [])
+        )
+        resultado["tipos_re_documentos_usados"] = (
+            validacao_documentos.get("tipos_re_usados", [])
         )
 
 
@@ -8265,8 +9056,25 @@ def analisar_retorno_para_estudo(
             )
 
             resultado["alertas"].append(
-                "Documentos obrigatórios de manutenção tácita não identificados: "
+                "Documentos obrigatórios conforme o(s) tipo(s) RE citado(s) não identificados: "
                 f"{faltantes_txt or 'não especificado'}."
+            )
+
+        if resultado.get("info_adicionais_tem_numero_nao_permitido"):
+            numeros_txt = ", ".join(
+                str(n) for n in resultado.get("numeros_tipo_re_nao_permitidos", [])
+            )
+            permitidos_txt = ", ".join(
+                resultado.get("analise_numeros_informacoes_adicionais", {}).get(
+                    "permitidos_esperados",
+                    ["1", "6", "10", "12"],
+                )
+            )
+
+            resultado["alertas"].append(
+                "Informações Adicionais citam tipo(s) de análise RE fora do escopo esperado: "
+                f"{numeros_txt or 'não especificado'}. "
+                f"Tipos aceitos neste fluxo: {permitidos_txt}. Revisão manual recomendada."
             )
 
     
@@ -8293,12 +9101,14 @@ def analisar_retorno_para_estudo(
             and tem_documento_adicionado
             and not tem_documento_removido
             and documentos_obrigatorios_ok
+            and not resultado.get("info_adicionais_tem_numero_nao_permitido")
         ):
             resultado["status_comparacao"] = "manutencao_tacita_apta"
             resultado["resultado"] = (
-                "Análise de manutenção tácita concluída: não houve alteração em Produto "
-                "nem em Dados Técnicos do Produto, e os documentos obrigatórios foram "
-                "identificados entre os anexos novos."
+                "Análise de Retorno Para Estudo concluída: não houve alteração em Produto "
+                "nem em Dados Técnicos do Produto, houve documento novo, não houve documento removido, "
+                "os documentos obrigatórios do(s) tipo(s) RE citado(s) foram identificados e "
+                "as Informações Adicionais não citaram número de análise fora do escopo permitido."
             )
             resultado["acao_recomendada"] = "Enviar para aprovação"
             resultado["pode_enviar_para_aprovacao"] = True
@@ -8354,18 +9164,49 @@ def analisar_retorno_para_estudo(
         )
 
         print(
+            "[SCH][RETORNO] Produto alterado: "
+            f"{'SIM' if resultado.get('produto_alterado') else 'NÃO'}"
+        )
+
+        print(
             "[SCH][RETORNO] Dados Técnicos alterados: "
-            f"{'SIM' if resultado['dados_tecnicos_alterados'] else 'NÃO'}"
+            f"{'SIM' if resultado.get('dados_tecnicos_alterados') else 'NÃO'}"
+        )
+
+        print(
+            "[SCH][RETORNO] Unidade fabril alterada: "
+            f"{'SIM' if resultado.get('unidade_fabril_alterada') else 'NÃO'}"
         )
 
         print(
             "[SCH][RETORNO] Documento novo identificado: "
-            f"{'SIM' if resultado['documentos_novos_detectados'] else 'NÃO'}"
+            f"{'SIM' if resultado.get('documentos_novos_detectados') else 'NÃO'}"
+        )
+
+        print(
+            "[SCH][RETORNO] Documentos obrigatórios OK: "
+            f"{'SIM' if resultado.get('documentos_obrigatorios_ok') else 'NÃO'}"
+        )
+
+        numeros_detectados_txt = ", ".join(
+            str(n) for n in resultado.get("numeros_tipo_re_detectados", [])
+        ) or "nenhum"
+        numeros_nao_permitidos_txt = ", ".join(
+            str(n) for n in resultado.get("numeros_tipo_re_nao_permitidos", [])
+        ) or "nenhum"
+
+        print(
+            "[SCH][RETORNO] Números RE nas Informações Adicionais: "
+            f"{numeros_detectados_txt}"
+        )
+        print(
+            "[SCH][RETORNO] Números RE fora do escopo: "
+            f"{numeros_nao_permitidos_txt}"
         )
 
         print(
             "[SCH][RETORNO] Pode enviar para aprovação: "
-            f"{'SIM' if resultado['deve_enviar_para_aprovacao'] else 'NÃO'}"
+            f"{'SIM' if resultado.get('deve_enviar_para_aprovacao') else 'NÃO'}"
         )
 
         return resultado

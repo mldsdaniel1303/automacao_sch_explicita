@@ -1370,8 +1370,17 @@ def _html_documentos_validacao_retorno(itens, vazio="Nenhum."):
         if isinstance(item, dict):
             nome = item.get("nome") or item.get("chave") or "Documento"
             documentos = item.get("documentos") or []
+            tipo_numero = item.get("tipo_re_numero") or ""
+            tipo_nome = item.get("tipo_re_nome") or ""
 
-            linhas.append(f"<li><b>{escape(str(nome))}</b>")
+            prefixo_tipo = ""
+            if tipo_numero:
+                prefixo_tipo = f"Tipo {tipo_numero}"
+                if tipo_nome:
+                    prefixo_tipo += f" - {tipo_nome}"
+                prefixo_tipo = f"<span class='muted'>[{escape(str(prefixo_tipo))}]</span> "
+
+            linhas.append(f"<li>{prefixo_tipo}<b>{escape(str(nome))}</b>")
 
             if documentos:
                 linhas.append("<ul>")
@@ -1386,6 +1395,57 @@ def _html_documentos_validacao_retorno(itens, vazio="Nenhum."):
     linhas.append("</ul>")
     return "".join(linhas)
 
+
+
+def _html_tipos_re_informacoes_adicionais_retorno(analise):
+    analise = analise or {}
+
+    numeros_detectados = analise.get("numeros_detectados", []) or []
+    tipos_detectados = analise.get("tipos_detectados", []) or []
+    tipos_nao_permitidos = analise.get("tipos_nao_permitidos", []) or []
+    nomes_permitidos = analise.get("nomes_permitidos_esperados", []) or []
+
+    numeros_txt = ", ".join(str(n) for n in numeros_detectados) or "Nenhum número identificado"
+    permitidos_txt = "; ".join(str(n) for n in nomes_permitidos) or "1, 5, 6, 10 e 12"
+
+    classe = "alerta" if tipos_nao_permitidos else "ok"
+
+    linhas = [
+        "<h3>Cruzamento com Informações Adicionais</h3>",
+        f"<div class='{classe}'>",
+        "<p><b>Números de tipo RE detectados:</b> " + escape(numeros_txt) + "</p>",
+        "<p><b>Tipos aceitos neste fluxo:</b> " + escape(permitidos_txt) + "</p>",
+        "<p><b>Existe número fora do escopo?</b> " + _sim_nao_retorno(bool(tipos_nao_permitidos)) + "</p>",
+        "</div>",
+    ]
+
+    if tipos_detectados:
+        linhas.append(
+            "<table>"
+            "<thead><tr><th>Número</th><th>Tipo identificado</th><th>Permitido?</th></tr></thead>"
+            "<tbody>"
+        )
+
+        for item in tipos_detectados:
+            numero = item.get("numero", "")
+            nome = item.get("nome", "")
+            permitido = item.get("permitido", False)
+            linhas.append(
+                "<tr>"
+                f"<td>{escape(str(numero))}</td>"
+                f"<td>{escape(str(nome))}</td>"
+                f"<td>{_sim_nao_retorno(permitido)}</td>"
+                "</tr>"
+            )
+
+        linhas.append("</tbody></table>")
+    else:
+        linhas.append(
+            "<p class='muted'>Nenhum número de tipo RE foi identificado na aba Informações Adicionais. "
+            "Nesse caso, a automação mantém a validação padrão de manutenção tácita.</p>"
+        )
+
+    return "".join(linhas)
 
 def _html_retorno_para_estudo_bloco(resultado):
     retorno = _fmt_retorno_para_estudo(resultado)
@@ -1405,6 +1465,7 @@ def _html_retorno_para_estudo_bloco(resultado):
         "Outras Unidades Fabris",
         "Relação de Arquivos Anexos",
         "Documentos obrigatórios da manutenção tácita",
+        "Informações Adicionais / justificativa do Retorno Para Estudo",
     ]
 
     produto_alterado = retorno.get("produto_alterado", False)
@@ -1423,6 +1484,14 @@ def _html_retorno_para_estudo_bloco(resultado):
     )
     documentos_condicionais_encontrados = (
         retorno.get("documentos_condicionais_encontrados") or []
+    )
+    tipos_re_documentos_usados = retorno.get("tipos_re_documentos_usados") or []
+    analise_numeros_info = retorno.get("analise_numeros_informacoes_adicionais") or {}
+    numeros_tipo_re_detectados = retorno.get("numeros_tipo_re_detectados") or []
+    numeros_tipo_re_nao_permitidos = retorno.get("numeros_tipo_re_nao_permitidos") or []
+    info_adicionais_tem_numero_nao_permitido = retorno.get(
+        "info_adicionais_tem_numero_nao_permitido",
+        False,
     )
 
     documentos_obrigatorios_ok = retorno.get("documentos_obrigatorios_ok")
@@ -1496,6 +1565,9 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Documento novo identificado?</td><td>{_sim_nao_retorno(documentos_novos_detectados)}</td></tr>
                 <tr><td>Documento removido identificado?</td><td>{_sim_nao_retorno(bool(docs_removidos))}</td></tr>
                 <tr><td>Documentos obrigatórios OK?</td><td>{_sim_nao_retorno(documentos_obrigatorios_ok)}</td></tr>
+                <tr><td>Números RE detectados nas Informações Adicionais</td><td>{escape(', '.join(str(n) for n in numeros_tipo_re_detectados) or 'Nenhum')}</td></tr>
+                <tr><td>Números RE fora do escopo?</td><td>{_sim_nao_retorno(info_adicionais_tem_numero_nao_permitido)}</td></tr>
+                <tr><td>Números RE fora do escopo identificados</td><td>{escape(', '.join(str(n) for n in numeros_tipo_re_nao_permitidos) or 'Nenhum')}</td></tr>
                 <tr><td>Pode enviar para aprovação?</td><td><b>{_sim_nao_retorno(pode_enviar)}</b></td></tr>
                 {envio_linhas}
             </tbody>
@@ -1508,14 +1580,21 @@ def _html_retorno_para_estudo_bloco(resultado):
 
         <h3>Regra aplicada</h3>
         <p>
-            Para <b>manutenção tácita</b>, a automação recomenda envio para aprovação
-            somente quando <b>não houver alteração em Produto</b>,
+            A automação recomenda envio para aprovação somente quando
+            <b>não houver alteração em Produto</b>,
             <b>não houver alteração em Dados Técnicos do Produto</b>,
             <b>houver documento novo anexado</b>,
-            <b>não houver documento removido</b> e
-            <b>os documentos obrigatórios da manutenção tácita forem identificados</b>.
+            <b>não houver documento removido</b>,
+            <b>os documentos obrigatórios do(s) tipo(s) RE citado(s) forem identificados</b>
+            e a aba <b>Informações Adicionais</b> não citar número de análise fora do escopo
+            permitido. Tipos aceitos neste fluxo: <b>1, 5, 6, 10 e 12</b>.
             A alteração de Unidade Fabril é registrada no relatório para conferência.
         </p>
+
+        {_html_tipos_re_informacoes_adicionais_retorno(analise_numeros_info)}
+
+        <h3>Tipos RE usados para validação documental</h3>
+        {_html_documentos_validacao_retorno(tipos_re_documentos_usados, "Nenhum tipo RE usado na validação documental.")}
 
         <h3>Alertas</h3>
         {_html_alertas_retorno(alertas)}
