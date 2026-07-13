@@ -8334,11 +8334,14 @@ def _doc_match_retorno(documento, aliases):
 
 def _extrair_texto_informacoes_adicionais_retorno(driver, wait):
     """
-    Captura o texto visível da aba Informações Adicionais do Retorno Para Estudo.
+    Captura o texto da aba Informações Adicionais do Retorno Para Estudo.
 
-    Essa aba é usada como fonte auxiliar de segurança: a automação procura
-    números de tipo de análise RE citados na justificativa do OCD.
+    Prioridade:
+    1. Campo Justificativa
+    2. Campo Motivação do Retorno para Estudo
+    3. Fallback: texto geral da aba
     """
+
     resultado = {
         "capturado": False,
         "texto": "",
@@ -8346,70 +8349,187 @@ def _extrair_texto_informacoes_adicionais_retorno(driver, wait):
     }
 
     try:
-        clicar_aba_informacoes_adicionais(driver, wait)
-        entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.35)
+        print("[SCH][RETORNO] Capturando Informações Adicionais do retorno para estudo...")
 
-        texto_js = """
+        clicar_aba_informacoes_adicionais(driver, wait)
+        esperar_tela_carregar(driver, 0.8)
+
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        script = r"""
         const partes = [];
 
-        function add(txt) {
-            txt = String(txt || '').replace(/\\s+/g, ' ').trim();
-            if (txt) partes.push(txt);
+        function add(txt, origem) {
+            txt = String(txt || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (!txt) return;
+
+            partes.push((origem ? '[' + origem + '] ' : '') + txt);
         }
 
-        if (document.body) {
-            add(document.body.innerText || document.body.textContent || '');
+        function norm(txt) {
+            return String(txt || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/\s+/g, ' ')
+                .trim();
         }
 
-        document.querySelectorAll('input, textarea, select').forEach(function(el) {
-            try {
-                const tag = String(el.tagName || '').toLowerCase();
-                if (tag === 'select') {
-                    const opts = Array.from(el.selectedOptions || []);
-                    opts.forEach(function(opt) {
-                        add(opt.textContent || opt.innerText || opt.value || '');
-                    });
-                    add(el.value || '');
-                    return;
+        function valorCampo(el) {
+            if (!el) return '';
+
+            const tag = String(el.tagName || '').toLowerCase();
+
+            if (tag === 'textarea' || tag === 'input') {
+                return el.value || el.getAttribute('value') || '';
+            }
+
+            if (tag === 'select') {
+                const opt = el.options && el.selectedIndex >= 0
+                    ? el.options[el.selectedIndex]
+                    : null;
+
+                return opt
+                    ? (opt.textContent || opt.innerText || opt.value || '')
+                    : (el.value || '');
+            }
+
+            return el.innerText || el.textContent || '';
+        }
+
+        // 1) Captura específica do campo Justificativa
+        const todos = Array.from(document.querySelectorAll('label, span, div, td, th, p'));
+
+        for (const el of todos) {
+            const txt = norm(el.innerText || el.textContent || '');
+
+            if (txt.includes('justificativa')) {
+                let campo = null;
+
+                try {
+                    campo = el.parentElement
+                        ? el.parentElement.querySelector('textarea, input:not([type="hidden"]), select')
+                        : null;
+                } catch (e) {}
+
+                if (!campo) {
+                    let atual = el;
+
+                    for (let i = 0; i < 8 && atual; i++) {
+                        try {
+                            campo = atual.querySelector
+                                ? atual.querySelector('textarea, input:not([type="hidden"]), select')
+                                : null;
+
+                            if (campo) break;
+                        } catch (e) {}
+
+                        atual = atual.nextElementSibling;
+                    }
                 }
 
-                add(el.value || '');
-                add(el.getAttribute('title') || '');
-                add(el.getAttribute('aria-label') || '');
-            } catch (e) {}
-        });
+                if (!campo) {
+                    try {
+                        const xpath = ".//following::*[self::textarea or self::input[not(@type='hidden')] or self::select][1]";
+                        campo = document.evaluate(
+                            xpath,
+                            el,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        ).singleNodeValue;
+                    } catch (e) {}
+                }
 
-        document.querySelectorAll('td, th, label, span, div').forEach(function(el) {
-            try {
-                add(el.innerText || el.textContent || '');
-            } catch (e) {}
-        });
-
-        const seen = new Set();
-        const out = [];
-        for (const p of partes) {
-            const key = p.toLowerCase();
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push(p);
+                if (campo) {
+                    add(valorCampo(campo), 'justificativa');
+                }
+            }
         }
-        return out.join('\n');
+
+        // 2) Captura específica do campo Motivação do Retorno para Estudo
+        for (const el of todos) {
+            const txt = norm(el.innerText || el.textContent || '');
+
+            if (txt.includes('motivacao do retorno para estudo')) {
+                let campo = null;
+
+                try {
+                    campo = el.parentElement
+                        ? el.parentElement.querySelector('select, input:not([type="hidden"]), textarea')
+                        : null;
+                } catch (e) {}
+
+                if (!campo) {
+                    try {
+                        const xpath = ".//following::*[self::select or self::input[not(@type='hidden')] or self::textarea][1]";
+                        campo = document.evaluate(
+                            xpath,
+                            el,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        ).singleNodeValue;
+                    } catch (e) {}
+                }
+
+                if (campo) {
+                    add(valorCampo(campo), 'motivacao');
+                }
+            }
+        }
+
+        // 3) Fallback: captura todos os textareas/selects/inputs visíveis
+        document.querySelectorAll('textarea, input:not([type="hidden"]), select').forEach(function(el) {
+            add(valorCampo(el), 'campo');
+        });
+
+        // 4) Fallback final: texto visível da página
+        if (document.body) {
+            add(document.body.innerText || document.body.textContent || '', 'body');
+        }
+
+        const vistos = new Set();
+        const saida = [];
+
+        for (const parte of partes) {
+            const chave = norm(parte);
+
+            if (!chave || vistos.has(chave)) continue;
+
+            vistos.add(chave);
+            saida.push(parte);
+        }
+
+        return saida.join('\n');
         """
 
-        try:
-            texto = driver.execute_script(texto_js) or ""
-        except Exception:
-            texto = _texto_visivel_sch(driver)
-
+        texto = driver.execute_script(script) or ""
         texto = str(texto or "").strip()
 
         resultado["capturado"] = bool(texto)
         resultado["texto"] = texto
+
+        print("[SCH][RETORNO] Informações Adicionais capturadas:")
+        print("-" * 80)
+        print(texto[:3000])
+        print("-" * 80)
+
         return resultado
 
     except Exception as e:
         resultado["erro"] = str(e)
+        print(f"[SCH][RETORNO][WARN] Falha ao capturar Informações Adicionais: {e}")
+
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
         return resultado
 
 
@@ -8438,19 +8558,35 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
     """
     Procura números de tipo de análise RE na aba Informações Adicionais.
 
-    Para o fluxo atual, os números aceitos são: 1, 5, 6, 10 e 12.
-    Qualquer outro número encontrado no formato "9. Alteração..." gera alerta
-    e bloqueia aprovação automática.
+    Regras atuais para aprovação automática:
 
-    A regex evita capturar datas, CEP, CNPJ, telefone, número de requerimento etc.
+    Aceitos individualmente:
+    - 1
+    - 5
+    - 6
+    - 10
+    - 12
+
+    Combinações aceitas:
+    - 6 + 12
+    - 6 + 11
+
+    Observação:
+    - 11 sozinho não é aceito.
+    - 11 só é aceito quando aparecer junto com 6.
     """
+
     texto = str(texto_info or "")
     mapa = _mapa_tipos_re_informacoes_adicionais()
 
-    permitidos = {"1", "5", "6", "10", "12"}
+    aceitos_individuais = {"1", "5", "6", "10", "12"}
+
+    texto_limpo = texto.replace("\u00a0", " ")
+    texto_limpo = re.sub(r"\s+", " ", texto_limpo).strip()
 
     padrao = re.compile(
-        r"(?<!\d)\b(1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16)"
+        r"(?<![\d/.-])"
+        r"(16|15|14|13|12|11|10|9|8|7|6|5|4|3|2|1)"
         r"\s*[\.\-\)]\s*"
         r"(?=[A-Za-zÀ-ÿ])",
         flags=re.I,
@@ -8458,20 +8594,53 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
 
     numeros = []
 
-    for m in padrao.finditer(texto):
+    for m in padrao.finditer(texto_limpo):
         numero = str(m.group(1)).strip()
+
         if numero not in numeros:
             numeros.append(numero)
 
-    numeros_permitidos = [n for n in numeros if n in permitidos]
-    numeros_nao_permitidos = [n for n in numeros if n not in permitidos]
+    conjunto = set(numeros)
+
+    numeros_nao_permitidos = []
+
+    for numero in numeros:
+        if numero in aceitos_individuais:
+            continue
+
+        # Regra especial:
+        # Tipo 11 só é permitido quando aparecer junto com o tipo 6.
+        if numero == "11" and "6" in conjunto:
+            continue
+
+        numeros_nao_permitidos.append(numero)
+
+    numeros_permitidos = [
+        numero for numero in numeros
+        if numero not in numeros_nao_permitidos
+    ]
 
     def _tipo(numero):
         return {
             "numero": numero,
             "nome": mapa.get(numero, "Tipo de análise não mapeado"),
-            "permitido": numero in permitidos,
+            "permitido": numero not in numeros_nao_permitidos,
         }
+
+    combinacao_detectada = " + ".join(numeros) if numeros else ""
+
+    combinacao_ok = False
+
+    if not numeros:
+        combinacao_ok = True
+    elif conjunto.issubset(aceitos_individuais):
+        combinacao_ok = True
+    elif conjunto == {"6", "11"}:
+        combinacao_ok = True
+    elif conjunto == {"6", "12"}:
+        combinacao_ok = True
+    elif conjunto == {"6", "11", "12"}:
+        combinacao_ok = True
 
     return {
         "numeros_detectados": numeros,
@@ -8481,9 +8650,17 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
         "numeros_nao_permitidos": numeros_nao_permitidos,
         "tipos_nao_permitidos": [_tipo(n) for n in numeros_nao_permitidos],
         "tem_numero_nao_permitido": bool(numeros_nao_permitidos),
-        "permitidos_esperados": sorted(permitidos, key=lambda x: int(x)),
+        "combinacao_detectada": combinacao_detectada,
+        "combinacao_ok": combinacao_ok,
+        "permitidos_esperados": ["1", "5", "6", "10", "12", "6+12", "6+11"],
         "nomes_permitidos_esperados": [
-            f"{n}. {mapa.get(n, '')}" for n in sorted(permitidos, key=lambda x: int(x))
+            "1. Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
+            "5. Inclusão/exclusão de modelo de bateria",
+            "6. Manutenção tácita",
+            "10. Alteração de dados de entidade com atualização do CH",
+            "12. Recertificação",
+            "6 + 12. Manutenção tácita + Recertificação",
+            "6 + 11. Manutenção tácita + Troca de OCD",
         ],
     }
 
