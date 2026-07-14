@@ -1671,66 +1671,876 @@ def _html_requerimento_retorno_para_estudo(resultado):
     """
 
 
-def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_execucao, fim_execucao):
+def _retorno_resultado_resumo(resultado):
+    """
+    Pega o bloco de resultado do Retorno Para Estudo, mesmo que ele venha
+    em estruturas diferentes.
+    """
+    if not isinstance(resultado, dict):
+        return {}
+
+    for chave in [
+        "retorno_para_estudo",
+        "resultado_retorno_para_estudo",
+        "resultado_retorno",
+        "analise_retorno_para_estudo",
+    ]:
+        valor = resultado.get(chave)
+        if isinstance(valor, dict):
+            return valor
+
+    # Em alguns fluxos, o próprio resultado já é o bloco de Retorno Para Estudo.
+    if (
+        resultado.get("tipo_relatorio") == "retorno_para_estudo"
+        or resultado.get("tipo_re")
+        or "pode_enviar_para_aprovacao" in resultado
+        or "deve_enviar_para_aprovacao" in resultado
+    ):
+        return resultado
+
+    return resultado
+
+
+def _bool_resumo_retorno(valor):
+    if isinstance(valor, bool):
+        return valor
+
+    texto = str(valor or "").strip().lower()
+
+    return texto in {
+        "true",
+        "1",
+        "sim",
+        "s",
+        "yes",
+        "y",
+        "ok",
+        "apto",
+        "aprovado",
+    }
+
+
+def _sim_nao_resumo_retorno(valor):
+    return "SIM" if _bool_resumo_retorno(valor) else "NÃO"
+
+
+def _lista_resumo_retorno(valor):
+    if not valor:
+        return []
+
+    if isinstance(valor, list):
+        return [str(v).strip() for v in valor if str(v).strip()]
+
+    if isinstance(valor, tuple):
+        return [str(v).strip() for v in valor if str(v).strip()]
+
+    return [str(valor).strip()] if str(valor).strip() else []
+
+
+def _texto_curto_resumo_retorno(valor, limite=120):
+    texto = " ".join(str(valor or "").split())
+
+    if not texto:
+        return "-"
+
+    if len(texto) <= limite:
+        return texto
+
+    return texto[: limite - 3] + "..."
+
+
+def _resultado_executivo_retorno(resultado):
+    retorno = _retorno_resultado_resumo(resultado)
+
+    envio = retorno.get("envio_para_aprovacao") or resultado.get("envio_para_aprovacao") or {}
+    erro = (
+        retorno.get("erro")
+        or resultado.get("erro")
+        or ""
+    )
+
+    status_comparacao = str(retorno.get("status_comparacao") or "").strip().lower()
+    status_processamento = str(resultado.get("status") or retorno.get("status") or "").strip().lower()
+
+    enviado = _bool_resumo_retorno(envio.get("executado"))
+
+    pode_enviar = _bool_resumo_retorno(
+        retorno.get("pode_enviar_para_aprovacao")
+        if "pode_enviar_para_aprovacao" in retorno
+        else retorno.get("deve_enviar_para_aprovacao")
+    )
+
+    if erro or status_comparacao == "erro" or status_processamento == "erro":
+        return "Erro na análise"
+
+    if enviado:
+        return "Aprovado automaticamente"
+
+    if pode_enviar:
+        return "Apto para aprovação"
+
+    return "Revisão manual"
+
+
+def _classe_resultado_executivo_retorno(resultado_exec):
+    texto = str(resultado_exec or "").lower()
+
+    if "aprovado automaticamente" in texto:
+        return "status-c"
+
+    if "apto" in texto:
+        return "status-revisar"
+
+    if "erro" in texto:
+        return "status-nc"
+
+    return "status-revisar"
+
+
+def _motivo_principal_retorno(resultado):
+    retorno = _retorno_resultado_resumo(resultado)
+
+    erro = retorno.get("erro") or resultado.get("erro") or ""
+    if erro:
+        return f"Erro: {_texto_curto_resumo_retorno(erro, 160)}"
+
+    if _bool_resumo_retorno(retorno.get("produto_alterado")):
+        return "Produto alterado"
+
+    if _bool_resumo_retorno(retorno.get("dados_tecnicos_alterados")):
+        return "Dados técnicos alterados"
+
+    if _bool_resumo_retorno(retorno.get("unidade_fabril_alterada")):
+        return "Unidade fabril alterada"
+
+    if _bool_resumo_retorno(retorno.get("documentos_removidos_detectados")):
+        return "Documento removido"
+
+    documentos_removidos = _lista_resumo_retorno(retorno.get("documentos_removidos"))
+    if documentos_removidos:
+        return "Documento removido"
+
+    if _bool_resumo_retorno(retorno.get("info_adicionais_tem_numero_nao_permitido")):
+        numeros = _lista_resumo_retorno(retorno.get("numeros_tipo_re_nao_permitidos"))
+        if numeros:
+            return "Número RE fora do escopo: " + ", ".join(numeros)
+        return "Número RE fora do escopo"
+
+    faltantes = _lista_resumo_retorno(retorno.get("documentos_obrigatorios_faltantes"))
+    if faltantes:
+        nomes = []
+
+        for item in faltantes[:3]:
+            if isinstance(item, dict):
+                nomes.append(str(item.get("nome") or item.get("documento") or item))
+            else:
+                nomes.append(str(item))
+
+        extra = "" if len(faltantes) <= 3 else f" +{len(faltantes) - 3}"
+        return "Documento obrigatório faltante: " + ", ".join(nomes) + extra
+
+    if not _bool_resumo_retorno(retorno.get("documentos_novos_detectados")):
+        return "Nenhum documento novo identificado"
+
+    if _bool_resumo_retorno(retorno.get("pode_enviar_para_aprovacao")):
+        return "Critérios atendidos"
+
+    alertas = _lista_resumo_retorno(retorno.get("alertas"))
+    if alertas:
+        return _texto_curto_resumo_retorno(alertas[0], 160)
+
+    return "-"
+
+
+def _numeros_re_resumo(resultado):
+    retorno = _retorno_resultado_resumo(resultado)
+
+    numeros = _lista_resumo_retorno(retorno.get("numeros_tipo_re_detectados"))
+
+    if not numeros:
+        analise = retorno.get("analise_numeros_informacoes_adicionais") or {}
+        numeros = _lista_resumo_retorno(analise.get("numeros_detectados"))
+
+    return ", ".join(numeros) if numeros else "Nenhum"
+
+
+def _acao_recomendada_resumo(resultado):
+    retorno = _retorno_resultado_resumo(resultado)
+
+    acao = (
+        retorno.get("acao_recomendada")
+        or resultado.get("acao_recomendada")
+        or ""
+    )
+
+    if acao:
+        return str(acao)
+
+    resultado_exec = _resultado_executivo_retorno(resultado)
+
+    if resultado_exec == "Aprovado automaticamente":
+        return "Enviado para aprovação"
+
+    if resultado_exec == "Apto para aprovação":
+        return "Enviar para aprovação"
+
+    if resultado_exec == "Erro na análise":
+        return "Revisar manualmente"
+
+    return "Não enviar para aprovação / Revisar manualmente"
+
+
+def _html_resumo_executivo_retorno_para_estudo(resultados):
+    resultados = resultados or []
+
     total = len(resultados)
-    sucessos = sum(1 for x in resultados if x.get("status") == "sucesso")
-    erros = sum(1 for x in resultados if x.get("status") == "erro")
-    docs = sum(int(x.get("downloads_realizados", 0) or 0) for x in resultados)
 
-    tempo_total_decorrido_segundos = round((fim_execucao - inicio_execucao).total_seconds(), 2)
-    tempo_ativo_automacao_segundos = _tempo_ativo_total_segundos(resultados)
-
-    qtd_enviar = 0
+    qtd_aprovado = 0
+    qtd_apto = 0
     qtd_revisar = 0
+    qtd_erro = 0
 
-    itens_html = []
+    linhas = []
 
     for idx, resultado in enumerate(resultados, start=1):
-        retorno = _fmt_retorno_para_estudo(resultado)
-        deve_enviar = (
+        retorno = _retorno_resultado_resumo(resultado)
+        req_numero = _fmt_req(resultado)
+
+        resultado_exec = _resultado_executivo_retorno(resultado)
+
+        if resultado_exec == "Aprovado automaticamente":
+            qtd_aprovado += 1
+        elif resultado_exec == "Apto para aprovação":
+            qtd_apto += 1
+        elif resultado_exec == "Erro na análise":
+            qtd_erro += 1
+        else:
+            qtd_revisar += 1
+
+        classe_resultado = _classe_resultado_executivo_retorno(resultado_exec)
+
+        produto_ok = not _bool_resumo_retorno(retorno.get("produto_alterado"))
+        dados_ok = not _bool_resumo_retorno(retorno.get("dados_tecnicos_alterados"))
+        unidade_ok = not _bool_resumo_retorno(retorno.get("unidade_fabril_alterada"))
+        docs_novos = _bool_resumo_retorno(retorno.get("documentos_novos_detectados"))
+        docs_ok = _bool_resumo_retorno(retorno.get("documentos_obrigatorios_ok"))
+        removido = bool(_lista_resumo_retorno(retorno.get("documentos_removidos")))
+
+        envio = retorno.get("envio_para_aprovacao") or {}
+        envio_txt = "SIM" if _bool_resumo_retorno(envio.get("executado")) else "NÃO"
+
+        motivo = _motivo_principal_retorno(resultado)
+
+        linhas.append(
+            "<tr>"
+            f"<td>{escape(str(idx))}</td>"
+            f"<td><b>{escape(str(req_numero))}</b></td>"
+            f"<td class='status-cell {classe_resultado}'>{escape(resultado_exec)}</td>"
+            f"<td>{escape(_acao_recomendada_resumo(resultado))}</td>"
+            f"<td>{'OK' if produto_ok else 'Alterado'}</td>"
+            f"<td>{'OK' if dados_ok else 'Alterado'}</td>"
+            f"<td>{'OK' if unidade_ok else 'Alterada'}</td>"
+            f"<td>{'SIM' if docs_novos else 'NÃO'}</td>"
+            f"<td>{'OK' if docs_ok else 'NÃO OK'}</td>"
+            f"<td>{'SIM' if removido else 'NÃO'}</td>"
+            f"<td>{escape(_numeros_re_resumo(resultado))}</td>"
+            f"<td>{escape(envio_txt)}</td>"
+            f"<td>{escape(motivo)}</td>"
+            "</tr>"
+        )
+
+    return f"""
+    <div class="sumario">
+        <h2>Resumo da análise dos requerimentos</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Total analisado</th>
+                    <th>Aprovados automaticamente</th>
+                    <th>Aptos, mas não enviados</th>
+                    <th>Revisão manual</th>
+                    <th>Erros</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><b>{escape(str(total))}</b></td>
+                    <td class="status-cell status-c">{escape(str(qtd_aprovado))}</td>
+                    <td class="status-cell status-revisar">{escape(str(qtd_apto))}</td>
+                    <td class="status-cell status-revisar">{escape(str(qtd_revisar))}</td>
+                    <td class="status-cell status-nc">{escape(str(qtd_erro))}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Resultado por requerimento</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Requerimento</th>
+                    <th>Resultado</th>
+                    <th>Ação recomendada</th>
+                    <th>Produto</th>
+                    <th>Dados técnicos</th>
+                    <th>Unidade fabril</th>
+                    <th>Docs novos</th>
+                    <th>Docs obrigatórios</th>
+                    <th>Doc removido</th>
+                    <th>Números RE</th>
+                    <th>Enviado?</th>
+                    <th>Motivo principal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(linhas)}
+            </tbody>
+        </table>
+    </div>
+    """
+
+
+
+
+def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_execucao, fim_execucao):
+    """
+    Gera o relatório consolidado da fila Retorno Para Estudo.
+
+    Inclui:
+    - Resumo executivo da análise dos requerimentos;
+    - Quantitativos gerais;
+    - Tabela com resultado por requerimento;
+    - Detalhamento individual de cada requerimento.
+    """
+
+    from html import escape
+
+    resultados = resultados or []
+
+    def _safe_txt(valor):
+        return escape(str(valor or ""))
+
+    def _safe_data(valor):
+        if not valor:
+            return ""
+
+        try:
+            return valor.strftime("%d/%m/%Y %H:%M:%S")
+        except Exception:
+            return str(valor)
+
+    def _pegar_retorno(resultado):
+        if not isinstance(resultado, dict):
+            return {}
+
+        for chave in [
+            "retorno_para_estudo",
+            "resultado_retorno_para_estudo",
+            "resultado_retorno",
+            "analise_retorno_para_estudo",
+        ]:
+            valor = resultado.get(chave)
+            if isinstance(valor, dict):
+                return valor
+
+        if (
+            resultado.get("tipo_relatorio") == "retorno_para_estudo"
+            or resultado.get("tipo_re")
+            or "pode_enviar_para_aprovacao" in resultado
+            or "deve_enviar_para_aprovacao" in resultado
+        ):
+            return resultado
+
+        return resultado
+
+    def _bool(valor):
+        if isinstance(valor, bool):
+            return valor
+
+        texto = str(valor or "").strip().lower()
+
+        return texto in {
+            "true",
+            "1",
+            "sim",
+            "s",
+            "yes",
+            "y",
+            "ok",
+            "apto",
+            "aprovado",
+        }
+
+    def _lista(valor):
+        if not valor:
+            return []
+
+        if isinstance(valor, list):
+            return [v for v in valor if str(v).strip()]
+
+        if isinstance(valor, tuple):
+            return [v for v in valor if str(v).strip()]
+
+        return [valor] if str(valor).strip() else []
+
+    def _req_numero(resultado):
+        if not isinstance(resultado, dict):
+            return ""
+
+        req = resultado.get("req") or resultado.get("requerimento") or {}
+
+        if isinstance(req, dict):
+            return (
+                req.get("requerimento")
+                or req.get("numero")
+                or resultado.get("requerimento")
+                or ""
+            )
+
+        return resultado.get("requerimento") or str(req or "")
+
+    def _resultado_executivo(resultado):
+        retorno = _pegar_retorno(resultado)
+        envio = retorno.get("envio_para_aprovacao") or resultado.get("envio_para_aprovacao") or {}
+
+        erro = retorno.get("erro") or resultado.get("erro") or ""
+        status_comparacao = str(retorno.get("status_comparacao") or "").strip().lower()
+        status_processamento = str(resultado.get("status") or retorno.get("status") or "").strip().lower()
+
+        enviado = _bool(envio.get("executado"))
+
+        pode_enviar = _bool(
             retorno.get("pode_enviar_para_aprovacao")
             if "pode_enviar_para_aprovacao" in retorno
             else retorno.get("deve_enviar_para_aprovacao")
         )
 
-        if _bool_retorno(deve_enviar):
-            qtd_enviar += 1
+        if erro or status_comparacao == "erro" or status_processamento == "erro":
+            return "Erro na análise"
+
+        if enviado:
+            return "Aprovado automaticamente"
+
+        if pode_enviar:
+            return "Apto para aprovação"
+
+        return "Revisão manual"
+
+    def _classe_resultado(resultado_exec):
+        texto = str(resultado_exec or "").lower()
+
+        if "aprovado automaticamente" in texto:
+            return "ok"
+
+        if "apto" in texto:
+            return "apto"
+
+        if "erro" in texto:
+            return "erro"
+
+        return "revisar"
+
+    def _acao_recomendada(resultado):
+        retorno = _pegar_retorno(resultado)
+
+        acao = (
+            retorno.get("acao_recomendada")
+            or resultado.get("acao_recomendada")
+            or ""
+        )
+
+        if acao:
+            return str(acao)
+
+        resultado_exec = _resultado_executivo(resultado)
+
+        if resultado_exec == "Aprovado automaticamente":
+            return "Enviado para aprovação"
+
+        if resultado_exec == "Apto para aprovação":
+            return "Enviar para aprovação"
+
+        if resultado_exec == "Erro na análise":
+            return "Revisar manualmente"
+
+        return "Não enviar para aprovação / Revisar manualmente"
+
+    def _numeros_re(resultado):
+        retorno = _pegar_retorno(resultado)
+
+        numeros = _lista(retorno.get("numeros_tipo_re_detectados"))
+
+        if not numeros:
+            analise = retorno.get("analise_numeros_informacoes_adicionais") or {}
+            numeros = _lista(analise.get("numeros_detectados"))
+
+        return ", ".join(str(n) for n in numeros) if numeros else "Nenhum"
+
+    def _motivo_principal(resultado):
+        retorno = _pegar_retorno(resultado)
+
+        erro = retorno.get("erro") or resultado.get("erro") or ""
+        if erro:
+            return f"Erro: {str(erro)[:180]}"
+
+        if _bool(retorno.get("produto_alterado")):
+            return "Produto alterado"
+
+        if _bool(retorno.get("dados_tecnicos_alterados")):
+            return "Dados técnicos alterados"
+
+        if _bool(retorno.get("unidade_fabril_alterada")):
+            return "Unidade fabril alterada"
+
+        documentos_removidos = _lista(retorno.get("documentos_removidos"))
+        if _bool(retorno.get("documentos_removidos_detectados")) or documentos_removidos:
+            return "Documento removido"
+
+        if _bool(retorno.get("info_adicionais_tem_numero_nao_permitido")):
+            numeros = _lista(retorno.get("numeros_tipo_re_nao_permitidos"))
+            if numeros:
+                return "Número RE fora do escopo: " + ", ".join(str(n) for n in numeros)
+            return "Número RE fora do escopo"
+
+        faltantes = _lista(retorno.get("documentos_obrigatorios_faltantes"))
+        if faltantes:
+            nomes = []
+
+            for item in faltantes[:3]:
+                if isinstance(item, dict):
+                    nomes.append(
+                        str(
+                            item.get("nome")
+                            or item.get("documento")
+                            or item.get("tipo")
+                            or item
+                        )
+                    )
+                else:
+                    nomes.append(str(item))
+
+            extra = "" if len(faltantes) <= 3 else f" +{len(faltantes) - 3}"
+            return "Documento obrigatório faltante: " + ", ".join(nomes) + extra
+
+        if not _bool(retorno.get("documentos_novos_detectados")):
+            return "Nenhum documento novo identificado"
+
+        if _bool(retorno.get("pode_enviar_para_aprovacao")):
+            return "Critérios atendidos"
+
+        alertas = _lista(retorno.get("alertas"))
+        if alertas:
+            return str(alertas[0])[:180]
+
+        return "-"
+
+    total = len(resultados)
+    qtd_aprovado = 0
+    qtd_apto = 0
+    qtd_revisar = 0
+    qtd_erro = 0
+
+    linhas_resumo = []
+
+    for idx, resultado in enumerate(resultados, start=1):
+        retorno = _pegar_retorno(resultado)
+        req_numero = _req_numero(resultado)
+
+        resultado_exec = _resultado_executivo(resultado)
+        classe = _classe_resultado(resultado_exec)
+
+        if resultado_exec == "Aprovado automaticamente":
+            qtd_aprovado += 1
+        elif resultado_exec == "Apto para aprovação":
+            qtd_apto += 1
+        elif resultado_exec == "Erro na análise":
+            qtd_erro += 1
         else:
             qtd_revisar += 1
 
-    return f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>Relatório - Retorno Para Estudo</title>
-        {_css()}
-    </head>
-    <body>
-        <h1>Relatório - Retorno Para Estudo</h1>
+        produto_ok = not _bool(retorno.get("produto_alterado"))
+        dados_ok = not _bool(retorno.get("dados_tecnicos_alterados"))
+        unidade_ok = not _bool(retorno.get("unidade_fabril_alterada"))
 
-        <div class="sumario">
-            <h2>Sumário</h2>
-            <p>Este relatório apresenta a comparação automatizada de versões dos requerimentos em Retorno Para Estudo.</p>
+        docs_novos = _bool(retorno.get("documentos_novos_detectados"))
+        docs_ok = _bool(retorno.get("documentos_obrigatorios_ok"))
 
-            <h2>Estatísticas Gerais</h2>
-            <ul>
-                <li>Requerimentos analisados: {total}</li>
-                <li>Recomendados para envio/aprovação: {qtd_enviar}</li>
-                <li>Recomendados para revisão manual: {qtd_revisar}</li>
-                <li>Documentos processados: {docs}</li>
-                <li>Tempo ativo da automação: {_fmt_duracao(tempo_ativo_automacao_segundos)}</li>
-                <li>Tempo total decorrido: {_fmt_duracao(tempo_total_decorrido_segundos)}</li>
-                <li>Data do processamento: {fim_execucao.strftime("%H:%M:%S %d/%m/%Y")}</li>
-                <li>Versão do script: {escape(str(versao_script))}</li>
-                <li>Sucessos: {sucessos}</li>
-                <li>Erros: {erros}</li>
-            </ul>
+        documentos_removidos = _lista(retorno.get("documentos_removidos"))
+        doc_removido = _bool(retorno.get("documentos_removidos_detectados")) or bool(documentos_removidos)
+
+        envio = retorno.get("envio_para_aprovacao") or {}
+        envio_txt = "SIM" if _bool(envio.get("executado")) else "NÃO"
+
+        linhas_resumo.append(
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td><b>{_safe_txt(req_numero)}</b></td>"
+            f"<td><span class='badge {classe}'>{_safe_txt(resultado_exec)}</span></td>"
+            f"<td>{_safe_txt(_acao_recomendada(resultado))}</td>"
+            f"<td>{'OK' if produto_ok else 'Alterado'}</td>"
+            f"<td>{'OK' if dados_ok else 'Alterado'}</td>"
+            f"<td>{'OK' if unidade_ok else 'Alterada'}</td>"
+            f"<td>{'SIM' if docs_novos else 'NÃO'}</td>"
+            f"<td>{'OK' if docs_ok else 'NÃO OK'}</td>"
+            f"<td>{'SIM' if doc_removido else 'NÃO'}</td>"
+            f"<td>{_safe_txt(_numeros_re(resultado))}</td>"
+            f"<td>{_safe_txt(envio_txt)}</td>"
+            f"<td>{_safe_txt(_motivo_principal(resultado))}</td>"
+            "</tr>"
+        )
+
+    blocos_detalhes = []
+
+    for idx, resultado in enumerate(resultados, start=1):
+        req_numero = _req_numero(resultado)
+
+        try:
+            bloco = _html_retorno_para_estudo_bloco(resultado)
+        except Exception as e:
+            bloco = (
+                "<div class='card erro-card'>"
+                f"<h2>Requerimento {_safe_txt(req_numero or idx)}</h2>"
+                "<p>Não foi possível gerar o bloco detalhado deste requerimento.</p>"
+                f"<p><b>Erro:</b> {_safe_txt(e)}</p>"
+                "</div>"
+            )
+
+        blocos_detalhes.append(bloco)
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <title>Relatório Consolidado - Retorno Para Estudo</title>
+
+    <style>
+        body {{
+            font-family: Arial, Helvetica, sans-serif;
+            margin: 24px;
+            color: #222;
+            background: #fff;
+        }}
+
+        h1 {{
+            margin-bottom: 4px;
+        }}
+
+        h2 {{
+            margin-top: 28px;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 6px;
+        }}
+
+        h3 {{
+            margin-top: 22px;
+        }}
+
+        .meta {{
+            color: #555;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }}
+
+        .card {{
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 18px 0;
+            background: #fff;
+        }}
+
+        .resumo-executivo {{
+            background: #f8fafc;
+            border: 1px solid #d9e2ec;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 20px 0 28px 0;
+        }}
+
+        .kpis {{
+            display: grid;
+            grid-template-columns: repeat(5, minmax(140px, 1fr));
+            gap: 12px;
+            margin: 16px 0 22px 0;
+        }}
+
+        .kpi {{
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 12px;
+            background: white;
+        }}
+
+        .kpi .numero {{
+            font-size: 26px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }}
+
+        .kpi .rotulo {{
+            font-size: 13px;
+            color: #555;
+        }}
+
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 12px 0 22px 0;
+            font-size: 14px;
+        }}
+
+        th, td {{
+            border: 1px solid #d6dbe1;
+            padding: 8px;
+            vertical-align: top;
+        }}
+
+        th {{
+            background: #f0f2f5;
+            text-align: left;
+        }}
+
+        tr:nth-child(even) td {{
+            background: #fafafa;
+        }}
+
+        .badge {{
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: bold;
+            white-space: nowrap;
+        }}
+
+        .badge.ok {{
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #86efac;
+        }}
+
+        .badge.apto {{
+            background: #fef9c3;
+            color: #854d0e;
+            border: 1px solid #fde047;
+        }}
+
+        .badge.revisar {{
+            background: #ffedd5;
+            color: #9a3412;
+            border: 1px solid #fdba74;
+        }}
+
+        .badge.erro {{
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }}
+
+        .erro-card {{
+            border-left: 5px solid #dc2626;
+            background: #fff7f7;
+        }}
+
+        .separador {{
+            margin: 36px 0;
+            border: 0;
+            border-top: 2px solid #e5e7eb;
+        }}
+
+        .observacao {{
+            color: #555;
+            font-size: 13px;
+            margin-top: 6px;
+        }}
+    </style>
+</head>
+
+<body>
+    <h1>Relatório Consolidado - Retorno Para Estudo</h1>
+
+    <div class="meta">
+        <div><b>Versão do script:</b> {_safe_txt(versao_script)}</div>
+        <div><b>Início da execução:</b> {_safe_txt(_safe_data(inicio_execucao))}</div>
+        <div><b>Fim da execução:</b> {_safe_txt(_safe_data(fim_execucao))}</div>
+    </div>
+
+    <section class="resumo-executivo">
+        <h2>Resumo da análise dos requerimentos</h2>
+
+        <div class="kpis">
+            <div class="kpi">
+                <div class="numero">{total}</div>
+                <div class="rotulo">Total analisado</div>
+            </div>
+
+            <div class="kpi">
+                <div class="numero">{qtd_aprovado}</div>
+                <div class="rotulo">Aprovados automaticamente</div>
+            </div>
+
+            <div class="kpi">
+                <div class="numero">{qtd_apto}</div>
+                <div class="rotulo">Aptos, mas não enviados</div>
+            </div>
+
+            <div class="kpi">
+                <div class="numero">{qtd_revisar}</div>
+                <div class="rotulo">Revisão manual</div>
+            </div>
+
+            <div class="kpi">
+                <div class="numero">{qtd_erro}</div>
+                <div class="rotulo">Erros de análise</div>
+            </div>
         </div>
 
-        {''.join(itens_html)}
-    </body>
-    </html>
-    """
+        <h3>Resultado por requerimento</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Requerimento</th>
+                    <th>Resultado</th>
+                    <th>Ação recomendada</th>
+                    <th>Produto</th>
+                    <th>Dados técnicos</th>
+                    <th>Unidade fabril</th>
+                    <th>Docs novos</th>
+                    <th>Docs obrigatórios</th>
+                    <th>Doc removido</th>
+                    <th>Números RE</th>
+                    <th>Enviado?</th>
+                    <th>Motivo principal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(linhas_resumo)}
+            </tbody>
+        </table>
+
+        <div class="observacao">
+            A aprovação automática depende dos critérios configurados para Retorno Para Estudo:
+            produto sem alteração, dados técnicos sem alteração real, documentos novos anexados,
+            ausência de documentos removidos, documentos obrigatórios atendidos e justificativa
+            dentro dos tipos RE aceitos.
+        </div>
+    </section>
+
+    <hr class="separador">
+
+    <h2>Detalhamento por requerimento</h2>
+
+    {''.join(blocos_detalhes)}
+
+</body>
+</html>
+"""
+
+    return html
 
 def _html_requerimento(resultado):
     if _resultado_eh_retorno_para_estudo(resultado):
