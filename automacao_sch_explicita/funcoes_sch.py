@@ -2544,8 +2544,8 @@ def _mapear_colunas_relevantes(cabecalho):
             or "tecnologiaespalhamento" in col_sem_espaco
             or "technologyspread" in col_sem_espaco
         ):
-            if "tecnologia" not in mapeamento:
-                mapeamento["tecnologia"] = idx
+            if "tecnologias" not in mapeamento:
+                mapeamento["tecnologias"] = idx
             continue
 
         if (
@@ -5472,6 +5472,145 @@ def _normalizar_texto_retorno(valor):
     return texto
 
 
+
+
+TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS = [
+    "Transceptor de Radiação Restrita",
+    "Estação Terminal de Acesso",
+    "Dispositivo de Operação Periódica",
+    "Sistemas de Identificação por Radiofrequências",
+    "Sistema de Identificação por Radiofrequências",
+    "Equipamento de Radiocomunicação de Radiação Restrita",
+    "Telefone Móvel Celular",
+]
+
+
+def _normalizar_tipo_produto_retorno(valor):
+    texto = _normalizar_texto_comparacao(valor)
+    texto = texto.replace("radio frequencias", "radiofrequencias")
+    texto = texto.replace("radio frequencia", "radiofrequencia")
+    texto = texto.replace("radio frequência", "radiofrequencia")
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def tipo_produto_retorno_para_estudo_no_escopo(tipo_produto):
+    """
+    Verifica se o tipo de produto do requerimento está dentro do escopo
+    permitido para análise automática de Retorno Para Estudo.
+    """
+
+    tipo_norm = _normalizar_tipo_produto_retorno(tipo_produto)
+
+    if not tipo_norm:
+        return {
+            "no_escopo": False,
+            "tipo_produto": str(tipo_produto or "").strip(),
+            "motivo": "tipo_produto_nao_identificado",
+            "permitidos": TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS,
+        }
+
+    permitidos_norm = [
+        _normalizar_tipo_produto_retorno(t)
+        for t in TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS
+    ]
+
+    for permitido_norm, permitido_original in zip(
+        permitidos_norm,
+        TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS,
+    ):
+        if tipo_norm == permitido_norm:
+            return {
+                "no_escopo": True,
+                "tipo_produto": str(tipo_produto or "").strip(),
+                "tipo_produto_aceito": permitido_original,
+                "motivo": "tipo_produto_permitido",
+                "permitidos": TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS,
+            }
+
+        # Aceita pequenas variações textuais do SCH.
+        if permitido_norm in tipo_norm or tipo_norm in permitido_norm:
+            return {
+                "no_escopo": True,
+                "tipo_produto": str(tipo_produto or "").strip(),
+                "tipo_produto_aceito": permitido_original,
+                "motivo": "tipo_produto_permitido_por_equivalencia",
+                "permitidos": TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS,
+            }
+
+    return {
+        "no_escopo": False,
+        "tipo_produto": str(tipo_produto or "").strip(),
+        "motivo": "tipo_produto_fora_do_escopo_retorno_para_estudo",
+        "permitidos": TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS,
+    }
+
+
+def aplicar_filtro_tipo_produto_retorno_para_estudo(req, resultado):
+    """
+    Aplica o filtro inicial de escopo por tipo de produto.
+
+    Se o tipo não estiver permitido, bloqueia a aprovação automática
+    e encerra a análise como fora de escopo.
+    """
+
+    req = req or {}
+    resultado = resultado or {}
+
+    tipo_produto = (
+        req.get("tipo_produto")
+        or req.get("tipo")
+        or resultado.get("tipo_produto")
+        or ""
+    )
+
+    filtro = tipo_produto_retorno_para_estudo_no_escopo(tipo_produto)
+
+    resultado["filtro_tipo_produto_retorno"] = filtro
+    resultado["tipo_produto"] = str(tipo_produto or "").strip()
+
+    if filtro.get("no_escopo"):
+        resultado["tipo_produto_no_escopo"] = True
+
+        print(
+            "[SCH][RETORNO] Tipo de produto dentro do escopo de Retorno Para Estudo: "
+            f"{filtro.get('tipo_produto_aceito') or tipo_produto}"
+        )
+
+        return True
+
+    resultado["tipo_produto_no_escopo"] = False
+    resultado["status_comparacao"] = "fora_escopo_tipo_produto"
+    resultado["resultado"] = (
+        "Requerimento não analisado automaticamente porque o tipo de produto "
+        "não está dentro do escopo configurado para Retorno Para Estudo."
+    )
+    resultado["acao_recomendada"] = "Não enviar para aprovação / Revisar manualmente"
+    resultado["pode_enviar_para_aprovacao"] = False
+    resultado["deve_enviar_para_aprovacao"] = False
+    resultado["documentos_novos_detectados"] = False
+    resultado["documentos_obrigatorios_ok"] = False
+    resultado["envio_para_aprovacao"] = {
+        "executado": False,
+        "motivo": "tipo_produto_fora_do_escopo_retorno_para_estudo",
+        "tipo_produto": str(tipo_produto or "").strip(),
+    }
+
+    mensagem = (
+        "Tipo de produto fora do escopo automático de Retorno Para Estudo: "
+        f"{tipo_produto or 'não identificado'}."
+    )
+
+    resultado.setdefault("alertas", []).append(mensagem)
+
+    print(f"[SCH][RETORNO][ESCOPO] {mensagem}")
+    print(
+        "[SCH][RETORNO][ESCOPO] Tipos permitidos: "
+        + "; ".join(TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS)
+    )
+
+    return False
+
 def _lista_unica_retorno(valores):
     saida = []
     vistos = set()
@@ -5576,24 +5715,92 @@ def _extrair_especificacoes_complementares_retorno(texto):
     return ""
 
 
+
 def _remover_especificacoes_do_bloco_dados_tecnicos(texto):
+    """
+    Remove a parte de 'Especificações Complementares' do bloco
+    'Dados Técnicos do Produto'.
+
+    Regra:
+    - A tabela técnica continua sendo analisada.
+    - Textos complementares como Alimentação, Antena, SAR não aplicável
+      e produto não acabado não devem fazer a automação concluir que houve
+      alteração real nos Dados Técnicos do Produto.
+    """
+
     texto = str(texto or "")
-    if not texto:
+
+    if not texto.strip():
         return ""
+
+    texto_limpo = texto.replace("\r", "\n")
+
+    # 1) Remove bloco completo a partir de "Especificações Complementares"
+    # até o próximo título relevante da tela de comparação.
+    padroes_bloco = [
+        r"(?is)(?:^|\n)\s*Especifica[cç][oõ]es\s+Complementares\s*:?.*?(?=\n\s*(?:Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos|Garantias|Dados\s+do\s+Certificado|Outras\s+Unidades|Produto|Solicitante|Fabricante)\b|$)",
+        r"(?is)(?:^|\n)\s*Especificacoes\s+Complementares\s*:?.*?(?=\n\s*(?:Laboratorios?|Relacao\s+de\s+Arquivos|Garantias|Dados\s+do\s+Certificado|Outras\s+Unidades|Produto|Solicitante|Fabricante)\b|$)",
+    ]
+
+    for padrao in padroes_bloco:
+        texto_limpo = re.sub(padrao, "\n", texto_limpo)
+
+    # 2) Fallback para quando o SCH traz tudo em uma linha só.
+    # Remove o trecho "Especificações Complementares: ..." até um próximo
+    # título conhecido ou até o fim.
+    padroes_linha_unica = [
+        r"(?is)Especifica[cç][oõ]es\s+Complementares\s*:?.*?(?=(?:Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos|Garantias|Dados\s+do\s+Certificado|Outras\s+Unidades|Solicitante|Fabricante)\b|$)",
+        r"(?is)Especificacoes\s+Complementares\s*:?.*?(?=(?:Laboratorios?|Relacao\s+de\s+Arquivos|Garantias|Dados\s+do\s+Certificado|Outras\s+Unidades|Solicitante|Fabricante)\b|$)",
+    ]
+
+    for padrao in padroes_linha_unica:
+        texto_limpo = re.sub(padrao, " ", texto_limpo)
+
+    # 3) Segurança: remove linhas soltas que normalmente pertencem às
+    # Especificações Complementares, caso tenham escapado do recorte.
+    termos_apagar = [
+        "especificacoes complementares",
+        "especificacao complementar",
+        "alimentacao:",
+        "alimentação:",
+        "antena:",
+        "ensaio de sar nao aplicavel",
+        "ensaio de sar não aplicável",
+        "sar nao aplicavel",
+        "sar não aplicável",
+        "produto nao acabado",
+        "produto não acabado",
+        "integracao em outro equipamento",
+        "integração em outro equipamento",
+        "integracao em outros equipamentos",
+        "integração em outros equipamentos",
+        "pode requerer nova avaliacao",
+        "pode requerer nova avaliação",
+        "o produto e alimentado pelo host",
+        "o produto é alimentado pelo host",
+        "produto possui antena integrada",
+    ]
+
+    termos_apagar_norm = [
+        _normalizar_texto_retorno(t)
+        for t in termos_apagar
+    ]
 
     linhas = []
 
-    for linha in texto.splitlines():
+    for linha in texto_limpo.splitlines():
         linha_norm = _normalizar_texto_retorno(linha)
-        if "especificacoes complementares" in linha_norm:
+
+        if any(t and t in linha_norm for t in termos_apagar_norm):
             continue
-        if "especificacao complementar" in linha_norm:
-            continue
-        if "especificacoes complementares" in linha_norm:
-            continue
+
         linhas.append(linha)
 
-    return "\n".join(linhas).strip()
+    texto_limpo = "\n".join(linhas)
+    texto_limpo = re.sub(r"[ \t]+", " ", texto_limpo)
+    texto_limpo = re.sub(r"\n{3,}", "\n\n", texto_limpo)
+
+    return texto_limpo.strip()
 
 
 def _extrair_documentos_comparar_versoes(texto):
@@ -6176,6 +6383,52 @@ def _eh_tela_real_comparacao_versoes(driver, wait=None):
         or texto_norm.count("dados tecnicos") >= 2
         or texto_norm.count("relacao de arquivos anexos") >= 2
     ):
+        return True
+
+    return False
+
+
+
+def _pagina_proxy_error_sch(driver):
+    """
+    Detecta erro temporário do SCH/Proxy na página de Comparar Versões.
+
+    Exemplo visual:
+    - Proxy Error
+    - The proxy server received an invalid response from an upstream server
+    - Reason: Error reading from remote server
+    """
+
+    try:
+        url = str(driver.current_url or "").lower()
+    except Exception:
+        url = ""
+
+    try:
+        texto = _texto_pagina_com_iframes(driver)
+    except Exception:
+        texto = ""
+
+    texto_lower = str(texto or "").lower()
+    texto_norm = _normalizar_texto_comparacao(texto)
+
+    sinais = [
+        "proxy error",
+        "invalid response from an upstream server",
+        "error reading from remote server",
+        "the proxy server could not handle the request",
+        "bad gateway",
+        "gateway timeout",
+        "service unavailable",
+    ]
+
+    if any(sinal in texto_lower for sinal in sinais):
+        return True
+
+    if any(_normalizar_texto_comparacao(sinal) in texto_norm for sinal in sinais):
+        return True
+
+    if "compareversoesrequerimento.xhtml" in url and "proxy" in texto_lower:
         return True
 
     return False
@@ -7492,6 +7745,13 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
                 pass
 
             try:
+                if _pagina_proxy_error_sch(driver):
+                    raise Exception(
+                        "Proxy Error detectado ao abrir Comparar Versões. "
+                        "Erro temporário do SCH/servidor da Anatel. "
+                        "A automação não deve analisar nem aprovar este requerimento nesta tentativa."
+                    )
+
                 if _eh_tela_real_comparacao_versoes(driver, wait):
                     esperar_tela_carregar(driver, 2)
 
@@ -7508,7 +7768,10 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
                         "url_capturada": url_comparacao_resolvida,
                     }
 
-            except Exception:
+            except Exception as e:
+                if "Proxy Error detectado" in str(e):
+                    raise
+
                 if url_comparacao_resolvida and not url_forcada_na_mesma_aba:
                     url_forcada_na_mesma_aba = _navegar_url_capturada_na_aba_atual()
                     time.sleep(3.0)
@@ -7534,6 +7797,9 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
             time.sleep(0.7)
 
         except Exception as e:
+            if "Proxy Error detectado" in str(e):
+                raise
+
             print(f"[SCH][RETORNO][WARN] Erro aguardando aba de comparação: {e}")
             time.sleep(0.7)
 
@@ -7726,6 +7992,7 @@ def _normalizar_dados_tecnicos_para_comparacao_retorno(texto):
     return texto
 
 
+
 def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
     dados_antigos = _recortar_secao_retorno(
         texto_antigo,
@@ -7767,7 +8034,8 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         dados_novos
     )
 
-    alteracoes = []
+    alteracoes_dados_tecnicos = []
+    alteracoes_especificacoes = []
 
     norm_dados_antigos = _normalizar_dados_tecnicos_para_comparacao_retorno(
         dados_antigos_sem_espec
@@ -7787,7 +8055,7 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
 
     if norm_dados_antigos != norm_dados_novos:
         if dados_antigos_sem_espec or dados_novos_sem_espec:
-            alteracoes.append(
+            alteracoes_dados_tecnicos.append(
                 _montar_alteracao_retorno(
                     "Dados Técnicos do Produto",
                     dados_antigos_sem_espec,
@@ -7795,9 +8063,12 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
                 )
             )
 
+    # Especificações Complementares são registradas à parte.
+    # Elas não entram em "alteracoes" para não bloquear a aprovação automática
+    # como se fossem alteração real da tabela/dados técnicos principais.
     if norm_espec_antiga != norm_espec_nova:
         if espec_antiga or espec_nova:
-            alteracoes.append(
+            alteracoes_especificacoes.append(
                 _montar_alteracao_retorno(
                     "Especificações Complementares",
                     espec_antiga,
@@ -7808,16 +8079,23 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
     return {
         "dados_antigos": dados_antigos,
         "dados_novos": dados_novos,
+        "dados_antigos_sem_especificacoes": dados_antigos_sem_espec,
+        "dados_novos_sem_especificacoes": dados_novos_sem_espec,
         "especificacoes_antigas": espec_antiga,
         "especificacoes_novas": espec_nova,
         "normalizado_dados_antigos": norm_dados_antigos,
         "normalizado_dados_novos": norm_dados_novos,
         "normalizado_especificacoes_antigas": norm_espec_antiga,
         "normalizado_especificacoes_novas": norm_espec_nova,
-        "alteracoes": alteracoes,
-        "alterado": bool(alteracoes),
-    }
 
+        # Mantido para compatibilidade: aqui ficam SOMENTE alterações técnicas reais.
+        "alteracoes": alteracoes_dados_tecnicos,
+        "alterado": bool(alteracoes_dados_tecnicos),
+
+        # Campo separado para relatório.
+        "alteracoes_especificacoes_complementares": alteracoes_especificacoes,
+        "especificacoes_complementares_alteradas": bool(alteracoes_especificacoes),
+    }
 
 
 def _texto_documento_anexo_capturado_retorno(item):
@@ -9087,6 +9365,10 @@ def analisar_retorno_para_estudo(
         "descricao_tipo_re": "6. Manutenção tácita",
         "requerimento": numero_req,
 
+        "tipo_produto": req.get("tipo_produto", "") if isinstance(req, dict) else "",
+        "tipo_produto_no_escopo": None,
+        "filtro_tipo_produto_retorno": {},
+
         "itens_analisados_pela_automacao": [
             "Produto",
             "Dados Técnicos do Produto",
@@ -9141,6 +9423,12 @@ def analisar_retorno_para_estudo(
     }
 
     info_abertura = {}
+
+    # Filtro inicial de segurança:
+    # em Retorno Para Estudo, só analisamos automaticamente tipos de produto
+    # que estão dentro do escopo configurado.
+    if not aplicar_filtro_tipo_produto_retorno_para_estudo(req, resultado):
+        return resultado
 
     try:
         print("[SCH][RETORNO] Capturando Informações Adicionais do retorno para estudo...")
@@ -9260,16 +9548,13 @@ def analisar_retorno_para_estudo(
         # _comparar_blocos_dados_tecnicos_retorno()
 
         alteracoes_tecnicas = list(comparacao_tecnica.get("alteracoes", []) or [])
+        alteracoes_especificacoes = list(
+            comparacao_tecnica.get("alteracoes_especificacoes_complementares", []) or []
+        )
 
         resultado["alteracoes_dados_tecnicos"] = alteracoes_tecnicas
-
-        resultado["alteracoes_especificacoes_complementares"] = [
-            item for item in alteracoes_tecnicas
-            if (
-                isinstance(item, dict)
-                and "especifica" in str(item.get("campo", "")).lower()
-            )
-        ]
+        resultado["alteracoes_especificacoes_complementares"] = alteracoes_especificacoes
+        resultado["especificacoes_complementares_alteradas"] = bool(alteracoes_especificacoes)
 
         resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", []) or []
         resultado["documentos_removidos"] = documentos.get("documentos_removidos", []) or []
@@ -9371,7 +9656,7 @@ def analisar_retorno_para_estudo(
             permitidos_txt = ", ".join(
                 resultado.get("analise_numeros_informacoes_adicionais", {}).get(
                     "permitidos_esperados",
-                    ["1", "6", "10", "12"],
+                    ["1", "5", "6", "10", "12", "6+12", "6+11"],
                 )
             )
 
@@ -9428,38 +9713,13 @@ def analisar_retorno_para_estudo(
             resultado["pode_enviar_para_aprovacao"] = False
             resultado["deve_enviar_para_aprovacao"] = False
 
-        if executar_envio and resultado["deve_enviar_para_aprovacao"]:
-            print(
-                "[SCH][RETORNO] Processo apto para envio. "
-                "Fechando comparação e voltando ao requerimento antes de aprovar..."
-            )
-
-            try:
-                _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
-                info_abertura = {}
-                esperar_tela_carregar(driver, 1.0)
-            except Exception as e:
-                print(
-                    "[SCH][RETORNO][WARN] Não foi possível fechar a comparação antes do envio: "
-                    f"{e}"
-                )
-
-            resultado["envio_para_aprovacao"] = clicar_aprovar_retorno_para_estudo(
-                driver,
-                wait,
-            )
-
-        elif not executar_envio:
-            resultado["envio_para_aprovacao"] = {
-                "executado": False,
-                "motivo": "execucao_desabilitada_no_fluxo",
-            }
-
-        else:
-            resultado["envio_para_aprovacao"] = {
-                "executado": False,
-                "motivo": "acao_recomendada_nao_e_envio_para_aprovacao",
-            }
+        resultado["envio_para_aprovacao"] = enviar_retorno_para_aprovacao_se_apto(
+            driver=driver,
+            wait=wait,
+            resultado=resultado,
+            info_abertura=info_abertura,
+            executar_envio=executar_envio,
+        )
 
         print(
             "[SCH][RETORNO] Resultado da comparação: "
@@ -9516,10 +9776,24 @@ def analisar_retorno_para_estudo(
         return resultado
 
     except Exception as e:
-        resultado["status_comparacao"] = "erro"
-        resultado["resultado"] = (
-            "Não foi possível concluir automaticamente a análise de manutenção tácita."
-        )
+        erro_texto = str(e)
+        erro_norm = _normalizar_texto_comparacao(erro_texto)
+
+        if (
+            "proxy error" in erro_norm
+            or "erro temporario do sch" in erro_norm
+            or "error reading from remote server" in erro_norm
+        ):
+            resultado["status_comparacao"] = "erro_temporario_sch_proxy"
+            resultado["resultado"] = (
+                "Não foi possível concluir a análise porque o SCH retornou Proxy Error "
+                "ao abrir Comparar Versões. Tente novamente mais tarde."
+            )
+        else:
+            resultado["status_comparacao"] = "erro"
+            resultado["resultado"] = (
+                "Não foi possível concluir automaticamente a análise de manutenção tácita."
+            )
         resultado["acao_recomendada"] = "Não enviar para aprovação / Revisar manualmente"
         resultado["pode_enviar_para_aprovacao"] = False
         resultado["deve_enviar_para_aprovacao"] = False
@@ -9538,47 +9812,66 @@ def analisar_retorno_para_estudo(
         except Exception:
             pass
 
-def clicar_aprovar_retorno_para_estudo(driver, wait):
-    """
-    Clica no botão que aprova o retorno / envia o processo para aprovação.
-    Use somente quando analisar_retorno_para_estudo indicar:
-    deve_enviar_para_aprovacao=True.
-    """
-    print("[SCH][RETORNO] Tentando enviar para aprovação...")
 
+def _confirmar_aprovacao_retorno_para_estudo(driver, wait, timeout=4):
+    """
+    Confirma alertas ou modais que possam aparecer depois de clicar em Aprovar.
+    """
+
+    # 1) Alert nativo do navegador
     try:
-        driver.switch_to.default_content()
+        alert = WebDriverWait(driver, timeout).until(EC.alert_is_present())
+        texto_alerta = alert.text or ""
+        alert.accept()
+        esperar_tela_carregar(driver, 0.8)
+
+        print(f"[SCH][RETORNO] Alert de aprovação confirmado: {texto_alerta}")
+
+        return {
+            "confirmado": True,
+            "tipo": "alert",
+            "mensagem": texto_alerta,
+        }
+
     except Exception:
         pass
 
-    xpaths = [
-        "//*[self::a or self::button][normalize-space()='Aprovar']",
-        "//*[self::a or self::button][contains(normalize-space(), 'Aprovar')]",
-        "//*[self::a or self::button][contains(normalize-space(), 'Enviar para aprovação')]",
-        "//*[self::a or self::button][contains(normalize-space(), 'Enviar para Aprovação')]",
-        "//*[self::a or self::button][contains(normalize-space(), 'Enviar para aprovacao')]",
-        "//input[contains(@value, 'Aprovar') or contains(@value, 'Enviar para aprovação') or contains(@value, 'Enviar para Aprovação')]",
+    # 2) Modal HTML / PrimeFaces
+    xpaths_confirmar = [
+        "//*[self::button or self::a][normalize-space()='Sim']",
+        "//*[self::button or self::a][normalize-space()='SIM']",
+        "//*[self::button or self::a][normalize-space()='Confirmar']",
+        "//*[self::button or self::a][normalize-space()='OK']",
+        "//span[normalize-space()='Sim']/ancestor::*[self::button or self::a][1]",
+        "//span[normalize-space()='Confirmar']/ancestor::*[self::button or self::a][1]",
+        "//span[normalize-space()='OK']/ancestor::*[self::button or self::a][1]",
     ]
 
     ultimo_erro = None
 
-    for contexto in ["default", "iframe"]:
+    for contexto in ["iframe", "default"]:
         try:
-            if contexto == "default":
-                driver.switch_to.default_content()
-            else:
+            if contexto == "iframe":
                 entrar_iframe_detalhe_analise(driver, wait)
+            else:
+                driver.switch_to.default_content()
 
-            for xpath in xpaths:
+            for xpath in xpaths_confirmar:
                 try:
-                    botoes = WebDriverWait(driver, 2.5, poll_frequency=0.1).until(
-                        EC.presence_of_all_elements_located((By.XPATH, xpath))
-                    )
+                    botoes = driver.find_elements(By.XPATH, xpath)
 
                     for botao in botoes:
                         try:
                             if not botao.is_displayed() or not botao.is_enabled():
                                 continue
+
+                            texto_botao = " ".join(
+                                [
+                                    botao.text or "",
+                                    botao.get_attribute("value") or "",
+                                    botao.get_attribute("title") or "",
+                                ]
+                            ).strip()
 
                             driver.execute_script(
                                 "arguments[0].scrollIntoView({block:'center'});",
@@ -9586,21 +9879,17 @@ def clicar_aprovar_retorno_para_estudo(driver, wait):
                             )
 
                             _clicar_com_fallback(driver, botao)
-                            esperar_tela_carregar(driver, 0.8)
+                            esperar_tela_carregar(driver, 1.0)
 
-                            try:
-                                alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
-                                texto_alerta = alert.text
-                                alert.accept()
-                                esperar_tela_carregar(driver, 0.8)
-                            except Exception:
-                                texto_alerta = ""
+                            print(
+                                "[SCH][RETORNO] Confirmação da aprovação clicada: "
+                                f"{texto_botao or xpath}"
+                            )
 
-                            print("[SCH][RETORNO] Envio para aprovação executado.")
                             return {
-                                "executado": True,
-                                "botao": "Aprovar/Enviar para aprovação",
-                                "alerta": texto_alerta,
+                                "confirmado": True,
+                                "tipo": "modal_html",
+                                "botao": texto_botao or xpath,
                             }
 
                         except Exception as e:
@@ -9616,10 +9905,168 @@ def clicar_aprovar_retorno_para_estudo(driver, wait):
             continue
 
     return {
+        "confirmado": False,
+        "tipo": "sem_confirmacao_detectada",
+        "erro": str(ultimo_erro or ""),
+    }
+
+
+def clicar_aprovar_retorno_para_estudo(driver, wait):
+    """
+    Clica especificamente no botão 'Aprovar' do Retorno Para Estudo.
+
+    Segurança:
+    - Não clica em Rejeitar Retorno Para Estudo.
+    - Não clica em Enviar Exigência.
+    - Não clica em Devolver p/ Caixa de Distribuição.
+    """
+
+    print("[SCH][RETORNO] Tentando clicar no botão 'Aprovar'...")
+
+    xpaths_aprovar = [
+        "//*[self::button or self::a][normalize-space()='Aprovar']",
+        "//span[normalize-space()='Aprovar']/ancestor::*[self::button or self::a][1]",
+        "//input[@type='button' and normalize-space(@value)='Aprovar']",
+        "//input[@type='submit' and normalize-space(@value)='Aprovar']",
+    ]
+
+    ultimo_erro = None
+    candidatos_tentados = []
+
+    for contexto in ["iframe", "default"]:
+        try:
+            if contexto == "iframe":
+                entrar_iframe_detalhe_analise(driver, wait)
+            else:
+                driver.switch_to.default_content()
+
+            esperar_tela_carregar(driver, 0.3)
+
+            for xpath in xpaths_aprovar:
+                try:
+                    botoes = WebDriverWait(driver, 3, poll_frequency=0.1).until(
+                        EC.presence_of_all_elements_located((By.XPATH, xpath))
+                    )
+
+                    for botao in botoes:
+                        try:
+                            if not botao.is_displayed() or not botao.is_enabled():
+                                continue
+
+                            texto_botao = " ".join(
+                                [
+                                    botao.text or "",
+                                    botao.get_attribute("value") or "",
+                                    botao.get_attribute("title") or "",
+                                    botao.get_attribute("aria-label") or "",
+                                ]
+                            ).strip()
+
+                            texto_norm = _normalizar_texto_comparacao(texto_botao)
+
+                            # Segurança extra: precisa ser exatamente Aprovar.
+                            if texto_norm != "aprovar":
+                                continue
+
+                            candidatos_tentados.append(texto_botao or xpath)
+
+                            driver.execute_script(
+                                "arguments[0].scrollIntoView({block:'center'});",
+                                botao,
+                            )
+
+                            try:
+                                ActionChains(driver).move_to_element(botao).pause(0.2).click().perform()
+                            except Exception:
+                                _clicar_com_fallback(driver, botao)
+
+                            esperar_tela_carregar(driver, 1.0)
+
+                            confirmacao = _confirmar_aprovacao_retorno_para_estudo(
+                                driver,
+                                wait,
+                            )
+
+                            print("[SCH][RETORNO] Botão 'Aprovar' clicado com sucesso.")
+
+                            return {
+                                "executado": True,
+                                "botao": texto_botao or "Aprovar",
+                                "xpath": xpath,
+                                "contexto": contexto,
+                                "confirmacao": confirmacao,
+                                "candidatos_tentados": candidatos_tentados,
+                            }
+
+                        except Exception as e:
+                            ultimo_erro = e
+                            continue
+
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+        except Exception as e:
+            ultimo_erro = e
+            continue
+
+    print("[SCH][RETORNO][WARN] Botão 'Aprovar' não encontrado ou não clicável.")
+
+    return {
         "executado": False,
         "motivo": "botao_aprovar_nao_encontrado",
         "erro": str(ultimo_erro or ""),
+        "candidatos_tentados": candidatos_tentados,
     }
+
+
+def enviar_retorno_para_aprovacao_se_apto(
+    driver,
+    wait,
+    resultado,
+    info_abertura=None,
+    executar_envio=False,
+):
+    """
+    Envia automaticamente apenas os requerimentos aprovados pela análise.
+
+    Só clica em Aprovar quando:
+    - executar_envio=True
+    - resultado["deve_enviar_para_aprovacao"] == True
+    """
+
+    resultado = resultado or {}
+    info_abertura = info_abertura or {}
+
+    if not executar_envio:
+        return {
+            "executado": False,
+            "motivo": "execucao_desabilitada_no_fluxo",
+        }
+
+    if not resultado.get("deve_enviar_para_aprovacao"):
+        return {
+            "executado": False,
+            "motivo": "requerimento_nao_apto_para_aprovacao",
+            "acao_recomendada": resultado.get("acao_recomendada", ""),
+            "status_comparacao": resultado.get("status_comparacao", ""),
+        }
+
+    print(
+        "[SCH][RETORNO] Requerimento julgado correto. "
+        "Fechando comparação e retornando à tela do requerimento para clicar em Aprovar..."
+    )
+
+    try:
+        _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
+        esperar_tela_carregar(driver, 1.0)
+    except Exception as e:
+        print(
+            "[SCH][RETORNO][WARN] Não foi possível fechar a comparação antes de aprovar: "
+            f"{e}"
+        )
+
+    return clicar_aprovar_retorno_para_estudo(driver, wait)
 
 
 def voltar_para_fila(driver, wait, nome_fila=None):

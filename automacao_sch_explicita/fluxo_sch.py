@@ -362,6 +362,111 @@ def _salvar_controle_downloads(
     return controle
 
 
+def _gerar_relatorios_parciais_execucao(
+    pasta_base,
+    relatorio_execucao,
+    inicio_execucao,
+    fila_sch,
+    requerimentos,
+    requerimentos_processaveis,
+    requerimentos_ignorados,
+    ignorados_resumidos,
+    versao_script,
+    categorias_anexos_ativas,
+    processar_apenas_rr_efetivo,
+    status_execucao="em_andamento",
+    imprimir=False,
+):
+    """
+    Salva o relatório consolidado JSON e atualiza a pasta req_report.
+
+    Esta função pode ser chamada:
+    - ao final de cada requerimento;
+    - no final normal da execução;
+    - quando o usuário interromper com Ctrl+C.
+
+    Assim, os requerimentos já analisados não ficam sem relatório.
+    """
+
+    pasta_base = Path(pasta_base)
+    pasta_base.mkdir(parents=True, exist_ok=True)
+
+    relatorio_execucao = relatorio_execucao or []
+    requerimentos = requerimentos or []
+    requerimentos_processaveis = requerimentos_processaveis or []
+    requerimentos_ignorados = requerimentos_ignorados or []
+    ignorados_resumidos = ignorados_resumidos or []
+    categorias_anexos_ativas = categorias_anexos_ativas or []
+
+    fim_execucao = datetime.now()
+    caminho_relatorio = pasta_base / "relatorio_execucao.json"
+
+    dados_relatorio = {
+        "status_execucao": status_execucao,
+        "relatorio_parcial": status_execucao not in {"finalizado", "concluido", "concluído"},
+        "atualizado_em": fim_execucao.isoformat(),
+        "inicio_execucao": inicio_execucao.isoformat() if inicio_execucao else "",
+        "fim_execucao": fim_execucao.isoformat(),
+        "fila_sch": fila_sch,
+        "tempo_total_segundos": (
+            round((fim_execucao - inicio_execucao).total_seconds(), 2)
+            if inicio_execucao
+            else 0
+        ),
+        "total_coletados_na_fila": len(requerimentos),
+        "total_processaveis": len(requerimentos_processaveis),
+        "total_ignorados_fora_escopo": len(requerimentos_ignorados),
+        "total_ja_processados_nesta_execucao": len(relatorio_execucao),
+        "sucessos": sum(1 for x in relatorio_execucao if x.get("status") == "sucesso"),
+        "erros": sum(1 for x in relatorio_execucao if x.get("status") == "erro"),
+        "interrompidos": sum(1 for x in relatorio_execucao if x.get("status") == "interrompido"),
+        "documentos_processados": sum(x.get("downloads_realizados", 0) for x in relatorio_execucao),
+        "itens": relatorio_execucao,
+        "ignorados_fora_escopo": ignorados_resumidos,
+        "versao_script": versao_script,
+        "pasta_base": str(pasta_base),
+        "categorias_anexos_configuradas": categorias_anexos_ativas,
+        "filtro_radiacao_restrita_efetivo": processar_apenas_rr_efetivo,
+    }
+
+    salvar_json(caminho_relatorio, dados_relatorio)
+
+    caminho_req_report = ""
+
+    if relatorio_execucao:
+        try:
+            caminho_req_report = gerar_req_report(
+                pasta_saida=pasta_base,
+                resultados=relatorio_execucao,
+                versao_script=versao_script,
+                inicio_execucao=inicio_execucao,
+                fim_execucao=fim_execucao,
+            )
+        except Exception as e:
+            print(
+                "[SCH][WARN] Não foi possível atualizar o req_report parcial agora: "
+                f"{type(e).__name__}: {e}"
+            )
+    else:
+        print(
+            "[SCH][WARN] Nenhum requerimento processado ainda; "
+            "relatório HTML parcial não foi gerado."
+        )
+
+    if imprimir:
+        print(f"[SCH] Relatório consolidado salvo em: {caminho_relatorio}")
+
+        if caminho_req_report:
+            print(f"[SCH] Pasta req_report gerada/atualizada em: {caminho_req_report}")
+
+    return {
+        "json": str(caminho_relatorio),
+        "req_report": str(caminho_req_report or ""),
+        "fim_execucao": fim_execucao.isoformat(),
+        "status_execucao": status_execucao,
+    }
+
+
 def executar_fluxo_sch(
     pasta_base,
     limite_requerimentos=None,
@@ -564,6 +669,7 @@ def executar_fluxo_sch(
             }
 
             dados_certificado_sch = {}
+            interrompido_pelo_usuario = False
 
             try:
                 garantir_sessao_ativa_sch(
@@ -937,6 +1043,23 @@ def executar_fluxo_sch(
                 resumo["fim"] = datetime.now().isoformat()
                 print(f"[SCH] Requerimento {numero} finalizado com sucesso.")
 
+            except KeyboardInterrupt:
+                interrompido_pelo_usuario = True
+                resumo["status"] = "interrompido"
+                resumo["fim"] = datetime.now().isoformat()
+                resumo["erro"] = {
+                    "tipo": "KeyboardInterrupt",
+                    "mensagem": "Execução interrompida pelo usuário.",
+                    "repr": "KeyboardInterrupt()",
+                }
+
+                print(
+                    f"[SCH][INTERRUPCAO] Execução interrompida durante o requerimento {numero}. "
+                    "Salvando relatório parcial antes de encerrar..."
+                )
+
+                raise
+
             except Exception as e:
                 resumo["status"] = "erro"
                 resumo["fim"] = datetime.now().isoformat()
@@ -953,45 +1076,71 @@ def executar_fluxo_sch(
                 salvar_json(caminho_json, resumo)
                 relatorio_execucao.append(resumo)
 
-                try:
-                    voltar_para_fila(driver, wait, nome_fila=fila_sch)
-                except Exception as e:
-                    print(f"[SCH][WARN] Não foi possível voltar normalmente: {e}")
+                _gerar_relatorios_parciais_execucao(
+                    pasta_base=pasta_base,
+                    relatorio_execucao=relatorio_execucao,
+                    inicio_execucao=inicio_execucao,
+                    fila_sch=fila_sch,
+                    requerimentos=requerimentos,
+                    requerimentos_processaveis=requerimentos_processaveis,
+                    requerimentos_ignorados=requerimentos_ignorados,
+                    ignorados_resumidos=ignorados_resumidos,
+                    versao_script=VERSAO_SCRIPT,
+                    categorias_anexos_ativas=categorias_anexos_ativas,
+                    processar_apenas_rr_efetivo=processar_apenas_rr_efetivo,
+                    status_execucao=(
+                        "interrompida_pelo_usuario"
+                        if interrompido_pelo_usuario
+                        else "parcial_em_andamento"
+                    ),
+                    imprimir=True,
+                )
 
-        fim_execucao = datetime.now()
+                if not interrompido_pelo_usuario:
+                    try:
+                        voltar_para_fila(driver, wait, nome_fila=fila_sch)
+                    except Exception as e:
+                        print(f"[SCH][WARN] Não foi possível voltar normalmente: {e}")
 
-        caminho_relatorio = pasta_base / "relatorio_execucao.json"
-        salvar_json(
-            caminho_relatorio,
-            {
-                "inicio_execucao": inicio_execucao.isoformat(),
-                "fim_execucao": fim_execucao.isoformat(),
-                "fila_sch": fila_sch,
-                "tempo_total_segundos": round((fim_execucao - inicio_execucao).total_seconds(), 2),
-                "total_coletados_na_fila": len(requerimentos),
-                "total_processaveis": len(requerimentos_processaveis),
-                "total_ignorados_fora_escopo": len(requerimentos_ignorados),
-                "sucessos": sum(1 for x in relatorio_execucao if x.get("status") == "sucesso"),
-                "erros": sum(1 for x in relatorio_execucao if x.get("status") == "erro"),
-                "documentos_processados": sum(x.get("downloads_realizados", 0) for x in relatorio_execucao),
-                "itens": relatorio_execucao,
-                "ignorados_fora_escopo": ignorados_resumidos,
-                "versao_script": VERSAO_SCRIPT,
-                "pasta_base": str(pasta_base),
-                "categorias_anexos_configuradas": categorias_anexos_ativas,
-                "filtro_radiacao_restrita_efetivo": processar_apenas_rr_efetivo,
-            },
-        )
-        print(f"[SCH] Relatório consolidado salvo em: {caminho_relatorio}")
-
-        caminho_req_report = gerar_req_report(
-            pasta_saida=pasta_base,
-            resultados=relatorio_execucao,
-            versao_script=VERSAO_SCRIPT,
+        _gerar_relatorios_parciais_execucao(
+            pasta_base=pasta_base,
+            relatorio_execucao=relatorio_execucao,
             inicio_execucao=inicio_execucao,
-            fim_execucao=fim_execucao,
+            fila_sch=fila_sch,
+            requerimentos=requerimentos,
+            requerimentos_processaveis=requerimentos_processaveis,
+            requerimentos_ignorados=requerimentos_ignorados,
+            ignorados_resumidos=ignorados_resumidos,
+            versao_script=VERSAO_SCRIPT,
+            categorias_anexos_ativas=categorias_anexos_ativas,
+            processar_apenas_rr_efetivo=processar_apenas_rr_efetivo,
+            status_execucao="finalizado",
+            imprimir=True,
         )
-        print(f"[SCH] Pasta req_report gerada em: {caminho_req_report}")
+
+    except KeyboardInterrupt:
+        print(
+            "\n[SCH][INTERRUPCAO] Execução interrompida pelo usuário. "
+            "Gerando relatório parcial dos requerimentos já analisados..."
+        )
+
+        _gerar_relatorios_parciais_execucao(
+            pasta_base=pasta_base,
+            relatorio_execucao=relatorio_execucao,
+            inicio_execucao=inicio_execucao,
+            fila_sch=fila_sch,
+            requerimentos=requerimentos,
+            requerimentos_processaveis=requerimentos_processaveis,
+            requerimentos_ignorados=requerimentos_ignorados,
+            ignorados_resumidos=ignorados_resumidos,
+            versao_script=VERSAO_SCRIPT,
+            categorias_anexos_ativas=categorias_anexos_ativas,
+            processar_apenas_rr_efetivo=processar_apenas_rr_efetivo,
+            status_execucao="interrompida_pelo_usuario",
+            imprimir=True,
+        )
+
+        raise
 
     finally:
         if fechar_navegador_ao_final:

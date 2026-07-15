@@ -235,6 +235,11 @@ def coletar_opcoes_fluxo_completo():
 
     categorias_anexos = escolher_categorias_anexos()
 
+    executar_envio_retorno_para_estudo = perguntar_sim_nao(
+        "Deseja permitir aprovação automática em Retorno Para Estudo quando a análise julgar apto?",
+        padrao=False,
+    )
+
     return {
         "pasta_base": pasta_base,
         "limite_requerimentos": limite,
@@ -245,6 +250,7 @@ def coletar_opcoes_fluxo_completo():
         "preencher_informacoes_adicionais": preencher_informacoes_adicionais,
         "pausar_antes_anexos": pausar_antes_anexos,
         "categorias_anexos": categorias_anexos,
+        "executar_envio_retorno_para_estudo": executar_envio_retorno_para_estudo,
     }
 
 
@@ -308,6 +314,10 @@ def main():
                 print(f"Preencher Informações Adicionais: {'sim' if opcoes['preencher_informacoes_adicionais'] else 'não'}")
                 print(f"Pausa antes de anexos: {'sim' if opcoes['pausar_antes_anexos'] else 'não'}")
                 print(f"Categorias de anexos: {', '.join(opcoes['categorias_anexos'])}")
+                print(
+                    "Aprovação automática em Retorno Para Estudo: "
+                    f"{'sim' if opcoes['executar_envio_retorno_para_estudo'] else 'não'}"
+                )
                 print("=" * 90)
 
                 if perguntar_sim_nao("Deseja iniciar agora?", padrao=True):
@@ -337,6 +347,7 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[INFO] Execução interrompida pelo usuário.")
+        print("[INFO] Se o fluxo já tinha iniciado, o relatório parcial é tratado no fluxo_sch.py.")
         return 1
 
     except Exception as e:
