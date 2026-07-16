@@ -9911,96 +9911,271 @@ def _confirmar_aprovacao_retorno_para_estudo(driver, wait, timeout=4):
     }
 
 
-def clicar_aprovar_retorno_para_estudo(driver, wait):
+def clicar_aprovar_retorno_para_estudo(driver, wait, timeout=20):
     """
-    Clica especificamente no botão 'Aprovar' do Retorno Para Estudo.
+    Localiza e clica exclusivamente no botão 'Aprovar' do Retorno Para Estudo.
 
-    Segurança:
-    - Não clica em Rejeitar Retorno Para Estudo.
-    - Não clica em Enviar Exigência.
-    - Não clica em Devolver p/ Caixa de Distribuição.
+    Melhorias:
+    - volta obrigatoriamente para o documento principal;
+    - aguarda o iframe do requerimento ser recriado;
+    - pesquisa no documento principal e em todos os iframes;
+    - não reutiliza WebElement antigo;
+    - aceita estrutura PrimeFaces com span interno;
+    - impede clique em Rejeitar, Exigência ou Devolver.
     """
 
-    print("[SCH][RETORNO] Tentando clicar no botão 'Aprovar'...")
+    print("[SCH][RETORNO] Procurando o botão exato 'Aprovar'...")
 
-    xpaths_aprovar = [
-        "//*[self::button or self::a][normalize-space()='Aprovar']",
-        "//span[normalize-space()='Aprovar']/ancestor::*[self::button or self::a][1]",
-        "//input[@type='button' and normalize-space(@value)='Aprovar']",
-        "//input[@type='submit' and normalize-space(@value)='Aprovar']",
-    ]
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    # Aguarda o retorno real à tela do requerimento.
+    inicio = time.time()
+
+    while time.time() - inicio < timeout:
+        try:
+            url_atual = str(driver.current_url or "")
+
+            if "compareVersoesRequerimento" not in url_atual:
+                break
+        except Exception:
+            break
+
+        time.sleep(0.5)
+
+    script_localizar_e_clicar = r"""
+    function normalizar(txt) {
+        return String(txt || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    function textoElemento(el) {
+        if (!el) return '';
+
+        return normalizar(
+            el.innerText ||
+            el.textContent ||
+            el.value ||
+            el.title ||
+            el.getAttribute('aria-label') ||
+            ''
+        );
+    }
+
+    function visivel(el) {
+        if (!el) return false;
+
+        try {
+            const estilo = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+
+            return (
+                estilo.display !== 'none' &&
+                estilo.visibility !== 'hidden' &&
+                Number(estilo.opacity || 1) !== 0 &&
+                rect.width > 0 &&
+                rect.height > 0
+            );
+        } catch (e) {
+            return true;
+        }
+    }
+
+    const candidatos = Array.from(
+        document.querySelectorAll(
+            'button, a, input[type="button"], input[type="submit"], ' +
+            '[role="button"], span.ui-button-text'
+        )
+    );
+
+    for (const elOriginal of candidatos) {
+        let el = elOriginal;
+
+        if (
+            el.tagName &&
+            el.tagName.toLowerCase() === 'span'
+        ) {
+            el = el.closest('button, a, [role="button"]') || el;
+        }
+
+        const txt = textoElemento(el);
+        const txtOriginal = textoElemento(elOriginal);
+
+        if (txt !== 'aprovar' && txtOriginal !== 'aprovar') {
+            continue;
+        }
+
+        const contexto = normalizar(
+            (el.parentElement && el.parentElement.innerText) || ''
+        );
+
+        if (
+            contexto.includes('rejeitar') ||
+            contexto.includes('exigencia') ||
+            contexto.includes('devolver')
+        ) {
+            continue;
+        }
+
+        if (!visivel(el)) {
+            continue;
+        }
+
+        try {
+            if (el.disabled) {
+                continue;
+            }
+        } catch (e) {}
+
+        el.scrollIntoView({
+            block: 'center',
+            inline: 'center'
+        });
+
+        el.click();
+
+        return {
+            clicou: true,
+            texto: txt || txtOriginal,
+            id: el.id || '',
+            tag: el.tagName || '',
+            classe: el.className || ''
+        };
+    }
+
+    return {
+        clicou: false,
+        quantidade_candidatos: candidatos.length,
+        texto_pagina: document.body
+            ? String(document.body.innerText || '').substring(0, 2000)
+            : ''
+    };
+    """
 
     ultimo_erro = None
-    candidatos_tentados = []
+    diagnosticos = []
 
-    for contexto in ["iframe", "default"]:
+    for tentativa in range(1, 11):
+        print(
+            f"[SCH][RETORNO] Buscando botão 'Aprovar'... "
+            f"tentativa {tentativa}/10"
+        )
+
+        # 1. Documento principal
         try:
-            if contexto == "iframe":
-                entrar_iframe_detalhe_analise(driver, wait)
-            else:
-                driver.switch_to.default_content()
+            driver.switch_to.default_content()
 
-            esperar_tela_carregar(driver, 0.3)
+            retorno = driver.execute_script(
+                script_localizar_e_clicar
+            ) or {}
 
-            for xpath in xpaths_aprovar:
+            diagnosticos.append({
+                "contexto": "default",
+                "tentativa": tentativa,
+                "retorno": retorno,
+            })
+
+            if retorno.get("clicou"):
+                print(
+                    "[SCH][RETORNO] Botão 'Aprovar' clicado no "
+                    f"documento principal. id={retorno.get('id', '')}"
+                )
+
+                esperar_tela_carregar(driver, 1.0)
+
+                confirmacao = _confirmar_aprovacao_retorno_para_estudo(
+                    driver,
+                    wait,
+                    timeout=5,
+                )
+
+                return {
+                    "executado": True,
+                    "botao": "Aprovar",
+                    "contexto": "default",
+                    "tentativa": tentativa,
+                    "detalhes": retorno,
+                    "confirmacao": confirmacao,
+                }
+
+        except Exception as e:
+            ultimo_erro = e
+
+        # 2. Todos os iframes de primeiro nível
+        try:
+            driver.switch_to.default_content()
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+
+            for indice in range(len(iframes)):
                 try:
-                    botoes = WebDriverWait(driver, 3, poll_frequency=0.1).until(
-                        EC.presence_of_all_elements_located((By.XPATH, xpath))
+                    driver.switch_to.default_content()
+
+                    # Rebusca os iframes para evitar stale.
+                    iframes_atuais = driver.find_elements(
+                        By.TAG_NAME,
+                        "iframe",
                     )
 
-                    for botao in botoes:
-                        try:
-                            if not botao.is_displayed() or not botao.is_enabled():
-                                continue
+                    if indice >= len(iframes_atuais):
+                        continue
 
-                            texto_botao = " ".join(
-                                [
-                                    botao.text or "",
-                                    botao.get_attribute("value") or "",
-                                    botao.get_attribute("title") or "",
-                                    botao.get_attribute("aria-label") or "",
-                                ]
-                            ).strip()
+                    iframe = iframes_atuais[indice]
 
-                            texto_norm = _normalizar_texto_comparacao(texto_botao)
+                    iframe_id = (
+                        iframe.get_attribute("id")
+                        or iframe.get_attribute("name")
+                        or f"iframe_{indice}"
+                    )
 
-                            # Segurança extra: precisa ser exatamente Aprovar.
-                            if texto_norm != "aprovar":
-                                continue
+                    driver.switch_to.frame(iframe)
 
-                            candidatos_tentados.append(texto_botao or xpath)
+                    retorno = driver.execute_script(
+                        script_localizar_e_clicar
+                    ) or {}
 
-                            driver.execute_script(
-                                "arguments[0].scrollIntoView({block:'center'});",
-                                botao,
-                            )
+                    diagnosticos.append({
+                        "contexto": iframe_id,
+                        "tentativa": tentativa,
+                        "retorno": retorno,
+                    })
 
-                            try:
-                                ActionChains(driver).move_to_element(botao).pause(0.2).click().perform()
-                            except Exception:
-                                _clicar_com_fallback(driver, botao)
+                    if retorno.get("clicou"):
+                        print(
+                            "[SCH][RETORNO] Botão 'Aprovar' clicado no "
+                            f"iframe '{iframe_id}'. "
+                            f"id={retorno.get('id', '')}"
+                        )
 
-                            esperar_tela_carregar(driver, 1.0)
+                        esperar_tela_carregar(driver, 1.0)
 
-                            confirmacao = _confirmar_aprovacao_retorno_para_estudo(
+                        confirmacao = (
+                            _confirmar_aprovacao_retorno_para_estudo(
                                 driver,
                                 wait,
+                                timeout=5,
                             )
+                        )
 
-                            print("[SCH][RETORNO] Botão 'Aprovar' clicado com sucesso.")
+                        return {
+                            "executado": True,
+                            "botao": "Aprovar",
+                            "contexto": iframe_id,
+                            "tentativa": tentativa,
+                            "detalhes": retorno,
+                            "confirmacao": confirmacao,
+                        }
 
-                            return {
-                                "executado": True,
-                                "botao": texto_botao or "Aprovar",
-                                "xpath": xpath,
-                                "contexto": contexto,
-                                "confirmacao": confirmacao,
-                                "candidatos_tentados": candidatos_tentados,
-                            }
-
-                        except Exception as e:
-                            ultimo_erro = e
-                            continue
+                except StaleElementReferenceException:
+                    ultimo_erro = (
+                        "iframe recriado durante a busca do botão Aprovar"
+                    )
+                    continue
 
                 except Exception as e:
                     ultimo_erro = e
@@ -10008,15 +10183,30 @@ def clicar_aprovar_retorno_para_estudo(driver, wait):
 
         except Exception as e:
             ultimo_erro = e
-            continue
 
-    print("[SCH][RETORNO][WARN] Botão 'Aprovar' não encontrado ou não clicável.")
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        time.sleep(1)
+
+    print(
+        "[SCH][RETORNO][WARN] O botão 'Aprovar' não foi encontrado "
+        "após pesquisar no documento principal e nos iframes."
+    )
+
+    try:
+        url_final = str(driver.current_url or "")
+    except Exception:
+        url_final = ""
 
     return {
         "executado": False,
         "motivo": "botao_aprovar_nao_encontrado",
         "erro": str(ultimo_erro or ""),
-        "candidatos_tentados": candidatos_tentados,
+        "url_final": url_final,
+        "diagnosticos": diagnosticos[-10:],
     }
 
 
