@@ -22,6 +22,9 @@ from funcoes_sch import (
     avaliar_validade_cct,
     comparar_datas_certificado_sch_x_cct,
     preencher_minuta_sar_se_necessario,
+    limpar_especificacoes_complementares_minuta_se_necessario,
+    tipo_produto_deve_limpar_especificacoes_complementares,
+    enviar_retorno_para_aprovacao_se_apto,
     garantir_sessao_ativa_sch,
     voltar_para_fila,
     extrair_dados_certificado_sch,
@@ -34,7 +37,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.7.3"
+VERSAO_SCRIPT = "0.7.5"
 
 
 def _normalizar_texto(valor):
@@ -644,27 +647,42 @@ def executar_fluxo_sch(
                 "categorias_anexos_configuradas": categorias_anexos_ativas,
                 "preenchimento_sch": {
                     "minuta": False,
-                    "minuta_habilitada": preencher_minuta and not fila_retorno,
+                    "minuta_habilitada": bool(preencher_minuta),
+                    "modo_minuta": (
+                        "limpeza_especificacoes_complementares"
+                        if fila_retorno
+                        else "analise_sar_cct"
+                    ),
                     "caracteristicas": preencher_caracteristicas and not fila_retorno,
                     "informacoes_adicionais": preencher_informacoes_adicionais and not fila_retorno,
                 },
                 "minuta": {
                     "preenchida": False,
+                    "campo_limpo": False,
+                    "alterada": False,
                     "salvo": False,
                     "confirmado_apos_salvar": False,
-                    "status": "nao_aplicavel_retorno_para_estudo" if fila_retorno else (
-                        "pendente" if preencher_minuta else "desabilitado_pelo_usuario"
+                    "status": (
+                        "pendente_limpeza_especificacoes_complementares"
+                        if fila_retorno and preencher_minuta
+                        else "pendente_analise_sar_cct"
+                        if preencher_minuta
+                        else "desabilitado_pelo_usuario"
                     ),
                     "mensagem": (
-                        "Fluxo Retorno Para Estudo não executa Corrigir Minuta; executa Comparar Versões."
-                        if fila_retorno
-                        else (
-                            "Preenchimento de Corrigir Minuta habilitado."
-                            if preencher_minuta
-                            else "Preenchimento de Corrigir Minuta desabilitado pelo usuário."
-                        )
+                        "Na fila Retorno Para Estudo, Corrigir Minuta será usado somente para apagar "
+                        "Especificações Complementares dos tipos de produto configurados."
+                        if fila_retorno and preencher_minuta
+                        else "Na fila Em Análise, Corrigir Minuta será tratado somente pela análise de SAR do CCT."
+                        if preencher_minuta
+                        else "Tratamento de Corrigir Minuta desabilitado pelo usuário."
                     ),
                     "frase": "",
+                    "modo": (
+                        "limpeza_especificacoes_complementares"
+                        if fila_retorno
+                        else "analise_sar_cct"
+                    ),
                 },
             }
 
@@ -753,15 +771,141 @@ def executar_fluxo_sch(
                     qtd_downloads = contar_arquivos_requerimento(pasta_req)
                     resumo["downloads_realizados"] = qtd_downloads
 
+                    # Primeiro compara as versões, mas NÃO aprova ainda.
+                    # A aprovação só pode ocorrer depois da etapa obrigatória
+                    # de Corrigir Minuta desta fila.
                     retorno_estudo = analisar_retorno_para_estudo(
                         driver=driver,
                         wait=wait,
                         req=req,
                         anexos_baixados=resumo["anexos_baixados"],
-                        executar_envio=executar_envio_retorno_para_estudo,
+                        executar_envio=False,
+                    )
+
+                    tipo_produto = req.get("tipo_produto", "")
+                    limpeza_exigida = (
+                        tipo_produto_deve_limpar_especificacoes_complementares(
+                            tipo_produto
+                        )
+                    )
+
+                    if preencher_minuta:
+                        resultado_minuta = (
+                            limpar_especificacoes_complementares_minuta_se_necessario(
+                                driver=driver,
+                                wait=wait,
+                                req=req,
+                            )
+                        )
+                    else:
+                        resultado_minuta = {
+                            "aplicavel": bool(limpeza_exigida),
+                            "tipo_produto": tipo_produto,
+                            "campo_encontrado": False,
+                            "conteudo_anterior": "",
+                            "limpo": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                            "retornou_para_requerimento": False,
+                            "status": "desabilitado_pelo_usuario",
+                            "motivo": "tratamento_corrigir_minuta_desabilitado",
+                            "mensagem": (
+                                "Limpeza de Especificações Complementares "
+                                "desabilitada pelo usuário."
+                            ),
+                        }
+
+                    limpeza_aplicavel = bool(
+                        resultado_minuta.get("aplicavel", limpeza_exigida)
+                    )
+                    limpeza_confirmada = bool(
+                        resultado_minuta.get("limpo")
+                        and resultado_minuta.get("salvo")
+                        and resultado_minuta.get("confirmado_apos_salvar")
+                    )
+
+                    resultado_minuta["modo"] = (
+                        "limpeza_especificacoes_complementares_retorno_para_estudo"
+                    )
+                    resultado_minuta["limpeza_exigida"] = bool(limpeza_exigida)
+                    resultado_minuta["limpeza_confirmada"] = bool(
+                        limpeza_confirmada
+                    )
+
+                    retorno_estudo["corrigir_minuta"] = resultado_minuta
+                    retorno_estudo["limpeza_minuta_exigida"] = bool(
+                        limpeza_exigida
+                    )
+                    retorno_estudo["limpeza_minuta_confirmada"] = bool(
+                        limpeza_confirmada
+                    )
+
+                    # Se o tipo exige limpeza, a aprovação automática fica
+                    # bloqueada até que apagar + salvar + confirmar tenha sucesso.
+                    if limpeza_exigida and not limpeza_confirmada:
+                        retorno_estudo["pode_enviar_para_aprovacao"] = False
+                        retorno_estudo["deve_enviar_para_aprovacao"] = False
+                        retorno_estudo["acao_recomendada"] = (
+                            "Não enviar para aprovação / Revisar Corrigir Minuta"
+                        )
+                        retorno_estudo["status_comparacao"] = (
+                            "bloqueado_por_falha_na_limpeza_da_minuta"
+                        )
+                        retorno_estudo.setdefault("alertas", []).append(
+                            "A aprovação automática foi bloqueada porque não foi "
+                            "possível confirmar que Especificações Complementares "
+                            "foram apagadas e salvas."
+                        )
+
+                    # A análise já encerrou a tela Comparar Versões. Agora o envio
+                    # pode ocorrer somente se a comparação estiver apta e, quando
+                    # exigida, a limpeza da minuta estiver confirmada.
+                    retorno_estudo["envio_para_aprovacao"] = (
+                        enviar_retorno_para_aprovacao_se_apto(
+                            driver=driver,
+                            wait=wait,
+                            resultado=retorno_estudo,
+                            info_abertura={},
+                            executar_envio=executar_envio_retorno_para_estudo,
+                        )
                     )
 
                     resumo["retorno_para_estudo"] = retorno_estudo
+                    resumo["resultado_minuta"] = resultado_minuta
+                    resumo["sar_minuta"] = {
+                        "status": "nao_aplicavel_fila_retorno_para_estudo",
+                        "mensagem": (
+                            "A fila Retorno Para Estudo não executa julgamento de SAR. "
+                            "O tratamento da minuta nesta fila é somente a limpeza "
+                            "de Especificações Complementares por tipo de produto."
+                        ),
+                        "preencher_frase": False,
+                        "preenchido_automaticamente": False,
+                        "salvo": False,
+                        "confirmado_apos_salvar": False,
+                    }
+                    resumo["minuta"] = {
+                        "preenchida": False,
+                        "campo_limpo": bool(resultado_minuta.get("limpo")),
+                        "alterada": bool(resultado_minuta.get("limpo")),
+                        "salvo": bool(resultado_minuta.get("salvo")),
+                        "confirmado_apos_salvar": bool(
+                            resultado_minuta.get("confirmado_apos_salvar")
+                        ),
+                        "status": resultado_minuta.get("status", ""),
+                        "mensagem": resultado_minuta.get(
+                            "mensagem",
+                            resultado_minuta.get("motivo", ""),
+                        ),
+                        "frase": "",
+                        "modo": (
+                            "limpeza_especificacoes_complementares_retorno_para_estudo"
+                        ),
+                        "tipo_produto": tipo_produto,
+                    }
+                    resumo["preenchimento_sch"]["minuta"] = bool(
+                        limpeza_confirmada
+                    )
                     resumo["status"] = "sucesso"
                     resumo["fim"] = datetime.now().isoformat()
 
@@ -779,6 +923,7 @@ def executar_fluxo_sch(
                     print(
                         "[SCH][RETORNO] Requerimento finalizado. "
                         f"Resultado={retorno_estudo.get('status_comparacao')} | "
+                        f"Limpeza da minuta={'SIM' if limpeza_confirmada else 'NÃO'} | "
                         f"Ação={retorno_estudo.get('acao_recomendada')}"
                     )
 
@@ -965,6 +1110,10 @@ def executar_fluxo_sch(
                 resumo["analise_rapida"] = analise_rapida
                 resumo["observacao_caracteristicas"] = analise_rapida.get("texto", "")
 
+                # FILA EM ANÁLISE:
+                # Corrigir Minuta é tratado exclusivamente pela análise de SAR
+                # extraída do CCT. A lista de limpeza por tipo de produto NÃO é
+                # consultada nesta fila.
                 if preencher_minuta:
                     sar_minuta = preencher_minuta_sar_se_necessario(
                         driver=driver,
@@ -974,7 +1123,10 @@ def executar_fluxo_sch(
                 else:
                     sar_minuta = {
                         "status": "desabilitado_pelo_usuario",
-                        "mensagem": "Preenchimento de Corrigir Minuta desabilitado pelo usuário.",
+                        "mensagem": (
+                            "Análise/preenchimento de SAR em Corrigir Minuta "
+                            "desabilitado pelo usuário."
+                        ),
                         "frase": "",
                         "preencher_frase": False,
                         "preenchido_automaticamente": False,
@@ -982,14 +1134,25 @@ def executar_fluxo_sch(
                         "confirmado_apos_salvar": False,
                     }
 
+                sar_minuta["modo"] = "analise_sar_cct_em_analise"
                 resumo["sar_minuta"] = sar_minuta
+                resumo["resultado_minuta"] = sar_minuta
                 resumo["minuta"] = {
-                    "preenchida": bool(sar_minuta.get("preenchido_automaticamente")),
+                    "preenchida": bool(
+                        sar_minuta.get("preenchido_automaticamente")
+                    ),
+                    "campo_limpo": False,
+                    "alterada": bool(
+                        sar_minuta.get("preenchido_automaticamente")
+                    ),
                     "salvo": bool(sar_minuta.get("salvo")),
-                    "confirmado_apos_salvar": bool(sar_minuta.get("confirmado_apos_salvar")),
+                    "confirmado_apos_salvar": bool(
+                        sar_minuta.get("confirmado_apos_salvar")
+                    ),
                     "status": sar_minuta.get("status", ""),
                     "mensagem": sar_minuta.get("mensagem", ""),
                     "frase": sar_minuta.get("frase", ""),
+                    "modo": "analise_sar_cct_em_analise",
                 }
 
                 resumo["preenchimento_sch"]["minuta"] = bool(
