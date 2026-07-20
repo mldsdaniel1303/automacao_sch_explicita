@@ -4459,52 +4459,53 @@ def analisar_sar_cct(dados_pdf):
 
 def _ha_tela_corrigir_minuta_aberta(driver):
     """
-    Confirma que a tela Corrigir Minuta realmente abriu.
+    Confirma a tela real de Corrigir Minuta.
 
-    A verificação antiga aceitava qualquer textarea/iframe da página e podia
-    concluir, por engano, que Corrigir Minuta estava aberta. Aqui exigimos
-    sinais específicos da tela da minuta.
+    O clique não abre nova aba e não muda a URL. A tela é carregada por AJAX
+    dentro do mesmo iframe do requerimento. Por isso, a confirmação exige dois
+    sinais exclusivos:
+    - seção "Especificação";
+    - botão "Salvar Minuta".
     """
     try:
         texto = _normalizar_texto_comparacao(_texto_visivel_sch(driver))
     except Exception:
         texto = ""
 
-    tem_especificacoes = (
-        "especificacoes complementares" in texto
-        or "especificacao" in texto
+    tem_especificacao = bool(
+        "especificacao" in texto
+        and any(
+            termo in texto
+            for termo in [
+                "fabricante",
+                "solicitante",
+                "produto",
+            ]
+        )
     )
 
-    tem_titulo_minuta = (
-        "corrigir minuta" in texto
-        or "correcao da minuta" in texto
-        or "minuta" in texto
-    )
-
-    tem_acao = False
-    xpaths_acao = [
-        "//*[self::button or self::a][normalize-space()='Salvar']",
-        "//input[(@type='submit' or @type='button') and contains(translate(@value,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'salvar')]",
-        "//*[self::button or self::a][normalize-space()='Voltar']",
+    xpaths_salvar_minuta = [
+        "//button[normalize-space(.)='Salvar Minuta']",
+        "//a[normalize-space(.)='Salvar Minuta']",
+        "//input[(@type='button' or @type='submit') and normalize-space(@value)='Salvar Minuta']",
+        "//span[normalize-space(.)='Salvar Minuta']/ancestor::*[self::button or self::a][1]",
     ]
 
-    for xpath in xpaths_acao:
+    tem_salvar_minuta = False
+
+    for xpath in xpaths_salvar_minuta:
         try:
-            if any(el.is_displayed() for el in driver.find_elements(By.XPATH, xpath)):
-                tem_acao = True
+            if any(
+                el.is_displayed()
+                for el in driver.find_elements(By.XPATH, xpath)
+            ):
+                tem_salvar_minuta = True
                 break
         except Exception:
             continue
 
-    # O botão "Corrigir Minuta" pode continuar visível na tela anterior.
-    # Por isso, o título sozinho não confirma a abertura.
-    return bool(
-        (tem_especificacoes and tem_acao)
-        or (
-            tem_titulo_minuta
-            and "especificacoes complementares" in texto
-        )
-    )
+    return bool(tem_especificacao and tem_salvar_minuta)
+
 
 
 # Mantém compatibilidade com chamadas antigas.
@@ -4512,87 +4513,413 @@ def _ha_campo_corrigir_minuta(driver):
     return _ha_tela_corrigir_minuta_aberta(driver)
 
 
-def clicar_corrigir_minuta(driver, wait):
+def _janela_atual_tem_requerimento_sch(driver):
     """
-    Abre Corrigir Minuta e só retorna quando a tela real estiver carregada.
+    Confirma se a janela atual é a tela principal do requerimento no SCH.
+
+    Não considera about:blank nem a página independente de Comparar Versões.
     """
-    print("[SCH] Abrindo Corrigir Minuta...")
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    try:
+        url = str(driver.current_url or "").strip().lower()
+    except Exception:
+        url = ""
+
+    if not url or url.startswith("about:blank"):
+        return False
+
+    try:
+        if driver.find_elements(By.XPATH, XPATH_IFRAME_DETALHE):
+            return True
+    except Exception:
+        pass
+
+    try:
+        texto = _normalizar_texto_comparacao(
+            driver.execute_script(
+                "return document.body ? (document.body.innerText || '') : '';"
+            )
+            or ""
+        )
+
+        return (
+            "corrigir minuta" in texto
+            and "visualizar requerimento" in texto
+            and "comparar versoes" in texto
+        )
+    except Exception:
+        return False
+
+
+def _preparar_janela_sch_para_corrigir_minuta(
+    driver,
+    aba_original_sch=None,
+):
+    """
+    Posiciona o Selenium diretamente na aba original do SCH.
+
+    Esta função não procura o requerimento alternando entre todas as abas.
+    No fluxo Retorno Para Estudo, a aba original deve ser capturada antes de
+    abrir Comparar Versões e informada aqui. Em "Em Análise", usa a aba atual.
+    """
+    try:
+        handles = list(driver.window_handles)
+    except Exception:
+        handles = []
+
+    if not handles:
+        raise RuntimeError("Nenhuma janela do navegador está disponível.")
+
+    if aba_original_sch and aba_original_sch in handles:
+        alvo = aba_original_sch
+    else:
+        try:
+            alvo = driver.current_window_handle
+        except Exception:
+            alvo = handles[0]
+
+        if alvo not in handles:
+            alvo = handles[0]
+
+    try:
+        driver.switch_to.window(alvo)
+        driver.switch_to.default_content()
+    except Exception as e:
+        raise RuntimeError(
+            f"Não foi possível acessar a aba original do SCH: {e}"
+        )
+
+    entrar_iframe_detalhe_analise(driver, None)
+    return alvo
+
+
+
+def _entrar_contexto_corrigir_minuta_aberta(driver, profundidade_max=4):
+    """
+    Procura a tela Corrigir Minuta somente na janela SCH já selecionada.
+
+    Ao retornar True, o driver fica no frame que contém a tela. A função não
+    percorre outras abas, impedindo a alternância visual entre SCH e comparação.
+    """
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    def procurar(profundidade=0):
+        try:
+            if _ha_tela_corrigir_minuta_aberta(driver):
+                return True
+        except Exception:
+            pass
+
+        if profundidade >= profundidade_max:
+            return False
+
+        try:
+            quantidade = len(driver.find_elements(By.CSS_SELECTOR, "iframe, frame"))
+        except Exception:
+            quantidade = 0
+
+        for indice in range(quantidade):
+            try:
+                frames = driver.find_elements(By.CSS_SELECTOR, "iframe, frame")
+                if indice >= len(frames):
+                    continue
+
+                driver.switch_to.frame(frames[indice])
+
+                if procurar(profundidade + 1):
+                    return True
+
+                driver.switch_to.parent_frame()
+            except Exception:
+                try:
+                    driver.switch_to.parent_frame()
+                except Exception:
+                    pass
+
+        return False
+
+    encontrado = procurar(0)
+
+    if not encontrado:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+    return encontrado
+
+
+def _elemento_eh_corrigir_minuta(driver, elemento):
+    try:
+        texto = " ".join(
+            [
+                elemento.text or "",
+                elemento.get_attribute("value") or "",
+                elemento.get_attribute("title") or "",
+                elemento.get_attribute("aria-label") or "",
+            ]
+        )
+        return _normalizar_texto_comparacao(texto) == "corrigir minuta"
+    except Exception:
+        return False
+
+
+def _localizar_botao_corrigir_minuta_no_contexto(driver):
+    """
+    Localiza somente o controle exato "Corrigir Minuta".
+
+    Não procura divs/containers genéricos, pois um container da página inteira
+    também contém esse texto e fazia o terminal imprimir todo o conteúdo da tela.
+    """
+    xpaths = [
+        "//button[normalize-space(.)='Corrigir Minuta']",
+        "//a[normalize-space(.)='Corrigir Minuta']",
+        "//input[(@type='button' or @type='submit') and normalize-space(@value)='Corrigir Minuta']",
+        "//span[normalize-space(.)='Corrigir Minuta']/ancestor::*[self::button or self::a][1]",
+        "//*[@role='button' and normalize-space(.)='Corrigir Minuta']",
+        "//*[self::button or self::a][.//*[normalize-space(.)='Corrigir Minuta']]",
+    ]
+
+    for xpath in xpaths:
+        try:
+            elementos = driver.find_elements(By.XPATH, xpath)
+        except Exception:
+            continue
+
+        for elemento in elementos:
+            try:
+                if not elemento.is_displayed() or not elemento.is_enabled():
+                    continue
+
+                if _elemento_eh_corrigir_minuta(driver, elemento):
+                    return elemento
+            except Exception:
+                continue
+
+    return None
+
+
+def _entrar_contexto_com_botao_corrigir_minuta(driver, profundidade_max=4):
+    """
+    Procura o botão exato somente na janela atual do SCH e em seus frames.
+    """
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    def procurar(profundidade=0):
+        botao = _localizar_botao_corrigir_minuta_no_contexto(driver)
+        if botao is not None:
+            return botao
+
+        if profundidade >= profundidade_max:
+            return None
+
+        try:
+            quantidade = len(driver.find_elements(By.CSS_SELECTOR, "iframe, frame"))
+        except Exception:
+            quantidade = 0
+
+        for indice in range(quantidade):
+            try:
+                frames = driver.find_elements(By.CSS_SELECTOR, "iframe, frame")
+                if indice >= len(frames):
+                    continue
+
+                driver.switch_to.frame(frames[indice])
+                botao = procurar(profundidade + 1)
+
+                if botao is not None:
+                    return botao
+
+                driver.switch_to.parent_frame()
+            except Exception:
+                try:
+                    driver.switch_to.parent_frame()
+                except Exception:
+                    pass
+
+        return None
+
+    botao = procurar(0)
+
+    if botao is None:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+    return botao
+
+
+def _acionar_elemento_corrigir_minuta(driver, elemento):
+    """Executa clique nativo e fallbacks de mouse/JavaScript."""
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        elemento,
+    )
+
+    erros = []
+
+    try:
+        elemento.click()
+        return True
+    except Exception as e:
+        erros.append(e)
+
+    try:
+        ActionChains(driver).move_to_element(elemento).pause(0.15).click().perform()
+        return True
+    except Exception as e:
+        erros.append(e)
+
+    try:
+        driver.execute_script("arguments[0].click();", elemento)
+        return True
+    except Exception as e:
+        erros.append(e)
+
+    try:
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            ['mouseover', 'mousedown', 'mouseup', 'click'].forEach(function(nome) {
+                el.dispatchEvent(new MouseEvent(nome, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                }));
+            });
+            """,
+            elemento,
+        )
+        return True
+    except Exception as e:
+        erros.append(e)
+
+    raise RuntimeError(
+        "Falha em todas as formas de clique em Corrigir Minuta: "
+        + " | ".join(str(e) for e in erros)
+    )
+
+
+def clicar_corrigir_minuta(
+    driver,
+    wait,
+    aba_original_sch=None,
+):
+    """
+    Abre Corrigir Minuta na mesma aba e no mesmo iframe do requerimento.
+
+    Não procura nova janela, não espera mudança de URL e não percorre abas.
+    Depois do clique, aguarda o conteúdo AJAX exclusivo da minuta.
+    """
+    print("[SCH][MINUTA] Preparando a aba original do requerimento...")
+
+    aba_original_sch = _preparar_janela_sch_para_corrigir_minuta(
+        driver,
+        aba_original_sch=aba_original_sch,
+    )
+
+    if _ha_tela_corrigir_minuta_aberta(driver):
+        print("[SCH][MINUTA] Corrigir Minuta já está aberta.")
+        return True
+
+    xpaths = [
+        "//button[normalize-space(.)='Corrigir Minuta']",
+        "//a[normalize-space(.)='Corrigir Minuta']",
+        "//input[(@type='button' or @type='submit') and normalize-space(@value)='Corrigir Minuta']",
+        "//span[normalize-space(.)='Corrigir Minuta']/ancestor::*[self::button or self::a][1]",
+    ]
 
     ultimo_erro = None
 
     for tentativa in range(1, 4):
-        entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.08)
+        try:
+            _preparar_janela_sch_para_corrigir_minuta(
+                driver,
+                aba_original_sch=aba_original_sch,
+            )
 
-        if _ha_tela_corrigir_minuta_aberta(driver):
-            print("[SCH] Corrigir Minuta já estava aberta.")
-            return True
+            botao = None
 
-        xpaths = [
-            "//*[self::button or self::a][normalize-space()='Corrigir Minuta']",
-            "//span[normalize-space()='Corrigir Minuta']/ancestor::*[self::button or self::a][1]",
-            "//*[self::button or self::a][normalize-space()='Corrigir minuta']",
-            "//span[normalize-space()='Corrigir minuta']/ancestor::*[self::button or self::a][1]",
-            "//*[self::button or self::a][contains(normalize-space(),'Correção da Minuta')]",
-            "//*[self::button or self::a][contains(normalize-space(),'Correcao da Minuta')]",
-            "//*[self::button or self::a][contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'minuta')]",
-            "//*[self::button or self::a][contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'minuta')]",
-        ]
+            for xpath in xpaths:
+                try:
+                    elementos = WebDriverWait(
+                        driver,
+                        3,
+                        poll_frequency=0.1,
+                    ).until(
+                        EC.presence_of_all_elements_located(
+                            (By.XPATH, xpath)
+                        )
+                    )
+                except Exception:
+                    elementos = []
 
-        candidatos = []
+                for elemento in elementos:
+                    try:
+                        if elemento.is_displayed() and elemento.is_enabled():
+                            botao = elemento
+                            break
+                    except Exception:
+                        continue
 
-        for xpath in xpaths:
-            try:
-                candidatos.extend(driver.find_elements(By.XPATH, xpath))
-            except Exception as e:
-                ultimo_erro = e
+                if botao is not None:
+                    break
 
-        vistos = set()
-
-        for candidato in candidatos:
-            try:
-                chave = candidato.id
-                if chave in vistos:
-                    continue
-                vistos.add(chave)
-
-                if not candidato.is_displayed() or not candidato.is_enabled():
-                    continue
-
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});",
-                    candidato,
+            if botao is None:
+                raise RuntimeError(
+                    "Botão exato 'Corrigir Minuta' não encontrado no "
+                    "iframe do requerimento."
                 )
 
-                _clicar_com_fallback(driver, candidato)
+            print("[SCH][MINUTA] Botão localizado: Corrigir Minuta")
+            _acionar_elemento_corrigir_minuta(driver, botao)
 
-                def _minuta_pronta(d):
-                    try:
-                        entrar_iframe_detalhe_analise(d, wait)
-                        return _ha_tela_corrigir_minuta_aberta(d)
-                    except Exception:
-                        return False
+            def _minuta_carregou(d):
+                try:
+                    _preparar_janela_sch_para_corrigir_minuta(
+                        d,
+                        aba_original_sch=aba_original_sch,
+                    )
+                    return _ha_tela_corrigir_minuta_aberta(d)
+                except Exception:
+                    return False
 
-                WebDriverWait(
-                    driver,
-                    10,
-                    poll_frequency=0.15,
-                ).until(_minuta_pronta)
+            WebDriverWait(
+                driver,
+                20,
+                poll_frequency=0.2,
+            ).until(_minuta_carregou)
 
-                print("[SCH] Tela Corrigir Minuta aberta.")
-                return True
+            print(
+                "[SCH][MINUTA] Corrigir Minuta carregada por AJAX "
+                "na mesma aba do SCH."
+            )
+            return True
 
-            except Exception as e:
-                ultimo_erro = e
-                continue
+        except Exception as e:
+            ultimo_erro = e
+            print(
+                "[SCH][MINUTA][WARN] Corrigir Minuta não abriu. "
+                f"Tentativa {tentativa}/3: {e}"
+            )
+            esperar_tela_carregar(
+                driver,
+                0.8,
+                timeout=5,
+            )
 
-        print(
-            "[SCH][WARN] Corrigir Minuta ainda não abriu. "
-            f"Tentativa {tentativa}/3."
-        )
-        esperar_tela_carregar(driver, 0.5)
-
-    raise Exception(
+    raise RuntimeError(
         "Não foi possível abrir Corrigir Minuta. "
         f"Último erro: {ultimo_erro}"
     )
@@ -4872,16 +5199,21 @@ def _mensagens_erro_corrigir_minuta(driver):
 
 def _localizar_botao_salvar_minuta(driver):
     """
-    Localiza o botão Salvar da tela Corrigir Minuta.
-    Prefere botões mais abaixo na página e com identificadores relacionados
-    a salvar/minuta, reduzindo o risco de clicar em outro Salvar.
+    Localiza especificamente "Salvar Minuta".
+
+    Existem outros botões Salvar no SCH; por isso o seletor genérico não é
+    usado. Quando há botão no topo e no fim da página, prefere o mais abaixo.
     """
     xpaths = [
-        "//*[self::button or self::a][normalize-space()='Salvar']",
-        "//span[normalize-space()='Salvar']/ancestor::*[self::button or self::a][1]",
-        "//input[@type='submit' and contains(translate(@value,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'salvar')]",
-        "//input[@type='button' and contains(translate(@value,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'salvar')]",
-        "//*[@title='Salvar' and (self::button or self::a or self::input)]",
+        "//button[normalize-space(.)='Salvar Minuta']",
+        "//a[normalize-space(.)='Salvar Minuta']",
+        "//input[(@type='submit' or @type='button') and normalize-space(@value)='Salvar Minuta']",
+        "//span[normalize-space(.)='Salvar Minuta']/ancestor::*[self::button or self::a][1]",
+        "//*[@title='Salvar Minuta' and (self::button or self::a or self::input)]",
+        "//*[self::button or self::a or self::input]"
+        "[normalize-space(.)='Salvar' or normalize-space(@value)='Salvar']"
+        "[contains(translate(concat(@id,' ',@name,' ',@title,' ',@class),"
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'minuta')]",
     ]
 
     candidatos = []
@@ -4889,59 +5221,125 @@ def _localizar_botao_salvar_minuta(driver):
 
     for xpath in xpaths:
         try:
-            for el in driver.find_elements(By.XPATH, xpath):
-                try:
-                    if not el.is_displayed() or not el.is_enabled():
-                        continue
-
-                    chave = el.id
-                    if chave in vistos:
-                        continue
-                    vistos.add(chave)
-
-                    rect = driver.execute_script(
-                        """
-                        const r = arguments[0].getBoundingClientRect();
-                        return {
-                            top: r.top + window.scrollY,
-                            left: r.left,
-                            width: r.width,
-                            height: r.height
-                        };
-                        """,
-                        el,
-                    ) or {}
-
-                    attrs = " ".join(
-                        [
-                            el.get_attribute("id") or "",
-                            el.get_attribute("name") or "",
-                            el.get_attribute("class") or "",
-                            el.get_attribute("title") or "",
-                            el.get_attribute("value") or "",
-                            el.text or "",
-                        ]
-                    )
-
-                    attrs_norm = _normalizar_texto_comparacao(attrs)
-                    pontos = float(rect.get("top", 0) or 0)
-
-                    if "minuta" in attrs_norm:
-                        pontos += 100000
-                    if "salvar" in attrs_norm:
-                        pontos += 10000
-
-                    candidatos.append((pontos, el))
-                except Exception:
-                    continue
+            elementos = driver.find_elements(By.XPATH, xpath)
         except Exception:
-            continue
+            elementos = []
+
+        for elemento in elementos:
+            try:
+                if not elemento.is_displayed() or not elemento.is_enabled():
+                    continue
+
+                chave = elemento.id
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+
+                posicao = driver.execute_script(
+                    """
+                    const r = arguments[0].getBoundingClientRect();
+                    return r.top + window.scrollY;
+                    """,
+                    elemento,
+                )
+
+                candidatos.append((float(posicao or 0), elemento))
+            except Exception:
+                continue
 
     if not candidatos:
         return None
 
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1]
+
+
+
+def _confirmar_dialogo_salvar_minuta(driver, wait, timeout=5):
+    """
+    Confirma o aviso exibido pelo SCH depois de clicar em Salvar Minuta.
+
+    Suporta alert nativo e modal HTML/PrimeFaces. A ausência de confirmação
+    não é tratada como erro, pois alguns requerimentos salvam diretamente.
+    """
+    try:
+        alerta = WebDriverWait(
+            driver,
+            min(float(timeout), 2.5),
+        ).until(EC.alert_is_present())
+
+        texto = _texto_limpo(alerta.text)
+        alerta.accept()
+        esperar_tela_carregar(driver, 0.6, timeout=5)
+
+        return {
+            "confirmado": True,
+            "tipo": "alert",
+            "mensagem": texto,
+        }
+    except Exception:
+        pass
+
+    inicio = time.time()
+    ultimo_erro = None
+
+    xpaths = [
+        "//*[@role='dialog' or contains(@class,'ui-dialog') or contains(@class,'modal')]"
+        "//*[self::button or self::a]"
+        "[normalize-space(.)='Sim' or normalize-space(.)='Confirmar' "
+        "or normalize-space(.)='OK' or normalize-space(.)='Salvar']",
+        "//*[@role='dialog' or contains(@class,'ui-dialog') or contains(@class,'modal')]"
+        "//span[normalize-space(.)='Sim' or normalize-space(.)='Confirmar' "
+        "or normalize-space(.)='OK' or normalize-space(.)='Salvar']"
+        "/ancestor::*[self::button or self::a][1]",
+    ]
+
+    while time.time() - inicio < timeout:
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+        except Exception:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+        for xpath in xpaths:
+            try:
+                elementos = driver.find_elements(By.XPATH, xpath)
+            except Exception as e:
+                ultimo_erro = e
+                elementos = []
+
+            for botao in elementos:
+                try:
+                    if not botao.is_displayed() or not botao.is_enabled():
+                        continue
+
+                    texto = _texto_limpo(
+                        botao.text
+                        or botao.get_attribute("value")
+                        or botao.get_attribute("title")
+                    )
+
+                    _clicar_com_fallback(driver, botao)
+                    esperar_tela_carregar(driver, 0.7, timeout=5)
+
+                    return {
+                        "confirmado": True,
+                        "tipo": "modal_html",
+                        "botao": texto,
+                    }
+                except Exception as e:
+                    ultimo_erro = e
+                    continue
+
+        time.sleep(0.15)
+
+    return {
+        "confirmado": False,
+        "tipo": "nenhuma_confirmacao_exibida",
+        "erro": str(ultimo_erro or ""),
+    }
 
 
 def salvar_minuta_corrigida(
@@ -4951,27 +5349,28 @@ def salvar_minuta_corrigida(
     confirmar_vazio=False,
 ):
     """
-    Salva Corrigir Minuta e valida o resultado.
+    Clica em "Salvar Minuta", confirma eventual aviso e valida o campo.
 
     - texto_esperado: confirma que o campo contém o texto.
     - confirmar_vazio=True: confirma que Especificações Complementares ficou vazio.
-    - mensagens de erro/bloqueio impedem que o retorno marque salvo=True.
     """
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.08)
+    esperar_tela_carregar(driver, 0.2, timeout=5)
 
     botao_salvar = _localizar_botao_salvar_minuta(driver)
 
-    if not botao_salvar:
-        print("[SCH][WARN] Botão Salvar não encontrado em Corrigir Minuta.")
+    if botao_salvar is None:
+        print(
+            "[SCH][MINUTA][WARN] Botão 'Salvar Minuta' não encontrado."
+        )
         return {
             "salvo": False,
             "confirmado_apos_salvar": False,
-            "motivo": "botao_salvar_nao_encontrado",
+            "motivo": "botao_salvar_minuta_nao_encontrado",
             "mensagens_erro": [],
         }
 
-    print("[SCH] Salvando Corrigir Minuta...")
+    print("[SCH][MINUTA] Clicando em Salvar Minuta...")
 
     driver.execute_script(
         "arguments[0].scrollIntoView({block:'center'});",
@@ -4979,20 +5378,13 @@ def salvar_minuta_corrigida(
     )
     _clicar_com_fallback(driver, botao_salvar)
 
-    esperar_tela_carregar(driver, 1.0)
+    confirmacao = _confirmar_dialogo_salvar_minuta(
+        driver,
+        wait,
+        timeout=5,
+    )
 
-    alertas = []
-
-    try:
-        alert = WebDriverWait(driver, 1.5).until(EC.alert_is_present())
-        texto_alerta = _texto_limpo(alert.text)
-        if texto_alerta:
-            alertas.append(texto_alerta)
-        print(f"[SCH] Alerta após salvar Corrigir Minuta: {texto_alerta}")
-        alert.accept()
-        esperar_tela_carregar(driver, 0.5)
-    except Exception:
-        pass
+    esperar_tela_carregar(driver, 1.0, timeout=8)
 
     try:
         entrar_iframe_detalhe_analise(driver, wait)
@@ -5000,23 +5392,22 @@ def salvar_minuta_corrigida(
     except Exception:
         mensagens_erro = []
 
-    mensagens_erro = _deduplicar_lista_preservando_ordem(
-        alertas + mensagens_erro
-    )
-
-    # Alertas de sucesso não devem bloquear.
     mensagens_bloqueio = []
-    for mensagem in mensagens_erro:
+
+    for mensagem in _deduplicar_lista_preservando_ordem(mensagens_erro):
         msg_norm = _normalizar_texto_comparacao(mensagem)
+
         if any(
             termo in msg_norm
             for termo in [
                 "salvo com sucesso",
+                "salva com sucesso",
                 "gravado com sucesso",
                 "operacao realizada com sucesso",
             ]
         ):
             continue
+
         mensagens_bloqueio.append(mensagem)
 
     confirmado = False
@@ -5024,34 +5415,47 @@ def salvar_minuta_corrigida(
 
     if confirmar_vazio or texto_esperado is not None:
         try:
-            abrir_secao_especificacao_minuta(driver, wait)
+            if not abrir_secao_especificacao_minuta(driver, wait):
+                raise RuntimeError(
+                    "A seção Especificação não reabriu após salvar."
+                )
+
             entrar_iframe_detalhe_analise(driver, wait)
 
             campo = _localizar_campo_especificacoes_complementares_minuta(
                 driver,
-                timeout=4,
+                timeout=5,
             )
 
-            if campo is not None:
-                valor_apos_salvar = _valor_campo_minuta(driver, campo)
+            if campo is None:
+                raise RuntimeError(
+                    "Campo Especificações Complementares não encontrado "
+                    "para confirmação após salvar."
+                )
 
-                if confirmar_vazio:
-                    confirmado = not bool(
-                        _normalizar_texto_comparacao(valor_apos_salvar)
-                    )
-                else:
-                    esperado_norm = _normalizar_texto_comparacao(
-                        texto_esperado
-                    )
-                    valor_norm = _normalizar_texto_comparacao(
-                        valor_apos_salvar
-                    )
-                    confirmado = bool(
-                        esperado_norm
-                        and esperado_norm in valor_norm
-                    )
-        except Exception:
+            valor_apos_salvar = _valor_campo_minuta(driver, campo)
+
+            if confirmar_vazio:
+                confirmado = not bool(
+                    _normalizar_texto_comparacao(valor_apos_salvar)
+                )
+            else:
+                esperado_norm = _normalizar_texto_comparacao(
+                    texto_esperado
+                )
+                valor_norm = _normalizar_texto_comparacao(
+                    valor_apos_salvar
+                )
+                confirmado = bool(
+                    esperado_norm
+                    and esperado_norm in valor_norm
+                )
+
+        except Exception as e:
             confirmado = False
+            mensagens_bloqueio.append(
+                f"Falha ao confirmar o conteúdo após salvar: {e}"
+            )
     else:
         confirmado = not bool(mensagens_bloqueio)
 
@@ -5065,17 +5469,20 @@ def salvar_minuta_corrigida(
     )
 
     if salvo:
-        print("[SCH] Corrigir Minuta salva e conferida com sucesso.")
+        print(
+            "[SCH][MINUTA] Minuta salva e conteúdo confirmado."
+        )
     else:
         print(
-            "[SCH][WARN] Corrigir Minuta não foi confirmada como salva. "
-            f"Mensagens: {mensagens_bloqueio or 'nenhuma'}"
+            "[SCH][MINUTA][WARN] O salvamento da minuta não foi "
+            f"confirmado. Mensagens: {mensagens_bloqueio or 'nenhuma'}"
         )
 
     return {
         "salvo": salvo,
         "confirmado_apos_salvar": confirmado,
         "valor_apos_salvar": valor_apos_salvar,
+        "confirmacao_dialogo": confirmacao,
         "mensagens_erro": mensagens_bloqueio,
         "motivo": (
             "salvo_e_confirmado"
@@ -5085,23 +5492,21 @@ def salvar_minuta_corrigida(
     }
 
 
+
 def voltar_da_tela_corrigir_minuta(driver, wait):
     """
-    Sai da tela Corrigir Minuta e volta para a tela principal do requerimento.
+    Clica em Voltar e confirma o retorno à tela principal do requerimento.
     """
-    print("[SCH] Voltando da tela Corrigir Minuta...")
+    print("[SCH][MINUTA] Voltando para o requerimento...")
 
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.15)
+    esperar_tela_carregar(driver, 0.2, timeout=5)
 
     xpaths_voltar = [
-        "//button[normalize-space()='Voltar']",
-        "//a[normalize-space()='Voltar']",
-        "//span[normalize-space()='Voltar']/ancestor::button[1]",
-        "//span[normalize-space()='Voltar']/ancestor::a[1]",
-        "//*[@title='Voltar']",
-        "//*[self::a or self::button][contains(normalize-space(), 'Voltar')]",
-        "//input[@type='button' and contains(@value,'Voltar')]",
+        "//button[normalize-space(.)='Voltar']",
+        "//a[normalize-space(.)='Voltar']",
+        "//input[@type='button' and normalize-space(@value)='Voltar']",
+        "//span[normalize-space(.)='Voltar']/ancestor::*[self::button or self::a][1]",
     ]
 
     ultimo_erro = None
@@ -5109,33 +5514,67 @@ def voltar_da_tela_corrigir_minuta(driver, wait):
     for xpath in xpaths_voltar:
         try:
             elementos = driver.find_elements(By.XPATH, xpath)
-
-            for botao in elementos:
-                try:
-                    if not botao.is_displayed() or not botao.is_enabled():
-                        continue
-
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});",
-                        botao,
-                    )
-
-                    _clicar_com_fallback(driver, botao)
-                    esperar_tela_carregar(driver, 0.8)
-
-                    print("[SCH] Retorno da tela Corrigir Minuta concluído.")
-                    return True
-
-                except Exception as e:
-                    ultimo_erro = e
-                    continue
-
         except Exception as e:
             ultimo_erro = e
-            continue
+            elementos = []
 
-    print(f"[SCH][WARN] Não foi possível clicar em Voltar na Corrigir Minuta. Último erro: {ultimo_erro}")
+        for botao in elementos:
+            try:
+                if not botao.is_displayed() or not botao.is_enabled():
+                    continue
+
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});",
+                    botao,
+                )
+                _clicar_com_fallback(driver, botao)
+
+                def _requerimento_pronto(d):
+                    try:
+                        entrar_iframe_detalhe_analise(d, wait)
+                    except Exception:
+                        return False
+
+                    xpaths_corrigir = [
+                        "//button[normalize-space(.)='Corrigir Minuta']",
+                        "//a[normalize-space(.)='Corrigir Minuta']",
+                        "//input[normalize-space(@value)='Corrigir Minuta']",
+                        "//span[normalize-space(.)='Corrigir Minuta']/ancestor::*[self::button or self::a][1]",
+                    ]
+
+                    for xp in xpaths_corrigir:
+                        try:
+                            if any(
+                                el.is_displayed()
+                                for el in d.find_elements(By.XPATH, xp)
+                            ):
+                                return True
+                        except Exception:
+                            continue
+
+                    return False
+
+                WebDriverWait(
+                    driver,
+                    15,
+                    poll_frequency=0.2,
+                ).until(_requerimento_pronto)
+
+                print(
+                    "[SCH][MINUTA] Retorno ao requerimento confirmado."
+                )
+                return True
+
+            except Exception as e:
+                ultimo_erro = e
+                continue
+
+    print(
+        "[SCH][MINUTA][WARN] Não foi possível voltar da minuta. "
+        f"Último erro: {ultimo_erro}"
+    )
     return False
+
 
 
 
@@ -5296,122 +5735,190 @@ def _localizar_campo_especificacoes_complementares_minuta(
 
 def abrir_secao_especificacao_minuta(driver, wait):
     """
-    Abre a seção/accordion 'Especificação' e aguarda o campo correto.
+    Abre exclusivamente o controle de expansão da linha "Especificação".
+
+    O rótulo não é clicado como container genérico. A função procura o botão,
+    link ou ícone de expansão pertencente à mesma linha/painel e aguarda o
+    campo "Especificações Complementares".
     """
     ultimo_erro = None
 
+    def _campo_pronto(d):
+        try:
+            entrar_iframe_detalhe_analise(d, wait)
+            return (
+                _localizar_campo_especificacoes_complementares_minuta(
+                    d,
+                    timeout=0.35,
+                )
+                is not None
+            )
+        except Exception:
+            return False
+
     for tentativa in range(1, 4):
         entrar_iframe_detalhe_analise(driver, wait)
-        esperar_tela_carregar(driver, 0.08)
+        esperar_tela_carregar(driver, 0.15, timeout=5)
 
         campo = _localizar_campo_especificacoes_complementares_minuta(
             driver,
-            timeout=0.4,
+            timeout=0.6,
         )
+
         if campo is not None:
             return True
 
         entrar_iframe_detalhe_analise(driver, wait)
 
-        xpaths_clique = [
-            "//*[self::button or self::a][normalize-space()='Especificação']",
-            "//*[self::button or self::a][normalize-space()='Especificacao']",
-            "//*[@role='tab'][normalize-space()='Especificação' or normalize-space()='Especificacao']",
-            "//span[normalize-space()='Especificação' or normalize-space()='Especificacao']/ancestor::*[self::button or self::a][1]",
-            "//*[normalize-space()='Especificação' or normalize-space()='Especificacao']/ancestor::*[contains(@class,'ui-accordion-header') or contains(@class,'ui-panel-titlebar') or contains(@class,'ui-tree-toggler')][1]",
-            "//*[normalize-space()='Especificação' or normalize-space()='Especificacao']/ancestor::*[self::tr or self::div or self::li][1]",
+        rotulo = (
+            "//*[normalize-space(.)='Especificação' "
+            "or normalize-space(.)='Especificacao']"
+        )
+
+        xpaths_controle = [
+            rotulo
+            + "/ancestor::tr[1]"
+            + "//*[self::button or self::a or @role='button' "
+            + "or (self::input and (@type='button' or @type='submit'))][last()]",
+            rotulo
+            + "/ancestor::*[contains(@class,'ui-panel') "
+            + "or contains(@class,'panel') "
+            + "or contains(@class,'accordion')][1]"
+            + "//*[self::button or self::a or @role='button' "
+            + "or contains(@class,'ui-icon-plus') "
+            + "or contains(@class,'fa-plus') "
+            + "or contains(@class,'toggler')][1]",
+            rotulo
+            + "/ancestor::*[self::div or self::li][1]"
+            + "//*[self::button or self::a or @role='button' "
+            + "or contains(@class,'ui-icon-plus') "
+            + "or contains(@class,'fa-plus') "
+            + "or contains(@class,'toggler')][1]",
+            rotulo
+            + "/following::*[self::button or self::a or @role='button' "
+            + "or contains(@class,'ui-icon-plus') "
+            + "or contains(@class,'fa-plus')][1]",
+            "//*[self::button or self::a or @role='button']"
+            "[normalize-space(.)='Especificação' "
+            "or normalize-space(.)='Especificacao']",
         ]
 
         candidatos = []
         vistos = set()
 
-        for xpath in xpaths_clique:
+        for xpath in xpaths_controle:
             try:
-                candidatos.extend(driver.find_elements(By.XPATH, xpath))
+                for elemento in driver.find_elements(By.XPATH, xpath):
+                    try:
+                        chave = elemento.id
+                    except Exception:
+                        chave = None
+
+                    if chave and chave in vistos:
+                        continue
+
+                    if chave:
+                        vistos.add(chave)
+
+                    candidatos.append(elemento)
+            except Exception as e:
+                ultimo_erro = e
+
+        # Fallback DOM: procura o controle visível dentro do menor bloco que
+        # contém o rótulo exato "Especificação".
+        if not candidatos:
+            try:
+                candidato_js = driver.execute_script(
+                    """
+                    const labels = Array.from(
+                        document.querySelectorAll('span, label, td, th, div, a, button')
+                    ).filter(el => {
+                        const t = String(el.innerText || el.textContent || '').trim();
+                        return t === 'Especificação' || t === 'Especificacao';
+                    });
+
+                    function visible(el) {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        return st.display !== 'none'
+                            && st.visibility !== 'hidden'
+                            && Number(st.opacity || 1) !== 0
+                            && r.width > 0
+                            && r.height > 0;
+                    }
+
+                    for (const label of labels) {
+                        const root = label.closest(
+                            'tr, .ui-panel, .panel, .ui-accordion-header, li, fieldset'
+                        ) || label.parentElement;
+
+                        if (!root) continue;
+
+                        const controls = Array.from(
+                            root.querySelectorAll(
+                                'button, a, [role="button"], input[type="button"], '
+                                + 'input[type="submit"], .ui-icon-plus, .fa-plus, .toggler'
+                            )
+                        ).filter(visible);
+
+                        if (controls.length) {
+                            return controls[controls.length - 1];
+                        }
+                    }
+
+                    return null;
+                    """
+                )
+
+                if candidato_js is not None:
+                    candidatos.append(candidato_js)
             except Exception as e:
                 ultimo_erro = e
 
         for candidato in candidatos:
             try:
-                chave = candidato.id
-                if chave in vistos:
-                    continue
-                vistos.add(chave)
-
-                if not candidato.is_displayed():
+                if not candidato.is_displayed() or not candidato.is_enabled():
                     continue
 
                 driver.execute_script(
                     "arguments[0].scrollIntoView({block:'center'});",
                     candidato,
                 )
+                _clicar_com_fallback(driver, candidato)
 
-                # Em alguns componentes PrimeFaces o clique útil fica no elemento
-                # clicável ancestral ou no ícone interno.
-                alvos = [candidato]
+                WebDriverWait(
+                    driver,
+                    12,
+                    poll_frequency=0.2,
+                ).until(_campo_pronto)
 
-                try:
-                    alvos.extend(
-                        candidato.find_elements(
-                            By.XPATH,
-                            ".//*[self::a or self::button or @role='button' "
-                            "or contains(@class,'ui-icon') or contains(@class,'toggler')]"
-                        )
-                    )
-                except Exception:
-                    pass
-
-                for alvo in alvos:
-                    try:
-                        if not alvo.is_displayed():
-                            continue
-                        _clicar_com_fallback(driver, alvo)
-                    except Exception as e:
-                        ultimo_erro = e
-                        continue
-
-                    def _campo_pronto(d):
-                        try:
-                            entrar_iframe_detalhe_analise(d, wait)
-                            return (
-                                _localizar_campo_especificacoes_complementares_minuta(
-                                    d,
-                                    timeout=0.25,
-                                )
-                                is not None
-                            )
-                        except Exception:
-                            return False
-
-                    try:
-                        WebDriverWait(
-                            driver,
-                            6,
-                            poll_frequency=0.15,
-                        ).until(_campo_pronto)
-
-                        print("[SCH] Seção 'Especificação' da minuta aberta.")
-                        return True
-                    except Exception as e:
-                        ultimo_erro = e
-                        entrar_iframe_detalhe_analise(driver, wait)
-                        continue
+                print(
+                    "[SCH][MINUTA] Seção 'Especificação' aberta "
+                    "pelo controle de expansão."
+                )
+                return True
 
             except Exception as e:
                 ultimo_erro = e
+                try:
+                    entrar_iframe_detalhe_analise(driver, wait)
+                except Exception:
+                    pass
                 continue
 
         print(
-            "[SCH][WARN] Seção Especificação ainda não abriu. "
+            "[SCH][MINUTA][WARN] A seção Especificação ainda não abriu. "
             f"Tentativa {tentativa}/3."
         )
-        esperar_tela_carregar(driver, 0.4)
+        esperar_tela_carregar(driver, 0.7, timeout=5)
 
     print(
-        "[SCH][WARN] Não foi possível abrir a seção 'Especificação' da minuta. "
-        f"Último erro: {ultimo_erro}"
+        "[SCH][MINUTA][WARN] Não foi possível abrir a seção "
+        f"'Especificação'. Último erro: {ultimo_erro}"
     )
     return False
+
 
 
 TIPOS_PRODUTO_LIMPAR_ESPECIFICACOES_COMPLEMENTARES = [
@@ -5551,15 +6058,15 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
     driver,
     wait,
     req=None,
+    aba_original_sch=None,
 ):
     """
-    Para os tipos de produto configurados:
-    1. abre Corrigir Minuta;
-    2. abre Especificação;
-    3. apaga Especificações Complementares;
-    4. salva;
-    5. confirma que permaneceu vazio;
-    6. volta ao requerimento.
+    Na fila Retorno Para Estudo, consulta o tipo do produto somente para
+    decidir se deve executar a limpeza da minuta.
+
+    O tipo do produto não filtra a análise. Quando estiver na lista:
+    Corrigir Minuta > Especificação > Especificações Complementares
+    > apagar > Salvar Minuta > confirmar vazio > Voltar.
     """
     req = req or {}
 
@@ -5589,26 +6096,32 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
     ):
         resultado["motivo"] = "tipo_produto_fora_da_regra_de_limpeza"
         resultado["mensagem"] = (
-            "Tipo de produto fora da lista de limpeza automática."
+            "Tipo de produto fora da lista de limpeza automática. "
+            "A análise de Retorno Para Estudo permanece válida."
         )
 
         print(
-            "[SCH][MINUTA] Limpeza de Especificações Complementares "
-            f"não aplicável ao tipo: {tipo_produto or 'não identificado'}"
+            "[SCH][MINUTA] Tipo fora da lista de limpeza; "
+            "Corrigir Minuta não será aberto: "
+            f"{tipo_produto or 'não identificado'}"
         )
         return resultado
 
     resultado["aplicavel"] = True
 
     print(
-        "[SCH][MINUTA] Tipo de produto exige limpeza de "
-        f"Especificações Complementares: {tipo_produto}"
+        "[SCH][MINUTA] Tipo exige limpeza de Especificações "
+        f"Complementares: {tipo_produto}"
     )
 
     abriu_minuta = False
 
     try:
-        clicar_corrigir_minuta(driver, wait)
+        clicar_corrigir_minuta(
+            driver,
+            wait,
+            aba_original_sch=aba_original_sch,
+        )
         abriu_minuta = True
 
         if not abrir_secao_especificacao_minuta(driver, wait):
@@ -5620,7 +6133,7 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
 
         campo = _localizar_campo_especificacoes_complementares_minuta(
             driver,
-            timeout=4,
+            timeout=5,
         )
 
         if campo is None:
@@ -5629,7 +6142,6 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
             )
 
         resultado["campo_encontrado"] = True
-
         conteudo_anterior = _valor_campo_minuta(driver, campo)
         resultado["conteudo_anterior"] = conteudo_anterior
 
@@ -5643,8 +6155,8 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         else:
             resultado["limpo"] = True
             print(
-                "[SCH][MINUTA] O campo Especificações Complementares "
-                "já estava vazio."
+                "[SCH][MINUTA] Especificações Complementares "
+                "já estavam vazias."
             )
 
         if not resultado["limpo"]:
@@ -5656,7 +6168,6 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
             "[SCH][MINUTA] Conteúdo de Especificações Complementares apagado."
         )
 
-        # Retorna ao iframe principal antes de procurar o botão Salvar.
         entrar_iframe_detalhe_analise(driver, wait)
 
         resultado_salvar = salvar_minuta_corrigida(
@@ -5680,6 +6191,7 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
             resultado["limpo"]
             and resultado["salvo"]
             and resultado["confirmado_apos_salvar"]
+            and resultado["retornou_para_requerimento"]
         )
 
         resultado["preenchido_automaticamente"] = sucesso
@@ -5687,17 +6199,13 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         if sucesso:
             resultado["status"] = "limpo_e_salvo"
             resultado["mensagem"] = (
-                "Especificações Complementares apagadas e salvas com sucesso."
-            )
-            print(
-                "[SCH][MINUTA] Especificações Complementares "
-                "apagadas e salvas com sucesso."
+                "Especificações Complementares apagadas, salvas e "
+                "confirmadas com sucesso."
             )
         else:
             resultado["status"] = "limpeza_nao_confirmada"
             resultado["motivo"] = (
-                "Não foi possível confirmar completamente a limpeza "
-                "e o salvamento do campo."
+                "Não foi possível confirmar todas as etapas da limpeza."
             )
             resultado["mensagem"] = resultado["motivo"]
 
@@ -5726,12 +6234,14 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         return resultado
 
 
+
 def processar_corrigir_minuta_por_regras(
     driver,
     wait,
     req=None,
     dados_pdf=None,
     fila_sch="Em Análise",
+    aba_original_sch=None,
 ):
     """
     Compatibilidade para chamadas externas, respeitando os dois fluxos:
@@ -5768,6 +6278,7 @@ def processar_corrigir_minuta_por_regras(
             driver=driver,
             wait=wait,
             req=req,
+            aba_original_sch=aba_original_sch,
         )
         resultado["regra_aplicada"] = (
             "limpeza_especificacoes_complementares_retorno_para_estudo"
@@ -8548,13 +9059,17 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
     url_comparacao_resolvida = ""
 
     try:
-        for _ in range(40):
-            try:
-                if aba_origem and aba_origem in driver.window_handles:
-                    driver.switch_to.window(aba_origem)
-            except Exception:
-                pass
+        try:
+            if (
+                aba_origem
+                and aba_origem in driver.window_handles
+                and driver.current_window_handle != aba_origem
+            ):
+                driver.switch_to.window(aba_origem)
+        except Exception:
+            pass
 
+        for _ in range(40):
             info_popup = _obter_popup_comparacao_capturado(driver, wait) or {}
 
             url_bruta = (
@@ -8750,47 +9265,163 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         "A aba de comparação abriu, mas a página não carregou dentro do tempo limite."
     )
 
-def _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura):
-    if not isinstance(info_abertura, dict):
-        return False
+def restaurar_tela_requerimento_apos_comparacao(
+    driver,
+    wait,
+    aba_original_sch=None,
+    info_abertura=None,
+    timeout=15,
+):
+    """
+    Encerra Comparar Versões e retorna de forma determinística ao requerimento.
 
-    aba_origem = info_abertura.get("aba_origem")
-    aba_atual = info_abertura.get("aba_atual")
+    A função percorre as abas somente uma vez:
+    - fecha a aba conhecida de comparação;
+    - fecha abas órfãs about:blank;
+    - volta à aba original do SCH;
+    - entra novamente no iframe __frameDetalhe;
+    - confirma o botão exato "Corrigir Minuta".
+    """
+    info_abertura = info_abertura or {}
 
-    if not aba_origem or not aba_atual or aba_origem == aba_atual:
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-        return False
+    aba_original = (
+        aba_original_sch
+        or info_abertura.get("aba_origem")
+    )
+
+    aba_comparacao = (
+        info_abertura.get("aba_atual")
+        or info_abertura.get("aba_comparacao")
+    )
 
     try:
         handles = list(driver.window_handles)
+    except Exception:
+        handles = []
 
-        if aba_atual in handles:
-            driver.switch_to.window(aba_atual)
-            driver.close()
+    if not handles:
+        raise RuntimeError(
+            "Nenhuma aba disponível para restaurar o requerimento."
+        )
 
-        handles = list(driver.window_handles)
+    if not aba_original:
+        # Quando a comparação já foi fechada anteriormente, a aba atual deve
+        # ser a aba original do SCH.
+        try:
+            aba_original = driver.current_window_handle
+        except Exception:
+            aba_original = handles[0]
 
-        if aba_origem in handles:
-            driver.switch_to.window(aba_origem)
-        elif handles:
-            driver.switch_to.window(handles[0])
+    fechadas = []
 
-        esperar_tela_carregar(driver, 0.5)
-        return True
+    for handle in list(handles):
+        if handle == aba_original:
+            continue
 
-    except Exception as e:
-        print(f"[SCH][RETORNO][WARN] Não foi possível fechar a aba de comparação: {e}")
+        deve_fechar = handle == aba_comparacao
 
         try:
-            if aba_origem in driver.window_handles:
-                driver.switch_to.window(aba_origem)
+            driver.switch_to.window(handle)
+            url = str(driver.current_url or "").strip().lower()
+
+            if not url or url.startswith("about:blank"):
+                deve_fechar = True
+
+            if (
+                "comparar" in url
+                or "comparacao" in url
+                or "comparação" in url
+            ):
+                deve_fechar = True
+
+            if deve_fechar:
+                driver.close()
+                fechadas.append(handle)
+
         except Exception:
-            pass
+            continue
+
+    try:
+        handles_restantes = list(driver.window_handles)
+    except Exception:
+        handles_restantes = []
+
+    if aba_original not in handles_restantes:
+        raise RuntimeError(
+            "A aba original do SCH não está mais aberta."
+        )
+
+    driver.switch_to.window(aba_original)
+    driver.switch_to.default_content()
+    esperar_tela_carregar(driver, 0.6, timeout=8)
+
+    def _requerimento_pronto(d):
+        try:
+            entrar_iframe_detalhe_analise(d, wait)
+        except Exception:
+            return False
+
+        xpaths = [
+            "//button[normalize-space(.)='Corrigir Minuta']",
+            "//a[normalize-space(.)='Corrigir Minuta']",
+            "//input[normalize-space(@value)='Corrigir Minuta']",
+            "//span[normalize-space(.)='Corrigir Minuta']/ancestor::*[self::button or self::a][1]",
+        ]
+
+        for xpath in xpaths:
+            try:
+                if any(
+                    el.is_displayed()
+                    for el in d.find_elements(By.XPATH, xpath)
+                ):
+                    return True
+            except Exception:
+                continue
 
         return False
+
+    WebDriverWait(
+        driver,
+        timeout,
+        poll_frequency=0.2,
+    ).until(_requerimento_pronto)
+
+    print(
+        "[SCH][RETORNO] Tela do requerimento restaurada após "
+        "Comparar Versões."
+    )
+
+    return {
+        "restaurado": True,
+        "aba_original_sch": aba_original,
+        "abas_fechadas": len(fechadas),
+        "handles_fechados": fechadas,
+    }
+
+
+def _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura):
+    """
+    Compatibilidade com chamadas antigas.
+    """
+    try:
+        resultado = restaurar_tela_requerimento_apos_comparacao(
+            driver=driver,
+            wait=None,
+            aba_original_sch=(
+                info_abertura.get("aba_origem")
+                if isinstance(info_abertura, dict)
+                else None
+            ),
+            info_abertura=info_abertura,
+        )
+        return bool(resultado.get("restaurado"))
+    except Exception as e:
+        print(
+            "[SCH][RETORNO][WARN] Não foi possível restaurar a tela "
+            f"do requerimento: {e}"
+        )
+        return False
+
 
 
 def _montar_alteracao_retorno(campo, anterior, novo):
@@ -9735,10 +10366,11 @@ def _extrair_texto_informacoes_adicionais_retorno(driver, wait):
         resultado["capturado"] = bool(texto)
         resultado["texto"] = texto
 
-        print("[SCH][RETORNO] Informações Adicionais capturadas:")
-        print("-" * 80)
-        print(texto[:3000])
-        print("-" * 80)
+        resumo_terminal = " ".join(texto.split())[:500]
+        print(
+            "[SCH][RETORNO] Informações Adicionais capturadas"
+            + (f": {resumo_terminal}" if resumo_terminal else ".")
+        )
 
         return resultado
 
@@ -10367,11 +10999,16 @@ def analisar_retorno_para_estudo(
 
     info_abertura = {}
 
-    # Filtro inicial de segurança:
-    # em Retorno Para Estudo, só analisamos automaticamente tipos de produto
-    # que estão dentro do escopo configurado.
-    if not aplicar_filtro_tipo_produto_retorno_para_estudo(req, resultado):
-        return resultado
+    # O tipo de produto NÃO filtra a análise de Retorno Para Estudo.
+    # A decisão da análise vem de Informações Adicionais e da comparação
+    # das versões. O tipo de produto é usado somente, fora desta função,
+    # para decidir se Corrigir Minuta deve ter Especificações Complementares
+    # apagadas.
+    resultado["tipo_produto_no_escopo"] = None
+    resultado["filtro_tipo_produto_retorno"] = {
+        "aplicado": False,
+        "motivo": "tipo_produto_nao_filtra_analise_retorno_para_estudo",
+    }
 
     try:
         print("[SCH][RETORNO] Capturando Informações Adicionais do retorno para estudo...")
@@ -10751,9 +11388,28 @@ def analisar_retorno_para_estudo(
 
     finally:
         try:
-            _fechar_comparacao_se_abriu_nova_aba(driver, info_abertura)
-        except Exception:
-            pass
+            restauracao = restaurar_tela_requerimento_apos_comparacao(
+                driver=driver,
+                wait=wait,
+                aba_original_sch=info_abertura.get("aba_origem")
+                if isinstance(info_abertura, dict)
+                else None,
+                info_abertura=info_abertura,
+            )
+            resultado["restauracao_tela_requerimento"] = restauracao
+        except Exception as e:
+            resultado["restauracao_tela_requerimento"] = {
+                "restaurado": False,
+                "erro": str(e),
+            }
+            resultado.setdefault("alertas", []).append(
+                "Não foi possível confirmar o retorno à tela do "
+                "requerimento após Comparar Versões."
+            )
+            print(
+                "[SCH][RETORNO][WARN] Falha ao restaurar a tela "
+                f"do requerimento: {e}"
+            )
 
 
 def _confirmar_aprovacao_retorno_para_estudo(driver, wait, timeout=4):

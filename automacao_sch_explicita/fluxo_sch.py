@@ -29,6 +29,7 @@ from funcoes_sch import (
     voltar_para_fila,
     extrair_dados_certificado_sch,
     analisar_retorno_para_estudo,
+    restaurar_tela_requerimento_apos_comparacao,
 )
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
@@ -37,7 +38,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.7.5"
+VERSAO_SCRIPT = "0.7.7"
 
 
 def _normalizar_texto(valor):
@@ -647,7 +648,7 @@ def executar_fluxo_sch(
                 "categorias_anexos_configuradas": categorias_anexos_ativas,
                 "preenchimento_sch": {
                     "minuta": False,
-                    "minuta_habilitada": bool(preencher_minuta),
+                    "minuta_habilitada": True if fila_retorno else bool(preencher_minuta),
                     "modo_minuta": (
                         "limpeza_especificacoes_complementares"
                         if fila_retorno
@@ -664,7 +665,7 @@ def executar_fluxo_sch(
                     "confirmado_apos_salvar": False,
                     "status": (
                         "pendente_limpeza_especificacoes_complementares"
-                        if fila_retorno and preencher_minuta
+                        if fila_retorno
                         else "pendente_analise_sar_cct"
                         if preencher_minuta
                         else "desabilitado_pelo_usuario"
@@ -672,7 +673,7 @@ def executar_fluxo_sch(
                     "mensagem": (
                         "Na fila Retorno Para Estudo, Corrigir Minuta será usado somente para apagar "
                         "Especificações Complementares dos tipos de produto configurados."
-                        if fila_retorno and preencher_minuta
+                        if fila_retorno
                         else "Na fila Em Análise, Corrigir Minuta será tratado somente pela análise de SAR do CCT."
                         if preencher_minuta
                         else "Tratamento de Corrigir Minuta desabilitado pelo usuário."
@@ -771,15 +772,39 @@ def executar_fluxo_sch(
                     qtd_downloads = contar_arquivos_requerimento(pasta_req)
                     resumo["downloads_realizados"] = qtd_downloads
 
+                    # Guarda explicitamente a aba original do requerimento.
+                    # Comparar Versões pode abrir uma aba nova ou about:blank.
+                    aba_original_sch = driver.current_window_handle
+
                     # Primeiro compara as versões, mas NÃO aprova ainda.
-                    # A aprovação só pode ocorrer depois da etapa obrigatória
-                    # de Corrigir Minuta desta fila.
                     retorno_estudo = analisar_retorno_para_estudo(
                         driver=driver,
                         wait=wait,
                         req=req,
                         anexos_baixados=resumo["anexos_baixados"],
                         executar_envio=False,
+                    )
+
+                    # A análise também tenta restaurar a tela em seu finally,
+                    # mas repetimos a confirmação de forma idempotente antes
+                    # de qualquer clique em Corrigir Minuta.
+                    try:
+                        restauracao_requerimento = (
+                            restaurar_tela_requerimento_apos_comparacao(
+                                driver=driver,
+                                wait=wait,
+                                aba_original_sch=aba_original_sch,
+                                info_abertura={},
+                            )
+                        )
+                    except Exception as e:
+                        restauracao_requerimento = {
+                            "restaurado": False,
+                            "erro": str(e),
+                        }
+
+                    retorno_estudo["restauracao_tela_requerimento"] = (
+                        restauracao_requerimento
                     )
 
                     tipo_produto = req.get("tipo_produto", "")
@@ -789,30 +814,31 @@ def executar_fluxo_sch(
                         )
                     )
 
-                    if preencher_minuta:
+                    # O tipo do produto NÃO filtra a análise. Ele serve apenas
+                    # para decidir se este caminho deve ser executado.
+                    if restauracao_requerimento.get("restaurado"):
                         resultado_minuta = (
                             limpar_especificacoes_complementares_minuta_se_necessario(
                                 driver=driver,
                                 wait=wait,
                                 req=req,
+                                aba_original_sch=aba_original_sch,
                             )
                         )
                     else:
                         resultado_minuta = {
                             "aplicavel": bool(limpeza_exigida),
-                            "tipo_produto": tipo_produto,
-                            "campo_encontrado": False,
-                            "conteudo_anterior": "",
                             "limpo": False,
                             "salvo": False,
                             "confirmado_apos_salvar": False,
                             "retornou_para_requerimento": False,
-                            "status": "desabilitado_pelo_usuario",
-                            "motivo": "tratamento_corrigir_minuta_desabilitado",
+                            "status": "erro_restauracao_apos_comparacao",
                             "mensagem": (
-                                "Limpeza de Especificações Complementares "
-                                "desabilitada pelo usuário."
+                                "Corrigir Minuta não foi executado porque "
+                                "não foi possível restaurar a tela original "
+                                "do requerimento após Comparar Versões."
                             ),
+                            "erro": restauracao_requerimento.get("erro", ""),
                         }
 
                     limpeza_aplicavel = bool(
@@ -839,6 +865,23 @@ def executar_fluxo_sch(
                     retorno_estudo["limpeza_minuta_confirmada"] = bool(
                         limpeza_confirmada
                     )
+
+                    # Sem retorno confirmado à tela original, nenhum clique
+                    # posterior (minuta ou aprovação) é seguro.
+                    if not restauracao_requerimento.get("restaurado"):
+                        retorno_estudo["pode_enviar_para_aprovacao"] = False
+                        retorno_estudo["deve_enviar_para_aprovacao"] = False
+                        retorno_estudo["acao_recomendada"] = (
+                            "Não enviar para aprovação / Restaurar tela do requerimento"
+                        )
+                        retorno_estudo["status_comparacao"] = (
+                            "bloqueado_por_falha_ao_restaurar_requerimento"
+                        )
+                        retorno_estudo.setdefault("alertas", []).append(
+                            "A aprovação automática foi bloqueada porque "
+                            "a tela original do requerimento não foi confirmada "
+                            "após Comparar Versões."
+                        )
 
                     # Se o tipo exige limpeza, a aprovação automática fica
                     # bloqueada até que apagar + salvar + confirmar tenha sucesso.
@@ -871,6 +914,9 @@ def executar_fluxo_sch(
                     )
 
                     resumo["retorno_para_estudo"] = retorno_estudo
+                    resumo["restauracao_apos_comparacao"] = (
+                        restauracao_requerimento
+                    )
                     resumo["resultado_minuta"] = resultado_minuta
                     resumo["sar_minuta"] = {
                         "status": "nao_aplicavel_fila_retorno_para_estudo",
