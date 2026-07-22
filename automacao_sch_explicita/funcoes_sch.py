@@ -5433,7 +5433,7 @@ def salvar_minuta_corrigida(
                     "para confirmação após salvar."
                 )
 
-            valor_apos_salvar = _valor_campo_minuta(driver, campo)
+            valor_apos_salvar = _ler_valor_campo_minuta(driver, campo)
 
             if confirmar_vazio:
                 confirmado = not bool(
@@ -5580,155 +5580,174 @@ def voltar_da_tela_corrigir_minuta(driver, wait):
 
 
 def _valor_campo_minuta(driver, campo):
+    """Compatibilidade: lê somente o valor real do campo."""
+    return _ler_valor_campo_minuta(driver, campo)
+
+def _ler_valor_campo_minuta(driver, campo):
+    """
+    Lê o valor atual real do campo.
+
+    Para textarea e input, utiliza somente a propriedade value.
+    Não usa textContent como fallback, pois o textContent de um textarea
+    pode manter o valor original mesmo depois de o campo ser apagado.
+    """
     try:
-        return driver.execute_script(
-            """
-            const el = arguments[0];
-            return String(
-                ('value' in el ? el.value : '') ||
-                el.innerText ||
-                el.textContent ||
-                ''
-            ).trim();
-            """,
-            campo,
-        ) or ""
+        tag = str(campo.tag_name or "").lower()
+    except Exception:
+        tag = ""
+
+    try:
+        if tag in {"textarea", "input"}:
+            valor = driver.execute_script(
+                """
+                return arguments[0].value == null
+                    ? ''
+                    : String(arguments[0].value);
+                """,
+                campo,
+            )
+        else:
+            valor = driver.execute_script(
+                """
+                return String(
+                    arguments[0].innerText ||
+                    arguments[0].textContent ||
+                    ''
+                );
+                """,
+                campo,
+            )
+
+        return str(valor or "").strip()
+
     except Exception:
         try:
-            return _texto_limpo(
-                campo.get_attribute("value")
-                or campo.text
-                or ""
-            )
+            if tag in {"textarea", "input"}:
+                return str(campo.get_attribute("value") or "").strip()
+
+            return str(campo.text or "").strip()
+
         except Exception:
             return ""
 
 
-def _localizar_campo_especificacoes_complementares_minuta(
-    driver,
-    timeout=2.0,
-):
-    """
-    Localiza somente o editor associado a 'Especificações Complementares'.
 
-    Suporta:
-    - textarea/input;
-    - contenteditable/Quill;
-    - editor rico dentro de iframe.
-    Quando o editor estiver em iframe, a função deixa o driver dentro dele.
-    """
-    fim = time.time() + max(float(timeout or 0), 0.1)
 
-    xpaths_diretos = [
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/following-sibling::*[1]"
-            "//*[self::textarea or (self::input and not(@type='hidden')) "
-            "or @contenteditable='true' or contains(@class,'ql-editor')][1]"
-        ),
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/ancestor::*[self::tr or self::div or self::td or self::fieldset][1]"
-            "//*[self::textarea or (self::input and not(@type='hidden')) "
-            "or @contenteditable='true' or contains(@class,'ql-editor')][1]"
-        ),
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/following::textarea[1]"
-        ),
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/following::input[not(@type='hidden')][1]"
-        ),
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/following::*[@contenteditable='true' or contains(@class,'ql-editor')][1]"
-        ),
+def _localizar_campo_especificacoes_complementares_minuta(driver, timeout=0):
+    """
+    Localiza especificamente o textarea do bloco
+    "Especificações Complementares".
+
+    O parâmetro timeout é aceito porque as chamadas do fluxo já o utilizam.
+    A busca é repetida durante esse período para aguardar a renderização AJAX.
+    """
+    try:
+        timeout = max(0.0, float(timeout or 0))
+    except Exception:
+        timeout = 0.0
+
+    limite = time.time() + timeout
+    primeira_passagem = True
+
+    xpaths = [
+        "//*[normalize-space(.)='Especificações Complementares:' or normalize-space(.)='Especificacoes Complementares:']/following::textarea[not(@disabled)][1]",
+        "//label[contains(normalize-space(.), 'Especificações Complementares') or contains(normalize-space(.), 'Especificacoes Complementares')]/following::textarea[not(@disabled)][1]",
+        "//*[normalize-space(.)='Especificações Complementares' or normalize-space(.)='Especificacoes Complementares']/ancestor::*[self::div or self::fieldset or self::td][1]//textarea[not(@disabled)][1]",
+        "//textarea[not(@disabled) and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ','abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç'),'especific') and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÊÍÓÔÕÚÇ','abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúç'),'complement')]",
+        "//*[contains(normalize-space(.), 'Especificações Complementares') or contains(normalize-space(.), 'Especificacoes Complementares')]/following::textarea[not(@disabled)][1]",
     ]
 
-    xpaths_iframe = [
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/following-sibling::*[1]//iframe[1]"
-        ),
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/ancestor::*[self::tr or self::div or self::td or self::fieldset][1]"
-            "//iframe[1]"
-        ),
-        (
-            "//*[contains(normalize-space(), 'Especificações Complementares') "
-            "or contains(normalize-space(), 'Especificacoes Complementares')]"
-            "/following::iframe[1]"
-        ),
-    ]
+    while primeira_passagem or time.time() <= limite:
+        primeira_passagem = False
 
-    while time.time() < fim:
-        for xpath in xpaths_diretos:
+        for xpath in xpaths:
             try:
-                for campo in driver.find_elements(By.XPATH, xpath):
-                    try:
-                        if not campo.is_displayed() or not campo.is_enabled():
-                            continue
-
-                        driver.execute_script(
-                            "arguments[0].scrollIntoView({block:'center'});",
-                            campo,
-                        )
-                        return campo
-                    except Exception:
-                        continue
+                elementos = driver.find_elements(By.XPATH, xpath)
             except Exception:
                 continue
 
-        for xpath in xpaths_iframe:
-            try:
-                iframes = driver.find_elements(By.XPATH, xpath)
-            except Exception:
-                iframes = []
-
-            for iframe_editor in iframes:
+            for campo in elementos:
                 try:
-                    if not iframe_editor.is_displayed():
+                    if str(campo.tag_name or '').lower() != 'textarea':
+                        continue
+                    if not campo.is_displayed() or not campo.is_enabled():
                         continue
 
                     driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});",
-                        iframe_editor,
+                        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                        campo,
                     )
-                    driver.switch_to.frame(iframe_editor)
-
-                    candidatos = driver.find_elements(
-                        By.XPATH,
-                        "//body | //*[@contenteditable='true'] | "
-                        "//div[contains(@class,'ql-editor')]",
+                    print(
+                        "[SCH][MINUTA] Campo Especificações Complementares "
+                        f"localizado. id={campo.get_attribute('id') or '-'} | "
+                        f"name={campo.get_attribute('name') or '-'}"
                     )
-
-                    for campo in candidatos:
-                        try:
-                            if campo.is_displayed():
-                                return campo
-                        except Exception:
-                            continue
-
-                    # Volta ao iframe principal do detalhe para continuar procurando.
-                    entrar_iframe_detalhe_analise(driver, None)
-
+                    return campo
                 except Exception:
-                    try:
-                        entrar_iframe_detalhe_analise(driver, None)
-                    except Exception:
-                        pass
                     continue
 
-        time.sleep(0.12)
+        try:
+            campo_js = driver.execute_script(
+                """
+                function visivel(el) {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.display !== 'none' && st.visibility !== 'hidden' &&
+                           Number(st.opacity || 1) !== 0 && r.width > 0 &&
+                           r.height > 0 && !el.disabled;
+                }
+
+                const norm = s => String(s || '')
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .trim()
+                    .toLowerCase();
+
+                const textos = Array.from(
+                    document.querySelectorAll('label, span, td, div, legend')
+                ).filter(el => norm(el.innerText || el.textContent)
+                    .includes('especificacoes complementares'));
+
+                for (const rotulo of textos) {
+                    const raiz = rotulo.closest('tr, td, fieldset, .ui-panel, div') || rotulo.parentElement;
+                    if (raiz) {
+                        const interno = Array.from(
+                            raiz.querySelectorAll('textarea:not([disabled])')
+                        ).find(visivel);
+                        if (interno) return interno;
+                    }
+
+                    let atual = rotulo;
+                    for (let i = 0; i < 12 && atual; i++, atual = atual.nextElementSibling) {
+                        if (atual.matches && atual.matches('textarea:not([disabled])') && visivel(atual)) {
+                            return atual;
+                        }
+                        const filho = atual.querySelector
+                            ? Array.from(atual.querySelectorAll('textarea:not([disabled])')).find(visivel)
+                            : null;
+                        if (filho) return filho;
+                    }
+                }
+                return null;
+                """
+            )
+            if campo_js is not None:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                    campo_js,
+                )
+                print(
+                    "[SCH][MINUTA] Campo Especificações Complementares "
+                    f"localizado por fallback DOM. id={campo_js.get_attribute('id') or '-'} | "
+                    f"name={campo_js.get_attribute('name') or '-'}"
+                )
+                return campo_js
+        except Exception:
+            pass
+
+        if time.time() <= limite:
+            time.sleep(0.12)
 
     return None
 
@@ -5977,81 +5996,98 @@ def tipo_produto_deve_limpar_especificacoes_complementares(tipo_produto):
 
 def _limpar_elemento_especificacoes_complementares(driver, campo):
     """
-    Limpa textarea, input ou editor rico e dispara eventos reconhecidos
-    por JSF/PrimeFaces.
+    Apaga o textarea e confirma pela propriedade real ``value``.
+
+    Primeiro simula a ação manual. Se o navegador não entregar as teclas ao
+    textarea, usa o setter nativo do HTMLTextAreaElement e dispara os eventos
+    que o SCH/PrimeFaces utiliza para reconhecer a alteração.
     """
     driver.execute_script(
         "arguments[0].scrollIntoView({block:'center', inline:'center'});",
         campo,
     )
 
-    try:
-        _clicar_com_fallback(driver, campo)
-    except Exception:
-        pass
-
-    try:
-        campo.send_keys(Keys.CONTROL, "a")
-        campo.send_keys(Keys.DELETE)
-    except Exception:
-        pass
-
-    try:
-        ActionChains(driver).click(campo).key_down(Keys.CONTROL).send_keys(
-            "a"
-        ).key_up(Keys.CONTROL).send_keys(Keys.DELETE).perform()
-    except Exception:
-        pass
-
-    driver.execute_script(
-        """
-        const el = arguments[0];
-
-        try {
-            if ('value' in el) {
-                el.value = '';
-            }
-        } catch (e) {}
-
-        try {
-            if (el.isContentEditable || el.tagName === 'BODY') {
-                el.innerHTML = '';
-                el.textContent = '';
-            }
-        } catch (e) {}
-
-        ['input', 'keyup', 'change', 'blur'].forEach(function(nome) {
-            try {
-                el.dispatchEvent(new Event(nome, {bubbles: true}));
-            } catch (e) {}
-        });
-
-        try {
-            if (window.jQuery) {
-                window.jQuery(el)
-                    .val('')
-                    .trigger('input')
-                    .trigger('keyup')
-                    .trigger('change')
-                    .trigger('blur');
-            }
-        } catch (e) {}
-        """,
-        campo,
+    valor_antes = _ler_valor_campo_minuta(driver, campo)
+    print(
+        "[SCH][MINUTA] Limpando Especificações Complementares. "
+        f"Quantidade anterior: {len(valor_antes)} caractere(s)."
     )
 
     try:
-        campo.send_keys(Keys.TAB)
-    except Exception:
-        pass
+        driver.execute_script("arguments[0].focus();", campo)
+        campo.click()
+        campo.send_keys(Keys.CONTROL, "a")
+        time.sleep(0.15)
+        campo.send_keys(Keys.DELETE)
+        campo.send_keys(Keys.BACKSPACE)
+        time.sleep(0.25)
+    except Exception as e:
+        print(
+            "[SCH][MINUTA][WARN] Falha na limpeza pelo teclado: "
+            f"{type(e).__name__}: {e}"
+        )
+
+    if not _ler_valor_campo_minuta(driver, campo):
+        try:
+            campo.send_keys(Keys.TAB)
+        except Exception:
+            pass
+        print("[SCH][MINUTA] Campo apagado pelo teclado e conferido.")
+        return True
+
+    try:
+        resultado_js = driver.execute_script(
+            """
+            const campo = arguments[0];
+            campo.focus();
+
+            const proto = Object.getPrototypeOf(campo);
+            const desc = Object.getOwnPropertyDescriptor(proto, 'value') ||
+                         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+
+            if (desc && typeof desc.set === 'function') {
+                desc.set.call(campo, '');
+            } else {
+                campo.value = '';
+            }
+
+            campo.defaultValue = '';
+            campo.dispatchEvent(new Event('input', {bubbles: true}));
+            campo.dispatchEvent(new Event('change', {bubbles: true}));
+            campo.dispatchEvent(new KeyboardEvent('keyup', {
+                bubbles: true,
+                key: 'Backspace',
+                code: 'Backspace'
+            }));
+            campo.dispatchEvent(new Event('blur', {bubbles: true}));
+
+            return {
+                valor: String(campo.value == null ? '' : campo.value),
+                id: campo.id || '',
+                name: campo.name || ''
+            };
+            """,
+            campo,
+        ) or {}
+        print(f"[SCH][MINUTA] Resultado da limpeza por JavaScript: {resultado_js}")
+    except Exception as e:
+        print(
+            "[SCH][MINUTA][WARN] Falha na limpeza por JavaScript: "
+            f"{type(e).__name__}: {e}"
+        )
 
     time.sleep(0.35)
+    valor_final = _ler_valor_campo_minuta(driver, campo)
 
-    return not bool(
-        _normalizar_texto_comparacao(
-            _valor_campo_minuta(driver, campo)
+    if valor_final:
+        print(
+            "[SCH][MINUTA][WARN] O textarea ainda possui "
+            f"{len(valor_final)} caractere(s) após a limpeza."
         )
-    )
+        return False
+
+    print("[SCH][MINUTA] Conteúdo do textarea removido e conferido.")
+    return True
 
 
 def limpar_especificacoes_complementares_minuta_se_necessario(
@@ -6142,7 +6178,7 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
             )
 
         resultado["campo_encontrado"] = True
-        conteudo_anterior = _valor_campo_minuta(driver, campo)
+        conteudo_anterior = _ler_valor_campo_minuta(driver, campo)
         resultado["conteudo_anterior"] = conteudo_anterior
 
         if conteudo_anterior.strip():
