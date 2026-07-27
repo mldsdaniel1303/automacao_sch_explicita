@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import re
 import sys
 
@@ -6,97 +7,331 @@ from fluxo_sch import executar_fluxo_sch
 from modo_analise_local import executar_modo_analise_local
 
 
-def perguntar_opcao(mensagem, opcoes_validas):
+LARGURA_MENU = 72
+
+CATEGORIAS_ANEXOS_DISPONIVEIS = [
+    "Certificado de Conformidade Técnica - CCT",
+    "Relatório de Avaliação da Conformidade - RACT",
+    "Relatório de Ensaio",
+    "Manual do Produto",
+    "Fotos do produto",
+    "Fotos internas",
+    "Selo ANATEL",
+    "ART",
+    "Contrato Social",
+    "Outros",
+]
+
+
+def limpar_tela():
+    """
+    Limpa somente as telas de configuração.
+
+    Os logs da execução não são limpos depois que o processamento começa.
+    """
+    try:
+        os.system("cls" if os.name == "nt" else "clear")
+    except Exception:
+        pass
+
+
+def linha(caractere="="):
+    print(caractere * LARGURA_MENU)
+
+
+def titulo_secao(titulo):
+    print()
+    linha("-")
+    print(titulo)
+    linha("-")
+
+
+def sim_nao(valor):
+    return "Sim" if valor else "Não"
+
+
+def perguntar_opcao(mensagem, opcoes_validas, padrao=None):
+    opcoes_validas = {str(opcao) for opcao in opcoes_validas}
+
     while True:
         valor = input(mensagem).strip()
+
+        if not valor and padrao is not None:
+            valor = str(padrao)
+
         if valor in opcoes_validas:
             return valor
-        print(f"[ERRO] Opção inválida. Escolha uma destas: {', '.join(opcoes_validas)}")
+
+        print(
+            "[ERRO] Opção inválida. Escolha: "
+            + ", ".join(sorted(opcoes_validas))
+        )
+
+
+def perguntar_inteiro_positivo(mensagem):
+    while True:
+        valor = input(mensagem).strip()
+
+        if valor.isdigit() and int(valor) > 0:
+            return int(valor)
+
+        print("[ERRO] Digite um número inteiro maior que zero.")
 
 
 def perguntar_inteiro_opcional(mensagem):
     while True:
         valor = input(mensagem).strip()
+
         if not valor:
             return None
+
         if valor.isdigit() and int(valor) > 0:
             return int(valor)
-        print("[ERRO] Digite um número inteiro maior que zero, ou pressione Enter para todos.")
+
+        print(
+            "[ERRO] Digite um número inteiro maior que zero "
+            "ou pressione Enter para todos."
+        )
 
 
 def perguntar_sim_nao(mensagem, padrao=True):
     sufixo = " [S/n]: " if padrao else " [s/N]: "
-    valor = input(mensagem + sufixo).strip().lower()
 
-    if not valor:
-        return padrao
+    while True:
+        valor = input(mensagem + sufixo).strip().lower()
 
-    return valor in {"s", "sim", "y", "yes", "1"}
+        if not valor:
+            return padrao
+
+        if valor in {"s", "sim", "y", "yes", "1"}:
+            return True
+
+        if valor in {"n", "nao", "não", "no", "0"}:
+            return False
+
+        print("[ERRO] Responda com S para sim ou N para não.")
+
+
+def escolher_fila_sch():
+    titulo_secao("ETAPA 1 DE 6 — FILA DO SCH")
+    print("Escolha a fila antes das demais configurações.")
+    print()
+    print("1. Em Análise")
+    print("   Analisa CCT, confere SCH × CCT e pode preencher abas.")
+    print()
+    print("2. Retorno Para Estudo")
+    print("   Compara versões e trata a minuta conforme as regras da fila.")
+    print()
+    print("0. Voltar ao menu principal")
+
+    opcao = perguntar_opcao("\nOpção [0-2]: ", {"0", "1", "2"})
+
+    if opcao == "0":
+        return None
+
+    return "Em Análise" if opcao == "1" else "Retorno Para Estudo"
+
+
+def escolher_navegador():
+    titulo_secao("ETAPA 2 DE 6 — NAVEGADOR")
+    print("1. Chrome")
+    print("2. Edge")
+    print("0. Voltar")
+
+    opcao = perguntar_opcao("\nOpção [0-2]: ", {"0", "1", "2"})
+
+    if opcao == "0":
+        return None
+
+    return "chrome" if opcao == "1" else "edge"
+
+
+def escolher_requerimentos():
+    titulo_secao("ETAPA 3 DE 6 — REQUERIMENTOS")
+    print("1. Todos os requerimentos da fila")
+    print("2. Processar uma quantidade determinada")
+    print("3. Processar um requerimento específico")
+    print("0. Voltar")
+
+    opcao = perguntar_opcao("\nOpção [0-3]: ", {"0", "1", "2", "3"})
+
+    if opcao == "0":
+        return None
+
+    if opcao == "1":
+        descricao = "Todos os requerimentos da fila"
+        limite = None
+        requerimento_especifico = None
+
+    elif opcao == "2":
+        limite = perguntar_inteiro_positivo(
+            "Quantidade de requerimentos: "
+        )
+        requerimento_especifico = None
+        descricao = f"Primeiros {limite} requerimento(s) da fila"
+
+    else:
+        while True:
+            requerimento_especifico = input(
+                "Número do requerimento, exemplo 04334/26: "
+            ).strip()
+
+            if re.search(r"\d", requerimento_especifico):
+                break
+
+            print("[ERRO] Informe um número de requerimento válido.")
+
+        limite = None
+        descricao = f"Somente {requerimento_especifico}"
+
+    somente_pendentes = perguntar_sim_nao(
+        "Processar somente requerimentos ainda não processados?",
+        padrao=False,
+    )
+
+    return {
+        "descricao_requerimentos": descricao,
+        "limite_requerimentos": limite,
+        "requerimento_especifico": requerimento_especifico,
+        "processar_somente_pendentes": somente_pendentes,
+    }
 
 
 def escolher_categorias_anexos():
-    categorias_disponiveis = [
-        "Certificado de Conformidade Técnica - CCT",
-        "Relatório de Avaliação da Conformidade - RACT",
-        "Relatório de Ensaio",
-        "Manual do Produto",
-        "Fotos do produto",
-        "Fotos internas",
-        "Selo ANATEL",
-        "ART",
-        "Contrato Social",
-        "Outros",
-    ]
-
-    print("\nQuais categorias de anexos deseja baixar?")
+    titulo_secao("ETAPA 4 DE 6 — DOCUMENTOS")
+    print("Quais categorias deseja baixar?")
+    print()
     print("1. Todas as categorias")
     print("2. Somente CCT e RACT")
-    print("3. Escolher manualmente")
+    print("3. Escolher categorias manualmente")
+    print("0. Voltar")
 
     while True:
-        opcao = input("Opção [1/2/3]: ").strip() or "1"
+        opcao = perguntar_opcao(
+            "\nOpção [0-3]: ",
+            {"0", "1", "2", "3"},
+        )
+
+        if opcao == "0":
+            return None
 
         if opcao == "1":
-            return categorias_disponiveis
+            categorias = list(CATEGORIAS_ANEXOS_DISPONIVEIS)
+            descricao = "Todas as categorias"
+            break
 
         if opcao == "2":
-            return [
+            categorias = [
                 "Certificado de Conformidade Técnica - CCT",
                 "Relatório de Avaliação da Conformidade - RACT",
             ]
+            descricao = "Somente CCT e RACT"
+            break
 
-        if opcao == "3":
-            print("\nCategorias disponíveis:")
-            for i, categoria in enumerate(categorias_disponiveis, start=1):
-                print(f"{i}. {categoria}")
+        print("\nCategorias disponíveis:")
 
-            escolha = input(
-                "Digite os números separados por vírgula. Exemplo: 1,2,3: "
-            ).strip()
+        for indice, categoria in enumerate(
+            CATEGORIAS_ANEXOS_DISPONIVEIS,
+            start=1,
+        ):
+            print(f"{indice:>2}. {categoria}")
 
-            indices = []
+        escolha = input(
+            "\nDigite os números separados por vírgula. "
+            "Exemplo: 1,2,3: "
+        ).strip()
 
-            for parte in escolha.split(","):
-                parte = parte.strip()
+        indices = []
 
-                if parte.isdigit():
-                    indices.append(int(parte))
+        for parte in escolha.split(","):
+            parte = parte.strip()
 
-            selecionadas = [
-                categorias_disponiveis[i - 1]
-                for i in indices
-                if 1 <= i <= len(categorias_disponiveis)
-            ]
+            if parte.isdigit():
+                indices.append(int(parte))
 
-            selecionadas = list(dict.fromkeys(selecionadas))
+        categorias = [
+            CATEGORIAS_ANEXOS_DISPONIVEIS[indice - 1]
+            for indice in indices
+            if 1 <= indice <= len(CATEGORIAS_ANEXOS_DISPONIVEIS)
+        ]
+        categorias = list(dict.fromkeys(categorias))
 
-            if selecionadas:
-                return selecionadas
+        if categorias:
+            descricao = "Seleção manual"
+            break
 
-            print("[ERRO] Nenhuma categoria válida selecionada.")
+        print("[ERRO] Nenhuma categoria válida selecionada.")
 
-        else:
-            print("[ERRO] Opção inválida. Escolha 1, 2 ou 3.")
+    pausar_antes_anexos = perguntar_sim_nao(
+        "Pausar para conferência manual antes de baixar os documentos?",
+        padrao=False,
+    )
+
+    return {
+        "categorias_anexos": categorias,
+        "descricao_categorias": descricao,
+        "pausar_antes_anexos": pausar_antes_anexos,
+    }
+
+
+def escolher_acoes_da_fila(fila_sch):
+    titulo_secao(f"ETAPA 5 DE 6 — AÇÕES: {fila_sch.upper()}")
+
+    if fila_sch == "Em Análise":
+        print(
+            "As opções abaixo controlam somente o fluxo da fila "
+            "Em Análise."
+        )
+        print()
+
+        processar_apenas_rr = perguntar_sim_nao(
+            "Aplicar filtro de Radiação Restrita?",
+            padrao=True,
+        )
+        preencher_caracteristicas = perguntar_sim_nao(
+            "Preencher Características Técnicas?",
+            padrao=True,
+        )
+        preencher_minuta = perguntar_sim_nao(
+            "Executar análise de SAR e Corrigir Minuta quando necessário?",
+            padrao=True,
+        )
+        preencher_informacoes = perguntar_sim_nao(
+            "Preencher Informações Adicionais?",
+            padrao=False,
+        )
+
+        return {
+            "processar_apenas_radiacao_restrita": processar_apenas_rr,
+            "preencher_caracteristicas": preencher_caracteristicas,
+            "preencher_minuta": preencher_minuta,
+            "preencher_informacoes_adicionais": preencher_informacoes,
+            "executar_envio_retorno_para_estudo": False,
+        }
+
+    print("As etapas próprias desta fila serão executadas automaticamente:")
+    print("- Comparar Versões")
+    print(
+        "- Limpar Especificações Complementares quando o tipo de "
+        "produto estiver na lista configurada"
+    )
+    print("- Bloquear aprovação quando a limpeza obrigatória não for confirmada")
+    print()
+
+    executar_envio = perguntar_sim_nao(
+        "Permitir aprovação automática quando a análise estiver apta?",
+        padrao=False,
+    )
+
+    return {
+        # O filtro por tipo não participa da análise de Retorno Para Estudo.
+        "processar_apenas_radiacao_restrita": False,
+        # Estas abas não pertencem ao fluxo de Retorno Para Estudo.
+        "preencher_caracteristicas": False,
+        "preencher_minuta": False,
+        "preencher_informacoes_adicionais": False,
+        "executar_envio_retorno_para_estudo": executar_envio,
+    }
 
 
 def escolher_pasta(titulo, pasta_padrao):
@@ -124,7 +359,10 @@ def escolher_pasta(titulo, pasta_padrao):
         pass
 
     print(f"[INFO] Pasta padrão sugerida: {pasta_padrao}")
-    digitado = input("Digite o caminho da pasta ou pressione Enter para usar a pasta padrão: ").strip()
+
+    digitado = input(
+        "Digite o caminho ou pressione Enter para usar a pasta padrão: "
+    ).strip()
 
     if digitado:
         return Path(digitado).expanduser().resolve()
@@ -148,44 +386,39 @@ def normalizar_pasta_base_fluxo(pasta):
     }
 
     if nome in subpastas_internas:
-        print(f"[INFO] A pasta selecionada foi '{pasta.name}'. Usando a pasta pai como saída base.")
+        print(
+            f"[INFO] A pasta selecionada foi '{pasta.name}'. "
+            "Usando a pasta pai como saída base."
+        )
         return pasta.parent
 
     if re.fullmatch(r"\d{3,}", pasta.name or ""):
         if pasta.parent.name.lower() == "requerimentos":
             print(
-                f"[INFO] Pasta de requerimento detectada ('{pasta.name}'). "
-                f"Usando a pasta base da execução."
+                f"[INFO] Pasta de requerimento detectada "
+                f"('{pasta.name}'). Usando a pasta base da execução."
             )
             return pasta.parent.parent
 
     if nome == "anexos":
         pai = pasta.parent
         avo = pai.parent
-        if re.fullmatch(r"\d{3,}", pai.name or "") and avo.name.lower() == "requerimentos":
+
+        if (
+            re.fullmatch(r"\d{3,}", pai.name or "")
+            and avo.name.lower() == "requerimentos"
+        ):
             print(
-                f"[INFO] Pasta de anexos de requerimento detectada ('{pasta.name}'). "
-                f"Usando a pasta base da execução."
+                "[INFO] Pasta de anexos de requerimento detectada. "
+                "Usando a pasta base da execução."
             )
             return avo.parent
 
     return pasta
 
 
-def exibir_menu():
-    print("\n" + "=" * 90)
-    print("AUTOMAÇÃO SCH - MENU PRINCIPAL")
-    print("=" * 90)
-    print("1. Fluxo completo SCH")
-    print("2. Somente analisar requerimentos já baixados")
-    print("0. Sair")
-    print("=" * 90)
-
-
-def coletar_opcoes_fluxo_completo():
-    print("\n=== FLUXO COMPLETO SCH ===")
-    print("Este modo abre o SCH, entra na fila, baixa anexos, analisa documentos e")
-    print("opcionalmente preenche abas no sistema.")
+def escolher_saida_e_comportamento():
+    titulo_secao("ETAPA 6 DE 6 — SAÍDA E ENCERRAMENTO")
 
     pasta_escolhida = escolher_pasta(
         "Escolha a pasta base da execução",
@@ -193,79 +426,140 @@ def coletar_opcoes_fluxo_completo():
     )
     pasta_base = normalizar_pasta_base_fluxo(pasta_escolhida)
 
-    limite = perguntar_inteiro_opcional(
-        "\nQuantos requerimentos deseja processar? "
-        "(Enter = todos): "
-    )
-
-    processar_somente_pendentes = perguntar_sim_nao(
-        "Deseja processar somente requerimentos ainda não processados?",
-        padrao=False,
-    )
-
-    processar_apenas_radiacao_restrita = perguntar_sim_nao(
-        "Deseja manter o filtro de radiação restrita?",
+    manter_aberto = perguntar_sim_nao(
+        "Manter o navegador aberto ao final da execução?",
         padrao=True,
-    )
-
-    preencher_sch = perguntar_sim_nao(
-        "Deseja preencher abas do SCH durante o processamento?",
-        padrao=True,
-    )
-
-    preencher_caracteristicas = preencher_sch and perguntar_sim_nao(
-        "Deseja preencher Características Técnicas?",
-        padrao=True,
-    )
-
-    preencher_minuta = preencher_sch and perguntar_sim_nao(
-        "Deseja preencher Corrigir Minuta quando aplicável?",
-        padrao=True,
-    )
-
-    preencher_informacoes_adicionais = preencher_sch and perguntar_sim_nao(
-        "Deseja preencher Informações Adicionais?",
-        padrao=False,
-    )
-
-    pausar_antes_anexos = perguntar_sim_nao(
-        "Deseja manter pausa manual antes da aba Anexos?",
-        padrao=False,
-    )
-
-    categorias_anexos = escolher_categorias_anexos()
-
-    executar_envio_retorno_para_estudo = perguntar_sim_nao(
-        "Deseja permitir aprovação automática em Retorno Para Estudo quando a análise julgar apto?",
-        padrao=False,
     )
 
     return {
         "pasta_base": pasta_base,
-        "limite_requerimentos": limite,
-        "processar_somente_pendentes": processar_somente_pendentes,
-        "processar_apenas_radiacao_restrita": processar_apenas_radiacao_restrita,
-        "preencher_caracteristicas": preencher_caracteristicas,
-        "preencher_minuta": preencher_minuta,
-        "preencher_informacoes_adicionais": preencher_informacoes_adicionais,
-        "pausar_antes_anexos": pausar_antes_anexos,
-        "categorias_anexos": categorias_anexos,
-        "executar_envio_retorno_para_estudo": executar_envio_retorno_para_estudo,
+        "fechar_navegador_ao_final": not manter_aberto,
     }
 
 
+def coletar_opcoes_fluxo_completo():
+    """
+    Coleta as configurações na ordem em que elas afetam o fluxo.
+
+    Retorna None quando o analista decide voltar ao menu principal.
+    """
+    while True:
+        limpar_tela()
+        linha()
+        print("AUTOMAÇÃO SCH — NOVA EXECUÇÃO")
+        linha()
+
+        fila_sch = escolher_fila_sch()
+
+        if fila_sch is None:
+            return None
+
+        navegador = escolher_navegador()
+
+        if navegador is None:
+            continue
+
+        requerimentos = escolher_requerimentos()
+
+        if requerimentos is None:
+            continue
+
+        documentos = escolher_categorias_anexos()
+
+        if documentos is None:
+            continue
+
+        acoes = escolher_acoes_da_fila(fila_sch)
+        saida = escolher_saida_e_comportamento()
+
+        opcoes = {
+            "fila_sch": fila_sch,
+            "navegador": navegador,
+            **requerimentos,
+            **documentos,
+            **acoes,
+            **saida,
+        }
+
+        return opcoes
+
+
+def exibir_resumo_fluxo_completo(opcoes):
+    limpar_tela()
+    linha()
+    print("RESUMO DA EXECUÇÃO")
+    linha()
+
+    print(f"Fila: {opcoes['fila_sch']}")
+    print(f"Navegador: {opcoes['navegador'].title()}")
+    print(f"Requerimentos: {opcoes['descricao_requerimentos']}")
+    print(
+        "Somente pendentes: "
+        f"{sim_nao(opcoes['processar_somente_pendentes'])}"
+    )
+    print(f"Pasta de saída: {opcoes['pasta_base']}")
+
+    titulo_secao("DOCUMENTOS")
+    print(f"Seleção: {opcoes['descricao_categorias']}")
+
+    for categoria in opcoes["categorias_anexos"]:
+        print(f"- {categoria}")
+
+    print(
+        "Pausa antes dos documentos: "
+        f"{sim_nao(opcoes['pausar_antes_anexos'])}"
+    )
+
+    titulo_secao("AÇÕES")
+
+    if opcoes["fila_sch"] == "Em Análise":
+        print(
+            "Filtro de Radiação Restrita: "
+            f"{sim_nao(opcoes['processar_apenas_radiacao_restrita'])}"
+        )
+        print(
+            "Características Técnicas: "
+            f"{sim_nao(opcoes['preencher_caracteristicas'])}"
+        )
+        print(
+            "Análise de SAR / Corrigir Minuta: "
+            f"{sim_nao(opcoes['preencher_minuta'])}"
+        )
+        print(
+            "Informações Adicionais: "
+            f"{sim_nao(opcoes['preencher_informacoes_adicionais'])}"
+        )
+    else:
+        print("Comparar Versões: Sim")
+        print(
+            "Limpeza de Especificações Complementares: "
+            "Automática quando aplicável"
+        )
+        print(
+            "Aprovação automática quando apto: "
+            f"{sim_nao(opcoes['executar_envio_retorno_para_estudo'])}"
+        )
+
+    print(
+        "Manter navegador aberto ao final: "
+        f"{sim_nao(not opcoes['fechar_navegador_ao_final'])}"
+    )
+
+    linha()
+
+
 def coletar_opcoes_analise_local():
-    print("\n=== SOMENTE ANÁLISE LOCAL ===")
-    print("Este modo NÃO abre o SCH.")
-    print("Ele apenas analisa documentos já baixados e gera relatórios.")
-    print("\nVocê pode selecionar uma destas opções de pasta:")
-    print("1. A pasta base da execução, que contém 'requerimentos/'")
-    print("2. A própria pasta 'requerimentos/'")
-    print("3. A pasta de um único requerimento")
-    print("\nExemplos aceitos:")
-    print(r"  C:\Projetos\automacao_sch_output")
-    print(r"  C:\Projetos\automacao_sch_output\requerimentos")
-    print(r"  C:\Projetos\automacao_sch_output\requerimentos\123456")
+    limpar_tela()
+    linha()
+    print("SOMENTE ANÁLISE LOCAL")
+    linha()
+    print("Este modo não abre o SCH.")
+    print("Ele analisa documentos já baixados e gera relatórios.")
+    print()
+    print("A pasta pode ser:")
+    print("- a base da execução, contendo requerimentos/")
+    print("- a própria pasta requerimentos/")
+    print("- a pasta de um único requerimento")
 
     pasta_base = escolher_pasta(
         "Escolha a pasta para análise local",
@@ -277,86 +571,137 @@ def coletar_opcoes_analise_local():
         "(Enter = todos): "
     )
 
-    processar_somente_pendentes = perguntar_sim_nao(
-        "Deseja analisar somente requerimentos ainda não analisados?",
+    somente_pendentes = perguntar_sim_nao(
+        "Analisar somente requerimentos ainda não analisados?",
         padrao=False,
     )
 
     return {
         "pasta_base": pasta_base,
         "limite_requerimentos": limite,
-        "processar_somente_pendentes": processar_somente_pendentes,
+        "processar_somente_pendentes": somente_pendentes,
     }
+
+
+def exibir_menu():
+    limpar_tela()
+    linha()
+    print("AUTOMAÇÃO SCH")
+    linha()
+    print("1. Processar requerimentos diretamente no SCH")
+    print("2. Analisar documentos já baixados")
+    print("0. Sair")
+    linha()
+
+
+def executar_configuracao_fluxo_completo():
+    while True:
+        opcoes = coletar_opcoes_fluxo_completo()
+
+        if opcoes is None:
+            return None
+
+        exibir_resumo_fluxo_completo(opcoes)
+
+        print("1. Iniciar execução")
+        print("2. Alterar configurações")
+        print("0. Voltar ao menu principal")
+
+        decisao = perguntar_opcao(
+            "\nOpção [0-2]: ",
+            {"0", "1", "2"},
+            padrao="1",
+        )
+
+        if decisao == "0":
+            return None
+
+        if decisao == "2":
+            continue
+
+        # Campos usados apenas para apresentação não pertencem à assinatura
+        # de executar_fluxo_sch.
+        opcoes_execucao = dict(opcoes)
+        opcoes_execucao.pop("descricao_requerimentos", None)
+        opcoes_execucao.pop("descricao_categorias", None)
+
+        print()
+        linha()
+        print("INICIANDO AUTOMAÇÃO")
+        linha()
+
+        executar_fluxo_sch(**opcoes_execucao)
+        return True
+
+
+def executar_configuracao_analise_local():
+    opcoes = coletar_opcoes_analise_local()
+
+    print()
+    linha()
+    print("RESUMO — ANÁLISE LOCAL")
+    linha()
+    print(f"Pasta selecionada: {opcoes['pasta_base']}")
+    print(
+        "Limite de requerimentos: "
+        f"{opcoes['limite_requerimentos'] or 'todos'}"
+    )
+    print(
+        "Somente pendentes: "
+        f"{sim_nao(opcoes['processar_somente_pendentes'])}"
+    )
+    linha()
+
+    if perguntar_sim_nao("Iniciar análise local agora?", padrao=True):
+        executar_modo_analise_local(**opcoes)
+        return True
+
+    return None
 
 
 def main():
     try:
         while True:
             exibir_menu()
-            opcao = perguntar_opcao("\nEscolha uma opção: ", {"0", "1", "2"})
+            opcao = perguntar_opcao(
+                "\nEscolha uma opção: ",
+                {"0", "1", "2"},
+            )
 
             if opcao == "0":
                 print("[INFO] Encerrando programa.")
                 return 0
 
             if opcao == "1":
-                opcoes = coletar_opcoes_fluxo_completo()
+                executou = executar_configuracao_fluxo_completo()
 
-                print("\n" + "=" * 90)
-                print("RESUMO DA EXECUÇÃO - FLUXO COMPLETO")
-                print("=" * 90)
-                print(f"Pasta base: {opcoes['pasta_base']}")
-                print(f"Limite de requerimentos: {opcoes['limite_requerimentos'] or 'todos'}")
-                print(f"Somente pendentes: {'sim' if opcoes['processar_somente_pendentes'] else 'não'}")
-                print(f"Filtro radiação restrita: {'sim' if opcoes['processar_apenas_radiacao_restrita'] else 'não'}")
-                print(f"Preencher Características Técnicas: {'sim' if opcoes['preencher_caracteristicas'] else 'não'}")
-                print(f"Preencher Corrigir Minuta: {'sim' if opcoes['preencher_minuta'] else 'não'}")
-                print(f"Preencher Informações Adicionais: {'sim' if opcoes['preencher_informacoes_adicionais'] else 'não'}")
-                print(f"Pausa antes de anexos: {'sim' if opcoes['pausar_antes_anexos'] else 'não'}")
-                print(f"Categorias de anexos: {', '.join(opcoes['categorias_anexos'])}")
-                print(
-                    "Aprovação automática em Retorno Para Estudo: "
-                    f"{'sim' if opcoes['executar_envio_retorno_para_estudo'] else 'não'}"
-                )
-                print("=" * 90)
+                if executou:
+                    return 0
 
-                if perguntar_sim_nao("Deseja iniciar agora?", padrao=True):
-                    executar_fluxo_sch(**opcoes)
-                else:
-                    print("[INFO] Execução cancelada pelo usuário.")
-
-                return 0
+                continue
 
             if opcao == "2":
-                opcoes = coletar_opcoes_analise_local()
+                executou = executar_configuracao_analise_local()
 
-                print("\n" + "=" * 90)
-                print("RESUMO DA EXECUÇÃO - ANÁLISE LOCAL")
-                print("=" * 90)
-                print(f"Pasta selecionada: {opcoes['pasta_base']}")
-                print(f"Limite de requerimentos: {opcoes['limite_requerimentos'] or 'todos'}")
-                print(f"Somente pendentes: {'sim' if opcoes['processar_somente_pendentes'] else 'não'}")
-                print("=" * 90)
-
-                if perguntar_sim_nao("Deseja iniciar agora?", padrao=True):
-                    executar_modo_analise_local(**opcoes)
-                else:
-                    print("[INFO] Execução cancelada pelo usuário.")
-
-                return 0
+                if executou:
+                    return 0
 
     except KeyboardInterrupt:
         print("\n[INFO] Execução interrompida pelo usuário.")
-        print("[INFO] Se o fluxo já tinha iniciado, o relatório parcial é tratado no fluxo_sch.py.")
+        print(
+            "[INFO] Se o fluxo já havia iniciado, o relatório parcial "
+            "é tratado no fluxo_sch.py."
+        )
         return 1
 
     except Exception as e:
-        print("\n" + "=" * 90)
+        print()
+        linha()
         print("[ERRO FATAL] Falha geral no programa.")
-        print("=" * 90)
+        linha()
         print(f"Tipo: {type(e).__name__}")
         print(f"Mensagem: {e}")
-        print("=" * 90)
+        linha()
         return 1
 
 
@@ -368,12 +713,13 @@ if __name__ == "__main__":
 
     except Exception as e:
         codigo_saida = 1
-        print("\n" + "=" * 90)
+        print()
+        linha()
         print("[ERRO FATAL NÃO TRATADO]")
-        print("=" * 90)
+        linha()
         print(f"Tipo: {type(e).__name__}")
         print(f"Mensagem: {e}")
-        print("=" * 90)
+        linha()
 
     finally:
         try:

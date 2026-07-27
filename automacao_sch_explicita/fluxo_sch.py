@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+import builtins
 import re
 import unicodedata
 
@@ -38,7 +39,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.7.7"
+VERSAO_SCRIPT = "0.7.8"
 
 
 def _normalizar_texto(valor):
@@ -237,7 +238,85 @@ def contar_arquivos_requerimento(pasta_req):
     )
 
 
-def _criar_driver_com_pasta(pasta_base):
+def _normalizar_navegador_preferido(valor):
+    texto = _normalizar_texto(valor)
+
+    if texto in {"1", "chrome", "google chrome"}:
+        return "chrome"
+
+    if texto in {"2", "edge", "microsoft edge"}:
+        return "edge"
+
+    return ""
+
+
+def _invocar_criar_driver(
+    kwargs_base,
+    navegador=None,
+):
+    """
+    Tenta informar o navegador diretamente ao navegador.py.
+
+    Como versões anteriores do projeto usam assinaturas diferentes, a função
+    testa nomes de parâmetro comuns. Quando criar_driver ainda pergunta pelo
+    terminal, intercepta somente a pergunta de Chrome/Edge e responde com a
+    escolha feita no novo menu.
+    """
+    kwargs_base = dict(kwargs_base or {})
+    navegador_norm = _normalizar_navegador_preferido(navegador)
+
+    if not navegador_norm:
+        return criar_driver(**kwargs_base)
+
+    nomes_parametro = [
+        "navegador",
+        "browser",
+        "tipo_navegador",
+        "navegador_escolhido",
+        "browser_name",
+    ]
+
+    for nome_parametro in nomes_parametro:
+        try:
+            kwargs = dict(kwargs_base)
+            kwargs[nome_parametro] = navegador_norm
+            return criar_driver(**kwargs)
+        except TypeError:
+            continue
+
+    escolha_terminal = "1" if navegador_norm == "chrome" else "2"
+    input_original = builtins.input
+
+    def input_com_navegador(prompt=""):
+        prompt_norm = _normalizar_texto(prompt)
+
+        eh_pergunta_navegador = (
+            "navegador" in prompt_norm
+            or (
+                "chrome" in prompt_norm
+                and "edge" in prompt_norm
+            )
+            or (
+                "opcao" in prompt_norm
+                and "1/2" in prompt_norm
+            )
+        )
+
+        if eh_pergunta_navegador:
+            print(f"{prompt}{escolha_terminal}")
+            return escolha_terminal
+
+        return input_original(prompt)
+
+    builtins.input = input_com_navegador
+
+    try:
+        return criar_driver(**kwargs_base)
+    finally:
+        builtins.input = input_original
+
+
+def _criar_driver_com_pasta(pasta_base, navegador=None):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
 
@@ -245,20 +324,46 @@ def _criar_driver_com_pasta(pasta_base):
     pasta_download.mkdir(parents=True, exist_ok=True)
 
     tentativas = [
-        {"pasta_base": str(pasta_base), "pasta_download": str(pasta_download)},
-        {"pasta_saida_base": str(pasta_base), "pasta_download": str(pasta_download)},
-        {"pasta_saida": str(pasta_base), "pasta_download": str(pasta_download)},
+        {
+            "pasta_base": str(pasta_base),
+            "pasta_download": str(pasta_download),
+        },
+        {
+            "pasta_saida_base": str(pasta_base),
+            "pasta_download": str(pasta_download),
+        },
+        {
+            "pasta_saida": str(pasta_base),
+            "pasta_download": str(pasta_download),
+        },
     ]
+
+    ultimo_erro = None
 
     for kwargs in tentativas:
         try:
-            return criar_driver(**kwargs)
-        except TypeError:
+            return _invocar_criar_driver(
+                kwargs,
+                navegador=navegador,
+            )
+        except TypeError as e:
+            ultimo_erro = e
             continue
 
-    print("[WARN] criar_driver() não aceitou pasta personalizada. Usando comportamento atual do navegador.")
-    return criar_driver()
+    print(
+        "[WARN] criar_driver() não aceitou pasta personalizada. "
+        "Usando o comportamento padrão do navegador.py."
+    )
 
+    try:
+        return _invocar_criar_driver(
+            {},
+            navegador=navegador,
+        )
+    except Exception:
+        if ultimo_erro:
+            raise ultimo_erro
+        raise
 
 def perguntar_se_fecha_navegador():
     while True:
@@ -471,9 +576,43 @@ def _gerar_relatorios_parciais_execucao(
     }
 
 
+def _requerimento_corresponde_ao_alvo(req, alvo):
+    """
+    Compara requerimentos preservando o ano quando ele foi informado.
+
+    Exemplos aceitos:
+    - 04334/26
+    - 04334
+    """
+    alvo = str(alvo or "").strip()
+
+    if not alvo:
+        return False
+
+    numero_req = _numero_requerimento(req)
+    digitos_req = re.sub(r"\D+", "", numero_req)
+    digitos_alvo = re.sub(r"\D+", "", alvo)
+
+    if not digitos_req or not digitos_alvo:
+        return False
+
+    if "/" in alvo:
+        return digitos_req == digitos_alvo
+
+    numero_req_sem_ano = str(numero_req).split("/", 1)[0]
+    digitos_req_sem_ano = re.sub(r"\D+", "", numero_req_sem_ano)
+
+    return (
+        digitos_req_sem_ano.lstrip("0")
+        == digitos_alvo.lstrip("0")
+    )
+
+
 def executar_fluxo_sch(
     pasta_base,
     limite_requerimentos=None,
+    requerimento_especifico=None,
+    navegador=None,
     processar_somente_pendentes=False,
     processar_apenas_radiacao_restrita=True,
     preencher_caracteristicas=True,
@@ -516,7 +655,17 @@ def executar_fluxo_sch(
         and not fila_retorno
     )
 
-    driver, wait, pasta_saida_driver, pasta_download = _criar_driver_com_pasta(pasta_base)
+    print(
+        "[SCH] Navegador selecionado no menu: "
+        f"{(_normalizar_navegador_preferido(navegador) or 'padrão').title()}"
+    )
+
+    driver, wait, pasta_saida_driver, pasta_download = (
+        _criar_driver_com_pasta(
+            pasta_base,
+            navegador=navegador,
+        )
+    )
 
     if Path(pasta_saida_driver).resolve() != pasta_base:
         print(f"[WARN] O navegador retornou pasta de saída diferente da escolhida: {pasta_saida_driver}")
@@ -548,8 +697,28 @@ def executar_fluxo_sch(
 
         requerimentos = list(reversed(requerimentos))
 
-        if limite_requerimentos:
-            requerimentos = requerimentos[: int(limite_requerimentos)]
+        if requerimento_especifico:
+            requerimentos_encontrados = [
+                req
+                for req in requerimentos
+                if _requerimento_corresponde_ao_alvo(
+                    req,
+                    requerimento_especifico,
+                )
+            ]
+
+            if not requerimentos_encontrados:
+                print(
+                    "[SCH][WARN] O requerimento específico não foi "
+                    f"encontrado na fila: {requerimento_especifico}"
+                )
+
+            requerimentos = requerimentos_encontrados
+
+        elif limite_requerimentos:
+            requerimentos = requerimentos[
+                : int(limite_requerimentos)
+            ]
 
         requerimentos_processaveis, requerimentos_ignorados = separar_requerimentos_por_escopo(
             requerimentos,
@@ -624,6 +793,13 @@ def executar_fluxo_sch(
                 "requerimento": req,
                 "pasta_requerimento": str(pasta_req),
                 "fila_sch": fila_sch,
+                "navegador": (
+                    _normalizar_navegador_preferido(navegador)
+                    or "padrao"
+                ),
+                "requerimento_especifico_configurado": (
+                    requerimento_especifico or ""
+                ),
                 "anexos_baixados": [],
                 "dados_pdf": {},
                 "pdf_cct": "",

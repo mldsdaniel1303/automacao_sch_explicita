@@ -3599,93 +3599,534 @@ def preencher_observacao_caracteristicas(driver, wait, texto):
 
 
 
-def escolher_titulo_caracteristicas_secundarias(req=None, dados_pdf=None):
-    """
-    Decide qual frase preencher no campo:
-    'Título/Descrição para Características Técnicas Secundárias'.
+TITULOS_CARACTERISTICAS_SECUNDARIAS = [
+    {
+        "categoria": "Carregador Indutivo para Telefone Celular",
+        "aliases": [
+            "carregador indutivo para telefone celular",
+            "carregador indutivo",
+            "wireless charger",
+        ],
+        "titulo": (
+            "O produto incorpora um módulo “Carregador Indutivo para "
+            "Telefone Celular” com as seguintes características técnicas:"
+        ),
+    },
+    {
+        "categoria": "Dispositivo de Operação Periódica",
+        "aliases": [
+            "dispositivo de operacao periodica",
+            "periodic operation device",
+        ],
+        "titulo": (
+            "O produto incorpora um módulo “Dispositivo de Operação "
+            "Periódica” com as seguintes características técnicas:"
+        ),
+    },
+    {
+        "categoria": "Estação Terminal de Acesso",
+        "aliases": [
+            "estacao terminal de acesso",
+            "terminal de acesso",
+            "access terminal",
+        ],
+        "titulo": (
+            'O produto incorpora um módulo "Estação Terminal de Acesso" '
+            "com as seguintes características:"
+        ),
+    },
+    {
+        "categoria": "Sistema de Identificação por Radiofrequências",
+        "aliases": [
+            "sistema de identificacao por radiofrequencias",
+            "sistemas de identificacao por radiofrequencias",
+            "identificacao por radiofrequencias",
+            "rfid",
+        ],
+        "titulo": (
+            "O produto incorpora Sistema de Identificação por "
+            "Radiofrequências com as seguintes características:"
+        ),
+    },
+    {
+        "categoria": "Sistemas Operando nas Faixas de RF Ultra Larga",
+        "aliases": [
+            "sistemas operando nas faixas de rf ultra larga",
+            "faixas de rf ultra larga",
+            "ultra larga",
+            "ultra wideband",
+            "uwb",
+        ],
+        "titulo": (
+            "O produto incorpora Sistemas Operando nas Faixas de RF Ultra "
+            "Larga com as seguintes características:"
+        ),
+    },
+    {
+        "categoria": "Transceptor Mpo",
+        "aliases": [
+            "transceptor mpo",
+        ],
+        "titulo": (
+            "O produto incorpora Transceptor Mpo com as seguintes "
+            "características:"
+        ),
+    },
+    {
+        "categoria": (
+            "Transceptor para Sistema Automático de Identificação de Navios"
+        ),
+        "aliases": [
+            "transceptor para sistema automatico de identificacao de navios",
+            "sistema automatico de identificacao de navios",
+            "automatic identification system",
+        ],
+        "titulo": (
+            "O produto incorpora Transceptor para Sistema Automático de "
+            "Identificação de Navios com as seguintes características:"
+        ),
+    },
+    {
+        "categoria": "Transceptor Móvel por Satélite",
+        "aliases": [
+            "transceptor movel por satelite",
+            "movel por satelite",
+            "mobile satellite transceiver",
+        ],
+        "titulo": (
+            "O produto incorpora Transceptor Móvel por Satélite com as "
+            "seguintes características:"
+        ),
+    },
+    {
+        "categoria": "Sistema de Aplicações Médicas",
+        "aliases": [
+            "sistema de aplicacoes medicas",
+            "aplicacoes medicas",
+            "aplicacao medica",
+            "medical application system",
+        ],
+        "titulo": (
+            "O produto incorpora Sistema de Aplicações Médicas com as "
+            "seguintes características:"
+        ),
+    },
+    {
+        "categoria": (
+            "Equipamento de Radiocomunicação de Radiação Restrita"
+        ),
+        "aliases": [
+            "equipamento de radiocomunicacao de radiacao restrita",
+            "radiocomunicacao de radiacao restrita",
+        ],
+        "titulo": (
+            "O produto incorpora Equipamento de Radiocomunicação de "
+            "Radiação Restrita com as seguintes características:"
+        ),
+    },
+    {
+        "categoria": "Transceptor de Radiação Restrita",
+        "aliases": [
+            "transceptor de radiacao restrita",
+        ],
+        "titulo": (
+            "O produto incorpora Transceptor de Radiação Restrita com as "
+            "seguintes características:"
+        ),
+    },
+]
 
-    Retorna "" quando não houver segurança para preencher.
+
+def _registro_titulo_secundario_por_texto(valor):
+    """
+    Converte uma categoria, título ou trecho do CCT em um registro canônico.
+    Evita devolver diretamente uma frase inferida incorretamente pelo parser.
+    """
+    valor_norm = _normalizar_texto_comparacao(valor)
+
+    if not valor_norm:
+        return None
+
+    melhor = None
+    melhor_tamanho = -1
+
+    for registro in TITULOS_CARACTERISTICAS_SECUNDARIAS:
+        termos = [
+            registro.get("categoria", ""),
+            registro.get("titulo", ""),
+            *(registro.get("aliases") or []),
+        ]
+
+        for termo in termos:
+            termo_norm = _normalizar_texto_comparacao(termo)
+
+            if not termo_norm or termo_norm not in valor_norm:
+                continue
+
+            # Prefere a expressão mais específica. Isso impede que uma
+            # ocorrência genérica de "radiação restrita" vença uma categoria
+            # completa como Equipamento de Radiocomunicação.
+            if len(termo_norm) > melhor_tamanho:
+                melhor = registro
+                melhor_tamanho = len(termo_norm)
+
+    return melhor
+
+
+def _pontuar_categoria_secundaria(
+    pontos,
+    origens,
+    registro,
+    valor,
+    peso,
+    origem,
+):
+    if registro is None:
+        return
+
+    categoria = registro["categoria"]
+    valor_norm = _normalizar_texto_comparacao(valor)
+
+    if not valor_norm:
+        return
+
+    termos = [
+        registro.get("categoria", ""),
+        registro.get("titulo", ""),
+        *(registro.get("aliases") or []),
+    ]
+
+    melhor_termo = ""
+
+    for termo in termos:
+        termo_norm = _normalizar_texto_comparacao(termo)
+        if termo_norm and termo_norm in valor_norm:
+            if len(termo_norm) > len(melhor_termo):
+                melhor_termo = termo_norm
+
+    if not melhor_termo:
+        return
+
+    pontos[categoria] = pontos.get(categoria, 0) + int(peso)
+    origens.setdefault(categoria, []).append(
+        {
+            "origem": origem,
+            "peso": int(peso),
+            "termo": melhor_termo,
+        }
+    )
+
+
+def _extrair_titulos_explicitos_secundarios_cct(texto_cct):
+    """
+    Procura títulos explícitos do CCT, por exemplo:
+
+    Características como Equipamento de Radiocomunicação de Radiação Restrita:
+
+    A busca é feita por linha e também no texto contínuo, para tolerar PDFs
+    cuja extração quebre o título em mais de uma linha.
+    """
+    texto_cct = str(texto_cct or "")
+    encontrados = []
+
+    linhas = [
+        re.sub(r"\s+", " ", linha).strip()
+        for linha in texto_cct.splitlines()
+        if str(linha or "").strip()
+    ]
+
+    janelas = list(linhas)
+
+    for indice in range(len(linhas)):
+        janelas.append(" ".join(linhas[indice:indice + 3]))
+
+    texto_continuo = re.sub(r"\s+", " ", texto_cct).strip()
+    if texto_continuo:
+        janelas.append(texto_continuo)
+
+    marcadores = [
+        "caracteristicas como",
+        "caracteristicas tecnicas como",
+        "caracteristicas de",
+        "caracteristicas tecnicas de",
+    ]
+
+    for janela in janelas:
+        janela_norm = _normalizar_texto_comparacao(janela)
+
+        if not any(marcador in janela_norm for marcador in marcadores):
+            continue
+
+        registro = _registro_titulo_secundario_por_texto(janela)
+
+        if registro and registro not in encontrados:
+            encontrados.append(registro)
+
+    return encontrados
+
+
+def _contexto_tabela_secundaria_sch(driver, campo):
+    """
+    Captura o contexto da tabela técnica secundária localizada logo após o
+    campo de título no SCH.
+
+    Esse contexto não decide sozinho a categoria, mas serve como confirmação.
+    No caso de Equipamento de Radiocomunicação, normalmente aparecem
+    Intensidade de Campo e Distância da Medida.
+    """
+    try:
+        tabela = campo.find_element(By.XPATH, "./following::table[1]")
+        texto_tabela = _texto_limpo(tabela.text)
+
+        return {
+            "texto": texto_tabela,
+            "cabecalho_normalizado": _normalizar_texto_comparacao(
+                texto_tabela
+            ),
+        }
+    except Exception:
+        return {
+            "texto": "",
+            "cabecalho_normalizado": "",
+        }
+
+
+def diagnosticar_titulo_caracteristicas_secundarias(
+    req=None,
+    dados_pdf=None,
+    contexto_sch=None,
+):
+    """
+    Escolhe a categoria secundária usando fontes em ordem de confiança:
+
+    1. Título explícito no texto do CCT;
+    2. Categoria/título estruturado pelo parser;
+    3. Contexto da tabela secundária do SCH;
+    4. Ocorrências gerais no CCT, somente como último apoio.
+
+    O tipo principal do requerimento não é usado como categoria secundária
+    por simples ocorrência no texto. Ele recebe penalidade nas evidências
+    fracas, evitando o falso positivo "Transceptor de Radiação Restrita".
     """
     req = req or {}
     dados_pdf = dados_pdf or {}
-    
-    
-    caracteristicas_sec = dados_pdf.get("caracteristicas_secundarias") or {}
-    titulo_detectado = str(caracteristicas_sec.get("titulo") or "").strip()
+    contexto_sch = contexto_sch or {}
 
-    if titulo_detectado:
-        return titulo_detectado
+    pontos = {}
+    origens = {}
 
-    titulo_direto = str(dados_pdf.get("titulo_caracteristicas_secundarias") or "").strip()
-
-    if titulo_direto:
-        return titulo_direto
-
-    texto_base = " ".join(
-        [
-            _texto_total_dados_pdf(req),
-            _texto_total_dados_pdf(dados_pdf),
-        ]
+    texto_cct = str(
+        dados_pdf.get("texto_completo")
+        or dados_pdf.get("texto")
+        or dados_pdf.get("conteudo")
+        or ""
     )
 
-    texto = _normalizar_texto_comparacao(texto_base)
+    caracteristicas_sec = (
+        dados_pdf.get("caracteristicas_secundarias")
+        if isinstance(dados_pdf.get("caracteristicas_secundarias"), dict)
+        else {}
+    ) or {}
 
-    regras = [
+    fontes_estruturadas = [
         (
-            ["carregador indutivo", "wireless charger"],
-            "O produto incorpora um módulo “Carregador Indutivo para Telefone Celular” com as seguintes características técnicas:",
+            caracteristicas_sec.get("categoria"),
+            110,
+            "parser.caracteristicas_secundarias.categoria",
         ),
         (
-            ["dispositivo de operacao periodica", "periodic operation device"],
-            "O produto incorpora um módulo “Dispositivo de Operação Periódica” com as seguintes características técnicas:",
+            caracteristicas_sec.get("tipo"),
+            105,
+            "parser.caracteristicas_secundarias.tipo",
         ),
         (
-            ["estacao terminal de acesso", "terminal de acesso", "access terminal"],
-            'O produto incorpora um módulo "Estação Terminal de Acesso" com as seguintes características:',
+            caracteristicas_sec.get("titulo"),
+            100,
+            "parser.caracteristicas_secundarias.titulo",
         ),
         (
-            ["sistema de identificacao por radiofrequencias", "identificacao por radiofrequencias", "rfid"],
-            "O produto incorpora Sistema de Identificação por Radiofrequências com as seguintes características:",
+            dados_pdf.get("titulo_caracteristicas_secundarias"),
+            100,
+            "parser.titulo_caracteristicas_secundarias",
         ),
         (
-            ["ultra larga", "uwb", "ultra wideband"],
-            "O produto incorpora Sistemas Operando nas Faixas de RF Ultra Larga com as seguintes características:",
-        ),
-        (
-            ["transceptor mpo", "mpo"],
-            "O produto incorpora Transceptor Mpo com as seguintes características:",
-        ),
-        (
-            ["sistema automatico de identificacao de navios", "ais", "navios"],
-            "O produto incorpora Transceptor para Sistema Automático de Identificação de Navios com as seguintes características:",
-        ),
-        (
-            ["transceptor movel por satelite", "movel por satelite", "satellite"],
-            "O produto incorpora Transceptor Móvel por Satélite com as seguintes características:",
-        ),
-        (
-            ["aplicacoes medicas", "aplicacao medica", "medical"],
-            "O produto incorpora Sistema de Aplicações Médicas com as seguintes características:",
-        ),
-        (
-            ["transceptor de radiacao restrita", "transceptor"],
-            "O produto incorpora Transceptor de Radiação Restrita com as seguintes características:",
-        ),
-        (
-            [
-                "equipamento de radiocomunicacao de radiacao restrita",
-                "radiocomunicacao de radiacao restrita",
-                "radiacao restrita",
-            ],
-            "O produto incorpora Equipamento de Radiocomunicação de Radiação Restrita com as seguintes características:",
+            dados_pdf.get("texto_caracteristicas_secundarias"),
+            80,
+            "parser.texto_caracteristicas_secundarias",
         ),
     ]
 
-    for termos, frase in regras:
-        if any(termo in texto for termo in termos):
-            return frase
+    # O título explícito do CCT tem a maior prioridade.
+    for registro in _extrair_titulos_explicitos_secundarios_cct(texto_cct):
+        categoria = registro["categoria"]
+        pontos[categoria] = pontos.get(categoria, 0) + 180
+        origens.setdefault(categoria, []).append(
+            {
+                "origem": "cct.titulo_explicito_caracteristicas_como",
+                "peso": 180,
+                "termo": _normalizar_texto_comparacao(
+                    registro["categoria"]
+                ),
+            }
+        )
 
-    return ""
+    for valor, peso, origem in fontes_estruturadas:
+        registro = _registro_titulo_secundario_por_texto(valor)
+        _pontuar_categoria_secundaria(
+            pontos,
+            origens,
+            registro,
+            valor,
+            peso,
+            origem,
+        )
+
+    contexto_norm = _normalizar_texto_comparacao(
+        contexto_sch.get("texto")
+        or contexto_sch.get("cabecalho_normalizado")
+        or ""
+    )
+
+    # Evidência típica da tabela de Equipamento de Radiocomunicação.
+    if (
+        "intensidade de campo" in contexto_norm
+        and "distancia da medida" in contexto_norm
+    ):
+        registro = _registro_titulo_secundario_por_texto(
+            "Equipamento de Radiocomunicação de Radiação Restrita"
+        )
+        categoria = registro["categoria"]
+        pontos[categoria] = pontos.get(categoria, 0) + 75
+        origens.setdefault(categoria, []).append(
+            {
+                "origem": "sch.tabela_secundaria_intensidade_e_distancia",
+                "peso": 75,
+                "termo": "intensidade de campo + distancia da medida",
+            }
+        )
+
+    # Ocorrência geral no CCT: peso baixo, pois o texto também contém a
+    # característica principal.
+    for registro in TITULOS_CARACTERISTICAS_SECUNDARIAS:
+        _pontuar_categoria_secundaria(
+            pontos,
+            origens,
+            registro,
+            texto_cct,
+            15,
+            "cct.texto_completo_ocorrencia_geral",
+        )
+
+    tipo_principal_norm = _normalizar_texto_comparacao(
+        req.get("tipo_produto")
+        or dados_pdf.get("tipo_produto")
+        or ""
+    )
+
+    # Penaliza somente quando a categoria principal apareceu por evidência
+    # fraca. Um título explícito do CCT continua podendo indicar a mesma
+    # categoria como secundária.
+    for registro in TITULOS_CARACTERISTICAS_SECUNDARIAS:
+        categoria = registro["categoria"]
+        categoria_norm = _normalizar_texto_comparacao(categoria)
+
+        if not categoria_norm or not tipo_principal_norm:
+            continue
+
+        mesma_categoria = (
+            categoria_norm == tipo_principal_norm
+            or categoria_norm in tipo_principal_norm
+            or tipo_principal_norm in categoria_norm
+        )
+
+        if not mesma_categoria:
+            continue
+
+        tem_titulo_explicito = any(
+            item.get("origem")
+            == "cct.titulo_explicito_caracteristicas_como"
+            for item in origens.get(categoria, [])
+        )
+
+        if not tem_titulo_explicito:
+            pontos[categoria] = pontos.get(categoria, 0) - 90
+            origens.setdefault(categoria, []).append(
+                {
+                    "origem": "penalidade_tipo_principal_do_requerimento",
+                    "peso": -90,
+                    "termo": tipo_principal_norm,
+                }
+            )
+
+    if not pontos:
+        return {
+            "titulo": "",
+            "categoria": "",
+            "status": "nao_identificado",
+            "pontuacoes": {},
+            "origens": {},
+        }
+
+    ordenados = sorted(
+        pontos.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    categoria_escolhida, maior_pontuacao = ordenados[0]
+    segunda_pontuacao = ordenados[1][1] if len(ordenados) > 1 else None
+
+    registro_escolhido = next(
+        (
+            registro
+            for registro in TITULOS_CARACTERISTICAS_SECUNDARIAS
+            if registro["categoria"] == categoria_escolhida
+        ),
+        None,
+    )
+
+    # Exige evidência mínima. Ocorrência solta no texto completo não basta.
+    seguro = bool(
+        registro_escolhido
+        and maior_pontuacao >= 70
+        and (
+            segunda_pontuacao is None
+            or maior_pontuacao - segunda_pontuacao >= 20
+        )
+    )
+
+    return {
+        "titulo": (
+            registro_escolhido["titulo"]
+            if seguro and registro_escolhido
+            else ""
+        ),
+        "categoria": categoria_escolhida if seguro else "",
+        "status": "identificado" if seguro else "revisar",
+        "pontuacao": maior_pontuacao,
+        "segunda_pontuacao": segunda_pontuacao,
+        "pontuacoes": pontos,
+        "origens": origens,
+        "tipo_principal": (
+            req.get("tipo_produto")
+            or dados_pdf.get("tipo_produto")
+            or ""
+        ),
+    }
+
+
+def escolher_titulo_caracteristicas_secundarias(
+    req=None,
+    dados_pdf=None,
+    contexto_sch=None,
+):
+    diagnostico = diagnosticar_titulo_caracteristicas_secundarias(
+        req=req,
+        dados_pdf=dados_pdf,
+        contexto_sch=contexto_sch,
+    )
+
+    return str(diagnostico.get("titulo") or "").strip()
 
 
 def _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5):
@@ -3730,41 +4171,124 @@ def _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5):
 
 
 def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
+    """
+    Mantém o nome antigo por compatibilidade, mas corrige o comportamento:
+
+    - se o valor atual já estiver correto, não altera;
+    - se estiver vazio, preenche;
+    - se estiver preenchido com frase errada, substitui pelo título do CCT.
+
+    A rotina antiga recusava qualquer campo já preenchido, impedindo corrigir
+    exatamente o caso mostrado: Transceptor no SCH quando o CCT indicava
+    Equipamento de Radiocomunicação.
+    """
     texto = str(texto or "").strip()
 
     if not texto:
         return {
             "preenchido": False,
+            "alterado": False,
             "motivo": "texto_vazio",
         }
 
     try:
-        valor_atual = driver.execute_script(
-            "return (arguments[0].value || arguments[0].innerText || arguments[0].textContent || '').trim();",
-            campo,
-        ) or ""
+        tag = str(campo.tag_name or "").lower()
+    except Exception:
+        tag = ""
+
+    try:
+        if tag in {"textarea", "input"}:
+            valor_atual = driver.execute_script(
+                """
+                return arguments[0].value == null
+                    ? ''
+                    : String(arguments[0].value).trim();
+                """,
+                campo,
+            ) or ""
+        else:
+            valor_atual = driver.execute_script(
+                """
+                return String(
+                    arguments[0].innerText ||
+                    arguments[0].textContent ||
+                    ''
+                ).trim();
+                """,
+                campo,
+            ) or ""
     except Exception:
         valor_atual = ""
 
-    if str(valor_atual or "").strip():
+    atual_norm = _normalizar_texto_comparacao(valor_atual)
+    esperado_norm = _normalizar_texto_comparacao(texto)
+
+    if atual_norm and atual_norm == esperado_norm:
         return {
-            "preenchido": False,
-            "motivo": "campo_ja_preenchido",
+            "preenchido": True,
+            "alterado": False,
+            "corrigido": False,
+            "motivo": "campo_ja_correto",
             "valor_atual": valor_atual,
+            "texto": texto,
         }
 
-    tag = (campo.tag_name or "").lower()
+    havia_valor = bool(atual_norm)
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        campo,
+    )
+
+    try:
+        campo.click()
+    except Exception:
+        pass
 
     if tag in {"textarea", "input"}:
-        driver.execute_script("arguments[0].value = arguments[1];", campo, texto)
+        try:
+            campo.send_keys(Keys.CONTROL, "a")
+            campo.send_keys(Keys.DELETE)
+            campo.send_keys(texto)
+        except Exception:
+            driver.execute_script(
+                """
+                const campo = arguments[0];
+                const valor = arguments[1];
+
+                const proto = Object.getPrototypeOf(campo);
+                const desc = Object.getOwnPropertyDescriptor(
+                    proto,
+                    'value'
+                );
+
+                if (desc && typeof desc.set === 'function') {
+                    desc.set.call(campo, valor);
+                } else {
+                    campo.value = valor;
+                }
+                """,
+                campo,
+                texto,
+            )
     else:
-        driver.execute_script("arguments[0].innerHTML = arguments[1];", campo, texto)
+        driver.execute_script(
+            "arguments[0].textContent = arguments[1];",
+            campo,
+            texto,
+        )
 
     driver.execute_script(
         """
-        arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
-        arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-        arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+        arguments[0].dispatchEvent(
+            new Event('input', {bubbles:true})
+        );
+        arguments[0].dispatchEvent(
+            new Event('change', {bubbles:true})
+        );
+        arguments[0].dispatchEvent(
+            new Event('blur', {bubbles:true})
+        );
         """,
         campo,
     )
@@ -3774,69 +4298,174 @@ def _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, texto):
     except Exception:
         pass
 
+    try:
+        if tag in {"textarea", "input"}:
+            valor_final = driver.execute_script(
+                """
+                return arguments[0].value == null
+                    ? ''
+                    : String(arguments[0].value).trim();
+                """,
+                campo,
+            ) or ""
+        else:
+            valor_final = driver.execute_script(
+                """
+                return String(
+                    arguments[0].innerText ||
+                    arguments[0].textContent ||
+                    ''
+                ).trim();
+                """,
+                campo,
+            ) or ""
+    except Exception:
+        valor_final = ""
+
+    confirmado = (
+        _normalizar_texto_comparacao(valor_final)
+        == esperado_norm
+    )
+
     return {
-        "preenchido": True,
-        "motivo": "preenchido",
+        "preenchido": confirmado,
+        "alterado": confirmado,
+        "corrigido": bool(confirmado and havia_valor),
+        "motivo": (
+            "campo_corrigido"
+            if confirmado and havia_valor
+            else "campo_preenchido"
+            if confirmado
+            else "valor_nao_confirmado"
+        ),
+        "valor_anterior": valor_atual,
+        "valor_final": valor_final,
         "texto": texto,
     }
 
 
-def preencher_titulo_caracteristicas_secundarias_se_existir(driver, wait, req=None, dados_pdf=None):
+def preencher_titulo_caracteristicas_secundarias_se_existir(
+    driver,
+    wait,
+    req=None,
+    dados_pdf=None,
+):
     """
-    Preenche o campo opcional 'Título/Descrição para Características Técnicas Secundárias'
-    apenas quando ele existir na tela.
+    Preenche ou corrige o campo opcional de características secundárias.
+
+    A decisão combina:
+    - título explícito no CCT;
+    - estrutura retornada pelo parser;
+    - tipo principal do requerimento;
+    - cabeçalhos da tabela secundária exibida no SCH.
     """
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
-    campo = _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5)
+    campo = _localizar_campo_titulo_caracteristicas_secundarias(
+        driver,
+        timeout=1.5,
+    )
 
     if not campo:
         return {
             "campo_encontrado": False,
             "preenchido": False,
             "status": "nao_aplicavel",
-            "motivo": "Campo de características técnicas secundárias não encontrado na tela.",
+            "motivo": (
+                "Campo de características técnicas secundárias não "
+                "encontrado na tela."
+            ),
         }
 
-    titulo = escolher_titulo_caracteristicas_secundarias(
+    contexto_sch = _contexto_tabela_secundaria_sch(driver, campo)
+
+    diagnostico = diagnosticar_titulo_caracteristicas_secundarias(
         req=req,
         dados_pdf=dados_pdf,
+        contexto_sch=contexto_sch,
+    )
+
+    titulo = str(diagnostico.get("titulo") or "").strip()
+
+    print(
+        "[SCH][SECUNDÁRIAS] Diagnóstico: "
+        f"categoria={diagnostico.get('categoria') or 'não identificada'} | "
+        f"pontuação={diagnostico.get('pontuacao')} | "
+        f"tipo principal={diagnostico.get('tipo_principal') or 'não identificado'}"
     )
 
     if not titulo:
-        print("[SCH][WARN] Campo de características secundárias encontrado, mas sem frase segura para preencher.")
+        print(
+            "[SCH][WARN] Campo de características secundárias encontrado, "
+            "mas CCT e SCH não forneceram evidência segura para o título."
+        )
 
         return {
             "campo_encontrado": True,
             "preenchido": False,
             "status": "revisar",
-            "motivo": "Campo encontrado, mas a automação não identificou frase segura para preenchimento.",
+            "motivo": (
+                "Campo encontrado, mas a categoria secundária não foi "
+                "identificada com segurança."
+            ),
+            "diagnostico": diagnostico,
+            "contexto_sch": contexto_sch,
         }
 
-    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(driver, campo, titulo)
+    resultado = _preencher_campo_sem_apagar_se_ja_tem_valor(
+        driver,
+        campo,
+        titulo,
+    )
 
-    if resultado.get("preenchido"):
-        print(f"[SCH] Título de Características Técnicas Secundárias preenchido: {titulo}")
+    if resultado.get("motivo") == "campo_ja_correto":
+        print(
+            "[SCH][SECUNDÁRIAS] Título já estava correto: "
+            f"{titulo}"
+        )
+    elif resultado.get("corrigido"):
+        print(
+            "[SCH][SECUNDÁRIAS] Título incorreto substituído por: "
+            f"{titulo}"
+        )
+    elif resultado.get("preenchido"):
+        print(
+            "[SCH][SECUNDÁRIAS] Título preenchido: "
+            f"{titulo}"
+        )
     else:
         print(
-            "[SCH] Título de Características Técnicas Secundárias não preenchido: "
-            f"{resultado.get('motivo')}"
+            "[SCH][WARN] Não foi possível confirmar o título de "
+            f"características secundárias: {resultado.get('motivo')}"
         )
 
     resultado.update(
         {
             "campo_encontrado": True,
-            "status": "preenchido" if resultado.get("preenchido") else "nao_alterado",
+            "status": (
+                "corrigido"
+                if resultado.get("corrigido")
+                else "preenchido"
+                if resultado.get("preenchido")
+                else "erro"
+            ),
+            "categoria": diagnostico.get("categoria", ""),
+            "titulo_esperado": titulo,
+            "diagnostico": diagnostico,
+            "contexto_sch": contexto_sch,
         }
     )
 
     return resultado
 
 
-
-
-def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
+def salvar_caracteristicas_tecnicas(
+    driver,
+    wait,
+    texto_esperado="",
+    titulo_secundario_esperado="",
+):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.08)
 
@@ -3935,14 +4564,69 @@ def salvar_caracteristicas_tecnicas(driver, wait, texto_esperado=""):
         except Exception:
             confirmado = False
 
-    if confirmado:
-        print("[SCH] Características Técnicas salvas e conferidas com sucesso.")
+    titulo_secundario_confirmado = True
+
+    if titulo_secundario_esperado:
+        titulo_secundario_confirmado = False
+
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+
+            campo_titulo = (
+                _localizar_campo_titulo_caracteristicas_secundarias(
+                    driver,
+                    timeout=2.5,
+                )
+            )
+
+            if campo_titulo is not None:
+                valor_titulo = driver.execute_script(
+                    """
+                    return arguments[0].value == null
+                        ? String(
+                            arguments[0].innerText ||
+                            arguments[0].textContent ||
+                            ''
+                        ).trim()
+                        : String(arguments[0].value).trim();
+                    """,
+                    campo_titulo,
+                ) or ""
+
+                titulo_secundario_confirmado = (
+                    _normalizar_texto_comparacao(valor_titulo)
+                    == _normalizar_texto_comparacao(
+                        titulo_secundario_esperado
+                    )
+                )
+        except Exception:
+            titulo_secundario_confirmado = False
+
+    confirmado_geral = bool(
+        confirmado
+        and titulo_secundario_confirmado
+    )
+
+    if confirmado_geral:
+        print(
+            "[SCH] Características Técnicas salvas e conferidas "
+            "com sucesso."
+        )
     else:
-        print("[SCH][WARN] Características Técnicas salvas, mas não foi possível confirmar o texto após salvar.")
+        print(
+            "[SCH][WARN] Características Técnicas salvas, mas a "
+            "confirmação após salvar ficou incompleta. "
+            f"Observação={confirmado} | "
+            f"Título secundário={titulo_secundario_confirmado}"
+        )
 
     return {
         "salvo": True,
-        "confirmado_apos_salvar": confirmado,
+        "confirmado_apos_salvar": confirmado_geral,
+        "observacao_confirmada": confirmado,
+        "titulo_secundario_confirmado": (
+            titulo_secundario_confirmado
+        ),
     }
 
 
@@ -6462,6 +7146,11 @@ def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_bai
         driver,
         wait,
         texto_esperado=analise["texto"],
+        titulo_secundario_esperado=(
+            titulo_secundario.get("titulo_esperado", "")
+            if titulo_secundario.get("campo_encontrado")
+            else ""
+        ),
     )
 
     analise["preenchido_automaticamente"] = bool(preenchido)
