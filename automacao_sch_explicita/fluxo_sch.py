@@ -40,7 +40,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.0"
+VERSAO_SCRIPT = "0.8.1"
 
 
 def _normalizar_texto(valor):
@@ -147,6 +147,42 @@ def _dados_normativos_retorno_para_estudo():
             "Alteração em Dados Técnicos, Especificações Complementares, documentos removidos ou caso inconclusivo: Revisar manualmente.",
         ],
     }
+
+
+
+def _homologacao_tem_ano_26(req):
+    """Identifica homologação no formato XXXXX-26-XXXXX."""
+    if not isinstance(req, dict):
+        return False
+
+    homologacao = str(req.get("homologacao") or "").strip()
+
+    return bool(
+        homologacao
+        and re.search(
+            r"\b\d{4,6}\s*[-–—]\s*26\s*[-–—]\s*\d{4,6}\b",
+            homologacao,
+        )
+    )
+
+
+def _separar_homologacoes_ano_26(requerimentos):
+    processaveis = []
+    ignorados = []
+
+    for req in requerimentos or []:
+        if _homologacao_tem_ano_26(req):
+            item = dict(req)
+            item["motivo"] = "homologacao_ano_26"
+            item["mensagem"] = (
+                "Requerimento ignorado porque a homologação possui "
+                "26 no bloco central."
+            )
+            ignorados.append(item)
+        else:
+            processaveis.append(req)
+
+    return processaveis, ignorados
 
 
 def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
@@ -711,6 +747,24 @@ def executar_fluxo_sch(
 
         requerimentos = list(reversed(requerimentos))
 
+        requerimentos, ignorados_homologacao_26 = (
+            _separar_homologacoes_ano_26(requerimentos)
+        )
+
+        if ignorados_homologacao_26:
+            print(
+                "[SCH] Requerimentos ignorados por homologação com ano 26: "
+                f"{len(ignorados_homologacao_26)}"
+            )
+
+            for item in ignorados_homologacao_26:
+                print(
+                    "[SCH][IGNORADO] "
+                    f"Requerimento={_numero_requerimento(item)} | "
+                    f"Homologação={item.get('homologacao', '')} | "
+                    "Motivo=ano 26 no bloco central"
+                )
+
         if requerimento_especifico:
             requerimentos_encontrados = [
                 req
@@ -734,9 +788,14 @@ def executar_fluxo_sch(
                 : int(limite_requerimentos)
             ]
 
-        requerimentos_processaveis, requerimentos_ignorados = separar_requerimentos_por_escopo(
+        requerimentos_processaveis, requerimentos_ignorados_escopo = separar_requerimentos_por_escopo(
             requerimentos,
             processar_apenas_rr=processar_apenas_rr_efetivo,
+        )
+
+        requerimentos_ignorados = (
+            list(ignorados_homologacao_26)
+            + list(requerimentos_ignorados_escopo)
         )
 
         pasta_requerimentos, mapeados = preparar_pastas_requerimentos(
