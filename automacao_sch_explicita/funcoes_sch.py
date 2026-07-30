@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.action_chains import ActionChains
@@ -763,6 +763,146 @@ def clicar_fila_em_analise(driver, wait):
 def clicar_fila_retorno_para_estudo(driver, wait):
     return clicar_fila_sch(driver, wait, "Retorno Para Estudo")
 
+
+
+VALORES_REGISTROS_POR_PAGINA_SCH = tuple(range(5, 101, 5))
+
+
+def selecionar_quantidade_registros_fila(
+    driver,
+    wait,
+    quantidade=100,
+):
+    """
+    Define quantos requerimentos o paginator do SCH exibirá por página.
+
+    Funciona nas filas "Em Análise" e "Retorno Para Estudo". O seletor
+    identificado no SCH é um <select> nativo com a classe PrimeFaces:
+    select.ui-paginator-rpp-options.
+    """
+    try:
+        quantidade = int(quantidade)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Quantidade de registros inválida: {quantidade!r}."
+        )
+
+    if quantidade not in VALORES_REGISTROS_POR_PAGINA_SCH:
+        valores = ", ".join(
+            str(valor)
+            for valor in VALORES_REGISTROS_POR_PAGINA_SCH
+        )
+        raise ValueError(
+            f"Quantidade inválida: {quantidade}. Valores aceitos: {valores}."
+        )
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    seletor_css = "select.ui-paginator-rpp-options"
+
+    seletores = WebDriverWait(
+        driver,
+        8,
+        poll_frequency=0.1,
+    ).until(
+        EC.presence_of_all_elements_located(
+            (By.CSS_SELECTOR, seletor_css)
+        )
+    )
+
+    campo = None
+
+    for elemento in seletores:
+        try:
+            if elemento.is_displayed() and elemento.is_enabled():
+                campo = elemento
+                break
+        except StaleElementReferenceException:
+            continue
+
+    if campo is None:
+        raise RuntimeError(
+            "O seletor de quantidade de registros da fila foi localizado, "
+            "mas nenhum campo está visível e habilitado."
+        )
+
+    valor_atual = str(campo.get_attribute("value") or "").strip()
+
+    if valor_atual == str(quantidade):
+        print(
+            "[SCH] Registros por página já configurados em "
+            f"{quantidade}."
+        )
+        return {
+            "alterado": False,
+            "confirmado": True,
+            "valor_anterior": valor_atual,
+            "valor_final": quantidade,
+        }
+
+    try:
+        tabela_antes = _aguardar_tabela_fila(driver, timeout=5)
+    except Exception:
+        tabela_antes = None
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center'});",
+        campo,
+    )
+
+    Select(campo).select_by_value(str(quantidade))
+
+    # O PrimeFaces normalmente atualiza a tabela por AJAX. Aguarda tanto a
+    # sincronização dos paginadores superior/inferior quanto a tabela pronta.
+    def _quantidade_confirmada(d):
+        try:
+            elementos = d.find_elements(By.CSS_SELECTOR, seletor_css)
+            visiveis = [
+                elemento
+                for elemento in elementos
+                if elemento.is_displayed()
+            ]
+
+            return bool(visiveis) and all(
+                str(elemento.get_attribute("value") or "").strip()
+                == str(quantidade)
+                for elemento in visiveis
+            )
+        except (StaleElementReferenceException, Exception):
+            return False
+
+    WebDriverWait(
+        driver,
+        10,
+        poll_frequency=0.1,
+    ).until(_quantidade_confirmada)
+
+    if tabela_antes is not None:
+        try:
+            WebDriverWait(driver, 2, poll_frequency=0.1).until(
+                EC.staleness_of(tabela_antes)
+            )
+        except Exception:
+            # Alguns eventos AJAX substituem apenas o tbody e mantêm a table.
+            pass
+
+    esperar_tela_carregar(driver, 0.4)
+    _aguardar_tabela_fila(driver, timeout=8)
+
+    print(
+        "[SCH] Quantidade de registros por página alterada: "
+        f"{valor_atual or 'não identificada'} -> {quantidade}."
+    )
+
+    return {
+        "alterado": True,
+        "confirmado": True,
+        "valor_anterior": valor_atual,
+        "valor_final": quantidade,
+    }
 
 def coletar_requerimentos(driver, wait, regras):
     xpath_tabela = "//table[.//th[contains(., 'Requerimento')] or .//td[contains(., 'Requerimento')]]"

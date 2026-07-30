@@ -10,6 +10,7 @@ from pdf_parser import parsear_certificado_pdf
 from funcoes_sch import (
     abrir_sch,
     clicar_fila_sch,
+    selecionar_quantidade_registros_fila,
     coletar_requerimentos,
     abrir_requerimento,
     clicar_aba_anexos,
@@ -39,7 +40,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.7.8"
+VERSAO_SCRIPT = "0.7.9"
 
 
 def _normalizar_texto(valor):
@@ -613,6 +614,7 @@ def executar_fluxo_sch(
     limite_requerimentos=None,
     requerimento_especifico=None,
     navegador=None,
+    quantidade_exibida_sch=100,
     processar_somente_pendentes=False,
     processar_apenas_radiacao_restrita=True,
     preencher_caracteristicas=True,
@@ -689,6 +691,18 @@ def executar_fluxo_sch(
         inicio_execucao = datetime.now()
 
         clicar_fila_sch(driver, wait, fila_sch)
+
+        resultado_paginacao = selecionar_quantidade_registros_fila(
+            driver=driver,
+            wait=wait,
+            quantidade=quantidade_exibida_sch,
+        )
+
+        print(
+            "[SCH] Registros configurados por página: "
+            f"{resultado_paginacao.get('valor_final', quantidade_exibida_sch)}"
+        )
+
         requerimentos = coletar_requerimentos(driver, wait, regras)
 
         for req in requerimentos:
@@ -750,6 +764,10 @@ def executar_fluxo_sch(
         print(f"[SCH] Dentro do escopo: {len(requerimentos_processaveis)}")
         print(f"[SCH] Fora do escopo: {len(requerimentos_ignorados)}")
         print(f"[SCH] Pasta base da execução: {pasta_base}")
+        print(
+            "[SCH] Registros exibidos por página no SCH: "
+            f"{quantidade_exibida_sch}"
+        )
         print(f"[SCH] Filtro radiação restrita efetivo: {'sim' if processar_apenas_rr_efetivo else 'não'}")
         print(
             "[SCH] Categorias de anexos configuradas: "
@@ -800,6 +818,7 @@ def executar_fluxo_sch(
                 "requerimento_especifico_configurado": (
                     requerimento_especifico or ""
                 ),
+                "quantidade_exibida_sch": quantidade_exibida_sch,
                 "anexos_baixados": [],
                 "dados_pdf": {},
                 "pdf_cct": "",

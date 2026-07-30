@@ -113,7 +113,7 @@ def perguntar_sim_nao(mensagem, padrao=True):
 
 
 def escolher_fila_sch():
-    titulo_secao("ETAPA 1 DE 6 — FILA DO SCH")
+    titulo_secao("ETAPA 1 DE 7 — FILA DO SCH")
     print("Escolha a fila antes das demais configurações.")
     print()
     print("1. Em Análise")
@@ -133,7 +133,7 @@ def escolher_fila_sch():
 
 
 def escolher_navegador():
-    titulo_secao("ETAPA 2 DE 6 — NAVEGADOR")
+    titulo_secao("ETAPA 2 DE 7 — NAVEGADOR")
     print("1. Chrome")
     print("2. Edge")
     print("0. Voltar")
@@ -147,7 +147,7 @@ def escolher_navegador():
 
 
 def escolher_requerimentos():
-    titulo_secao("ETAPA 3 DE 6 — REQUERIMENTOS")
+    titulo_secao("ETAPA 3 DE 7 — REQUERIMENTOS")
     print("1. Todos os requerimentos da fila")
     print("2. Processar uma quantidade determinada")
     print("3. Processar um requerimento específico")
@@ -197,8 +197,59 @@ def escolher_requerimentos():
     }
 
 
+
+VALORES_REGISTROS_POR_PAGINA = tuple(range(5, 101, 5))
+
+
+def escolher_quantidade_exibida_sch():
+    titulo_secao("ETAPA 4 DE 7 — REGISTROS POR PÁGINA")
+    print(
+        "Defina quantos requerimentos o SCH deverá exibir de uma vez "
+        "na fila selecionada."
+    )
+    print()
+    print("1. 10 requerimentos por página")
+    print("2. 25 requerimentos por página")
+    print("3. 50 requerimentos por página")
+    print("4. 100 requerimentos por página — recomendado")
+    print("5. Informar outro valor disponível")
+    print("0. Voltar")
+
+    opcao = perguntar_opcao(
+        "\nOpção [0-5] (Enter = 4): ",
+        {"0", "1", "2", "3", "4", "5"},
+        padrao="4",
+    )
+
+    if opcao == "0":
+        return None
+
+    valores_rapidos = {
+        "1": 10,
+        "2": 25,
+        "3": 50,
+        "4": 100,
+    }
+
+    if opcao in valores_rapidos:
+        return valores_rapidos[opcao]
+
+    valores_texto = ", ".join(str(v) for v in VALORES_REGISTROS_POR_PAGINA)
+    print(f"\nValores aceitos pelo SCH: {valores_texto}")
+
+    while True:
+        valor = input("Quantidade por página: ").strip()
+
+        if valor.isdigit() and int(valor) in VALORES_REGISTROS_POR_PAGINA:
+            return int(valor)
+
+        print(
+            "[ERRO] Digite um valor entre 5 e 100, "
+            "em intervalos de 5."
+        )
+
 def escolher_categorias_anexos():
-    titulo_secao("ETAPA 4 DE 6 — DOCUMENTOS")
+    titulo_secao("ETAPA 5 DE 7 — DOCUMENTOS")
     print("Quais categorias deseja baixar?")
     print()
     print("1. Todas as categorias")
@@ -275,7 +326,7 @@ def escolher_categorias_anexos():
 
 
 def escolher_acoes_da_fila(fila_sch):
-    titulo_secao(f"ETAPA 5 DE 6 — AÇÕES: {fila_sch.upper()}")
+    titulo_secao(f"ETAPA 6 DE 7 — AÇÕES: {fila_sch.upper()}")
 
     if fila_sch == "Em Análise":
         print(
@@ -418,7 +469,7 @@ def normalizar_pasta_base_fluxo(pasta):
 
 
 def escolher_saida_e_comportamento():
-    titulo_secao("ETAPA 6 DE 6 — SAÍDA E ENCERRAMENTO")
+    titulo_secao("ETAPA 7 DE 7 — SAÍDA E ENCERRAMENTO")
 
     pasta_escolhida = escolher_pasta(
         "Escolha a pasta base da execução",
@@ -464,6 +515,11 @@ def coletar_opcoes_fluxo_completo():
         if requerimentos is None:
             continue
 
+        quantidade_exibida_sch = escolher_quantidade_exibida_sch()
+
+        if quantidade_exibida_sch is None:
+            continue
+
         documentos = escolher_categorias_anexos()
 
         if documentos is None:
@@ -475,6 +531,7 @@ def coletar_opcoes_fluxo_completo():
         opcoes = {
             "fila_sch": fila_sch,
             "navegador": navegador,
+            "quantidade_exibida_sch": quantidade_exibida_sch,
             **requerimentos,
             **documentos,
             **acoes,
@@ -493,6 +550,10 @@ def exibir_resumo_fluxo_completo(opcoes):
     print(f"Fila: {opcoes['fila_sch']}")
     print(f"Navegador: {opcoes['navegador'].title()}")
     print(f"Requerimentos: {opcoes['descricao_requerimentos']}")
+    print(
+        "Registros exibidos por página no SCH: "
+        f"{opcoes['quantidade_exibida_sch']}"
+    )
     print(
         "Somente pendentes: "
         f"{sim_nao(opcoes['processar_somente_pendentes'])}"
