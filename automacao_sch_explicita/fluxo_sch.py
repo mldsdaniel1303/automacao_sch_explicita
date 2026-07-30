@@ -40,7 +40,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.7.9"
+VERSAO_SCRIPT = "0.8.0"
 
 
 def _normalizar_texto(valor):
@@ -1036,29 +1036,47 @@ def executar_fluxo_sch(
                             "erro": restauracao_requerimento.get("erro", ""),
                         }
 
-                    limpeza_aplicavel = bool(
+                    tratamento_aplicavel = bool(
                         resultado_minuta.get("aplicavel", limpeza_exigida)
                     )
-                    limpeza_confirmada = bool(
-                        resultado_minuta.get("limpo")
+                    tratamento_confirmado = bool(
+                        resultado_minuta.get("tratado")
                         and resultado_minuta.get("salvo")
-                        and resultado_minuta.get("confirmado_apos_salvar")
+                        and resultado_minuta.get(
+                            "confirmado_apos_salvar"
+                        )
                     )
 
                     resultado_minuta["modo"] = (
-                        "limpeza_especificacoes_complementares_retorno_para_estudo"
+                        "tratamento_especificacoes_complementares_"
+                        "retorno_para_estudo"
                     )
-                    resultado_minuta["limpeza_exigida"] = bool(limpeza_exigida)
+                    resultado_minuta["tratamento_exigido"] = bool(
+                        limpeza_exigida
+                    )
+                    resultado_minuta["tratamento_confirmado"] = bool(
+                        tratamento_confirmado
+                    )
+
+                    resultado_minuta["limpeza_exigida"] = bool(
+                        limpeza_exigida
+                    )
                     resultado_minuta["limpeza_confirmada"] = bool(
-                        limpeza_confirmada
+                        tratamento_confirmado
                     )
 
                     retorno_estudo["corrigir_minuta"] = resultado_minuta
+                    retorno_estudo["tratamento_minuta_exigido"] = bool(
+                        limpeza_exigida
+                    )
+                    retorno_estudo["tratamento_minuta_confirmado"] = bool(
+                        tratamento_confirmado
+                    )
                     retorno_estudo["limpeza_minuta_exigida"] = bool(
                         limpeza_exigida
                     )
                     retorno_estudo["limpeza_minuta_confirmada"] = bool(
-                        limpeza_confirmada
+                        tratamento_confirmado
                     )
 
                     # Sem retorno confirmado à tela original, nenhum clique
@@ -1080,19 +1098,19 @@ def executar_fluxo_sch(
 
                     # Se o tipo exige limpeza, a aprovação automática fica
                     # bloqueada até que apagar + salvar + confirmar tenha sucesso.
-                    if limpeza_exigida and not limpeza_confirmada:
+                    if limpeza_exigida and not tratamento_confirmado:
                         retorno_estudo["pode_enviar_para_aprovacao"] = False
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["acao_recomendada"] = (
-                            "Não enviar para aprovação / Revisar Corrigir Minuta"
+                            "Não enviar para aprovação / Revisar tratamento da minuta"
                         )
                         retorno_estudo["status_comparacao"] = (
-                            "bloqueado_por_falha_na_limpeza_da_minuta"
+                            "bloqueado_por_falha_no_tratamento_da_minuta"
                         )
                         retorno_estudo.setdefault("alertas", []).append(
                             "A aprovação automática foi bloqueada porque não foi "
-                            "possível confirmar que Especificações Complementares "
-                            "foram apagadas e salvas."
+                            "possível confirmar o tratamento de Especificações "
+                            "Complementares (limpeza ou substituição) e o salvamento."
                         )
 
                     # A análise já encerrou a tela Comparar Versões. Agora o envio
@@ -1126,26 +1144,60 @@ def executar_fluxo_sch(
                         "confirmado_apos_salvar": False,
                     }
                     resumo["minuta"] = {
-                        "preenchida": False,
-                        "campo_limpo": bool(resultado_minuta.get("limpo")),
-                        "alterada": bool(resultado_minuta.get("limpo")),
+                        "preenchida": bool(
+                            resultado_minuta.get("substituido")
+                        ),
+                        "campo_limpo": bool(
+                            resultado_minuta.get("limpo")
+                        ),
+                        "campo_substituido": bool(
+                            resultado_minuta.get("substituido")
+                        ),
+                        "tratado": bool(
+                            resultado_minuta.get("tratado")
+                        ),
+                        "alterada": bool(
+                            resultado_minuta.get("tratado")
+                        ),
                         "salvo": bool(resultado_minuta.get("salvo")),
                         "confirmado_apos_salvar": bool(
-                            resultado_minuta.get("confirmado_apos_salvar")
+                            resultado_minuta.get(
+                                "confirmado_apos_salvar"
+                            )
                         ),
                         "status": resultado_minuta.get("status", ""),
                         "mensagem": resultado_minuta.get(
                             "mensagem",
                             resultado_minuta.get("motivo", ""),
                         ),
-                        "frase": "",
+                        "frase": resultado_minuta.get(
+                            "conteudo_final_esperado",
+                            "",
+                        ),
+                        "acao_minuta": resultado_minuta.get(
+                            "acao_minuta",
+                            "",
+                        ),
+                        "palavras_identificadas": resultado_minuta.get(
+                            "palavras_identificadas",
+                            [],
+                        ),
+                        "conteudo_anterior": resultado_minuta.get(
+                            "conteudo_anterior",
+                            "",
+                        ),
+                        "conteudo_final_confirmado": resultado_minuta.get(
+                            "conteudo_final_confirmado",
+                            "",
+                        ),
                         "modo": (
-                            "limpeza_especificacoes_complementares_retorno_para_estudo"
+                            "tratamento_especificacoes_complementares_"
+                            "retorno_para_estudo"
                         ),
                         "tipo_produto": tipo_produto,
                     }
                     resumo["preenchimento_sch"]["minuta"] = bool(
-                        limpeza_confirmada
+                        tratamento_confirmado
                     )
                     resumo["status"] = "sucesso"
                     resumo["fim"] = datetime.now().isoformat()
@@ -1164,7 +1216,7 @@ def executar_fluxo_sch(
                     print(
                         "[SCH][RETORNO] Requerimento finalizado. "
                         f"Resultado={retorno_estudo.get('status_comparacao')} | "
-                        f"Limpeza da minuta={'SIM' if limpeza_confirmada else 'NÃO'} | "
+                        f"Tratamento da minuta={'SIM' if tratamento_confirmado else 'NÃO'} | "
                         f"Ação={retorno_estudo.get('acao_recomendada')}"
                     )
 

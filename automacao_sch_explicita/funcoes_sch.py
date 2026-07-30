@@ -6914,6 +6914,175 @@ def _limpar_elemento_especificacoes_complementares(driver, campo):
     return True
 
 
+TEXTO_MINUTA_IPV6 = "Suporta o protocolo IPv6"
+
+TEXTO_MINUTA_EIRP = (
+    "Valores de potência indicados nas faixas de 5150 – 5350 MHz, "
+    "5470 - 5725 MHz e 5925 – 7125 MHz referem-se à potência média "
+    "em E.I.R.P."
+)
+
+
+def _detectar_regras_especificacoes_complementares_retorno(conteudo):
+    """
+    Detecta palavras especiais no conteúdo original da minuta.
+
+    Regras:
+    - IPv6, IPV6, ipv6 e variações com espaço/pontuação;
+    - E.I.R.P., E.I.R.P, EIRP, eirp e variações com espaços/pontos.
+
+    Quando ambas aparecem, as duas frases são mantidas, uma por linha.
+    """
+    conteudo = str(conteudo or "")
+    conteudo_norm = _normalizar_texto_comparacao(conteudo)
+
+    tem_ipv6 = bool(
+        re.search(r"\bip\s*v?\s*6\b", conteudo_norm, flags=re.I)
+        or "ipv6" in conteudo_norm
+    )
+
+    tem_eirp = bool(
+        re.search(r"\be\s*i\s*r\s*p\b", conteudo_norm, flags=re.I)
+        or re.search(r"\beirp\b", conteudo_norm, flags=re.I)
+    )
+
+    palavras = []
+    frases = []
+
+    if tem_ipv6:
+        palavras.append("ipv6")
+        frases.append(TEXTO_MINUTA_IPV6)
+
+    if tem_eirp:
+        palavras.append("eirp")
+        frases.append(TEXTO_MINUTA_EIRP)
+
+    if tem_ipv6 and tem_eirp:
+        acao = "substituir_por_ipv6_e_eirp"
+    elif tem_ipv6:
+        acao = "substituir_por_ipv6"
+    elif tem_eirp:
+        acao = "substituir_por_eirp"
+    else:
+        acao = "limpar_conteudo"
+
+    return {
+        "tem_ipv6": tem_ipv6,
+        "tem_eirp": tem_eirp,
+        "palavras_identificadas": palavras,
+        "acao": acao,
+        "texto_final": "\n".join(frases).strip(),
+    }
+
+
+def _definir_valor_campo_minuta(driver, campo, texto):
+    """
+    Substitui integralmente o valor do textarea/input e confirma o resultado.
+    """
+    texto = str(texto or "")
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        campo,
+    )
+
+    try:
+        driver.execute_script("arguments[0].focus();", campo)
+        campo.click()
+        campo.send_keys(Keys.CONTROL, "a")
+        time.sleep(0.1)
+        campo.send_keys(Keys.DELETE)
+        campo.send_keys(Keys.BACKSPACE)
+
+        if texto:
+            campo.send_keys(texto)
+
+        time.sleep(0.2)
+    except Exception as e:
+        print(
+            "[SCH][MINUTA][WARN] Falha ao substituir pelo teclado: "
+            f"{type(e).__name__}: {e}"
+        )
+
+    valor_atual = _ler_valor_campo_minuta(driver, campo)
+
+    if (
+        _normalizar_texto_comparacao(valor_atual)
+        == _normalizar_texto_comparacao(texto)
+    ):
+        try:
+            campo.send_keys(Keys.TAB)
+        except Exception:
+            pass
+        return True
+
+    try:
+        driver.execute_script(
+            """
+            const campo = arguments[0];
+            const valor = arguments[1];
+
+            campo.focus();
+
+            const proto = Object.getPrototypeOf(campo);
+            const desc =
+                Object.getOwnPropertyDescriptor(proto, 'value') ||
+                Object.getOwnPropertyDescriptor(
+                    HTMLTextAreaElement.prototype,
+                    'value'
+                ) ||
+                Object.getOwnPropertyDescriptor(
+                    HTMLInputElement.prototype,
+                    'value'
+                );
+
+            if (desc && typeof desc.set === 'function') {
+                desc.set.call(campo, valor);
+            } else {
+                campo.value = valor;
+            }
+
+            campo.defaultValue = valor;
+            campo.dispatchEvent(new Event('input', {bubbles: true}));
+            campo.dispatchEvent(new Event('change', {bubbles: true}));
+            campo.dispatchEvent(new KeyboardEvent('keyup', {
+                bubbles: true,
+                key: valor ? 'a' : 'Backspace',
+                code: valor ? 'KeyA' : 'Backspace'
+            }));
+            campo.dispatchEvent(new Event('blur', {bubbles: true}));
+            """,
+            campo,
+            texto,
+        )
+    except Exception as e:
+        print(
+            "[SCH][MINUTA][WARN] Falha ao substituir por JavaScript: "
+            f"{type(e).__name__}: {e}"
+        )
+
+    time.sleep(0.35)
+    valor_final = _ler_valor_campo_minuta(driver, campo)
+
+    confirmado = (
+        _normalizar_texto_comparacao(valor_final)
+        == _normalizar_texto_comparacao(texto)
+    )
+
+    if confirmado:
+        print(
+            "[SCH][MINUTA] Conteúdo substituído e conferido: "
+            f"{texto or '[vazio]'}"
+        )
+    else:
+        print(
+            "[SCH][MINUTA][WARN] Valor final não corresponde ao esperado. "
+            f"Esperado={texto!r} | Obtido={valor_final!r}"
+        )
+
+    return confirmado
+
+
 def limpar_especificacoes_complementares_minuta_se_necessario(
     driver,
     wait,
@@ -6921,12 +7090,17 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
     aba_original_sch=None,
 ):
     """
-    Na fila Retorno Para Estudo, consulta o tipo do produto somente para
-    decidir se deve executar a limpeza da minuta.
+    Tratamento de Especificações Complementares na fila Retorno Para Estudo.
 
-    O tipo do produto não filtra a análise. Quando estiver na lista:
-    Corrigir Minuta > Especificação > Especificações Complementares
-    > apagar > Salvar Minuta > confirmar vazio > Voltar.
+    O tipo do produto continua decidindo se Corrigir Minuta deve ser aberto.
+
+    Após abrir o campo:
+    - se encontrar IPv6, substitui todo o conteúdo por:
+      "Suporta o protocolo IPv6";
+    - se encontrar E.I.R.P./EIRP, substitui todo o conteúdo pela frase
+      padronizada de potência média em E.I.R.P.;
+    - se encontrar ambos, grava as duas frases, uma por linha;
+    - se não encontrar nenhum, mantém a regra anterior e apaga tudo.
     """
     req = req or {}
 
@@ -6938,11 +7112,17 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
 
     resultado = {
         "aplicavel": False,
-        "regra_aplicada": "limpeza_por_tipo_produto",
+        "regra_aplicada": "tratamento_por_tipo_produto_e_palavras_chave",
         "tipo_produto": tipo_produto,
         "campo_encontrado": False,
         "conteudo_anterior": "",
+        "conteudo_final_esperado": "",
+        "conteudo_final_confirmado": "",
+        "palavras_identificadas": [],
+        "acao_minuta": "",
+        "tratado": False,
         "limpo": False,
+        "substituido": False,
         "salvo": False,
         "confirmado_apos_salvar": False,
         "retornou_para_requerimento": False,
@@ -6954,14 +7134,14 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
     if not _tipo_produto_deve_limpar_especificacoes_complementares(
         tipo_produto
     ):
-        resultado["motivo"] = "tipo_produto_fora_da_regra_de_limpeza"
+        resultado["motivo"] = "tipo_produto_fora_da_regra_de_tratamento"
         resultado["mensagem"] = (
-            "Tipo de produto fora da lista de limpeza automática. "
+            "Tipo de produto fora da lista de tratamento automático. "
             "A análise de Retorno Para Estudo permanece válida."
         )
 
         print(
-            "[SCH][MINUTA] Tipo fora da lista de limpeza; "
+            "[SCH][MINUTA] Tipo fora da lista de tratamento; "
             "Corrigir Minuta não será aberto: "
             f"{tipo_produto or 'não identificado'}"
         )
@@ -6970,7 +7150,7 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
     resultado["aplicavel"] = True
 
     print(
-        "[SCH][MINUTA] Tipo exige limpeza de Especificações "
+        "[SCH][MINUTA] Tipo exige tratamento de Especificações "
         f"Complementares: {tipo_produto}"
     )
 
@@ -7002,39 +7182,77 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
             )
 
         resultado["campo_encontrado"] = True
+
         conteudo_anterior = _ler_valor_campo_minuta(driver, campo)
         resultado["conteudo_anterior"] = conteudo_anterior
 
-        if conteudo_anterior.strip():
-            resultado["limpo"] = (
-                _limpar_elemento_especificacoes_complementares(
-                    driver,
-                    campo,
-                )
-            )
-        else:
-            resultado["limpo"] = True
-            print(
-                "[SCH][MINUTA] Especificações Complementares "
-                "já estavam vazias."
-            )
+        regra = _detectar_regras_especificacoes_complementares_retorno(
+            conteudo_anterior
+        )
 
-        if not resultado["limpo"]:
-            raise RuntimeError(
-                "O campo continuou com texto após a tentativa de limpeza."
-            )
+        texto_final = regra["texto_final"]
+        acao_minuta = regra["acao"]
+
+        resultado["palavras_identificadas"] = list(
+            regra["palavras_identificadas"]
+        )
+        resultado["acao_minuta"] = acao_minuta
+        resultado["conteudo_final_esperado"] = texto_final
+        resultado["frase"] = texto_final
 
         print(
-            "[SCH][MINUTA] Conteúdo de Especificações Complementares apagado."
+            "[SCH][MINUTA] Regra detectada: "
+            f"{acao_minuta} | palavras="
+            f"{resultado['palavras_identificadas'] or 'nenhuma'}"
         )
+
+        if acao_minuta == "limpar_conteudo":
+            if conteudo_anterior.strip():
+                campo_confirmado = (
+                    _limpar_elemento_especificacoes_complementares(
+                        driver,
+                        campo,
+                    )
+                )
+            else:
+                campo_confirmado = True
+                print(
+                    "[SCH][MINUTA] Especificações Complementares "
+                    "já estavam vazias."
+                )
+
+            resultado["limpo"] = bool(campo_confirmado)
+            resultado["substituido"] = False
+        else:
+            campo_confirmado = _definir_valor_campo_minuta(
+                driver,
+                campo,
+                texto_final,
+            )
+            resultado["limpo"] = False
+            resultado["substituido"] = bool(campo_confirmado)
+
+        resultado["tratado"] = bool(campo_confirmado)
+
+        if not resultado["tratado"]:
+            raise RuntimeError(
+                "Não foi possível confirmar o conteúdo esperado antes "
+                "de salvar a minuta."
+            )
 
         entrar_iframe_detalhe_analise(driver, wait)
 
         resultado_salvar = salvar_minuta_corrigida(
             driver=driver,
             wait=wait,
-            texto_esperado=None,
-            confirmar_vazio=True,
+            texto_esperado=(
+                texto_final
+                if acao_minuta != "limpar_conteudo"
+                else None
+            ),
+            confirmar_vazio=(
+                acao_minuta == "limpar_conteudo"
+            ),
         )
 
         resultado["resultado_salvamento"] = resultado_salvar
@@ -7042,13 +7260,16 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         resultado["confirmado_apos_salvar"] = bool(
             resultado_salvar.get("confirmado_apos_salvar")
         )
+        resultado["conteudo_final_confirmado"] = str(
+            resultado_salvar.get("valor_apos_salvar") or ""
+        )
 
         resultado["retornou_para_requerimento"] = bool(
             voltar_da_tela_corrigir_minuta(driver, wait)
         )
 
         sucesso = bool(
-            resultado["limpo"]
+            resultado["tratado"]
             and resultado["salvo"]
             and resultado["confirmado_apos_salvar"]
             and resultado["retornou_para_requerimento"]
@@ -7057,15 +7278,22 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         resultado["preenchido_automaticamente"] = sucesso
 
         if sucesso:
-            resultado["status"] = "limpo_e_salvo"
-            resultado["mensagem"] = (
-                "Especificações Complementares apagadas, salvas e "
-                "confirmadas com sucesso."
-            )
+            if acao_minuta == "limpar_conteudo":
+                resultado["status"] = "limpo_e_salvo"
+                resultado["mensagem"] = (
+                    "Especificações Complementares apagadas, salvas e "
+                    "confirmadas com sucesso."
+                )
+            else:
+                resultado["status"] = "substituido_e_salvo"
+                resultado["mensagem"] = (
+                    "Especificações Complementares substituídas, salvas e "
+                    "confirmadas com sucesso."
+                )
         else:
-            resultado["status"] = "limpeza_nao_confirmada"
+            resultado["status"] = "tratamento_nao_confirmado"
             resultado["motivo"] = (
-                "Não foi possível confirmar todas as etapas da limpeza."
+                "Não foi possível confirmar todas as etapas do tratamento."
             )
             resultado["mensagem"] = resultado["motivo"]
 
@@ -7075,11 +7303,11 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         resultado["status"] = "erro"
         resultado["erro"] = str(e)
         resultado["mensagem"] = (
-            "Falha ao limpar Especificações Complementares."
+            "Falha ao tratar Especificações Complementares."
         )
 
         print(
-            "[SCH][MINUTA][WARN] Falha ao limpar "
+            "[SCH][MINUTA][WARN] Falha ao tratar "
             f"Especificações Complementares: {e}"
         )
 
@@ -7092,8 +7320,6 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
                 resultado["retornou_para_requerimento"] = False
 
         return resultado
-
-
 
 def processar_corrigir_minuta_por_regras(
     driver,
