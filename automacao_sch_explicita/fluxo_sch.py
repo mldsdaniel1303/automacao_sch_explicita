@@ -40,7 +40,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.1"
+VERSAO_SCRIPT = "0.8.2"
 
 
 def _normalizar_texto(valor):
@@ -1077,6 +1077,16 @@ def executar_fluxo_sch(
                                 wait=wait,
                                 req=req,
                                 aba_original_sch=aba_original_sch,
+                                texto_especificacoes_versao_nova=(
+                                    retorno_estudo.get(
+                                        "especificacoes_complementares_versao_nova",
+                                        "",
+                                    )
+                                    or retorno_estudo.get("captura", {}).get(
+                                        "especificacoes_complementares_versao_nova",
+                                        "",
+                                    )
+                                ),
                             )
                         )
                     else:
@@ -1243,6 +1253,18 @@ def executar_fluxo_sch(
                         ),
                         "conteudo_anterior": resultado_minuta.get(
                             "conteudo_anterior",
+                            "",
+                        ),
+                        "texto_especificacoes_versao_nova": resultado_minuta.get(
+                            "texto_especificacoes_versao_nova",
+                            "",
+                        ),
+                        "fontes_analisadas": resultado_minuta.get(
+                            "fontes_analisadas",
+                            [],
+                        ),
+                        "texto_analisado_palavras_chave": resultado_minuta.get(
+                            "texto_analisado_palavras_chave",
                             "",
                         ),
                         "conteudo_final_confirmado": resultado_minuta.get(

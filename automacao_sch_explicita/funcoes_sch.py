@@ -6923,6 +6923,44 @@ TEXTO_MINUTA_EIRP = (
 )
 
 
+def _extrair_especificacoes_complementares_do_texto_direita(texto_direita):
+    """
+    Extrai, do documento da direita em Comparar Versões, o texto de
+    Dados Técnicos do Produto > Especificações Complementares.
+
+    Quando o recorte específico não for possível, devolve o texto completo
+    do lado direito como fallback, permitindo detectar IPv6/E.I.R.P.
+    """
+    texto = str(texto_direita or "").replace("\r", "\n")
+
+    if not texto.strip():
+        return ""
+
+    padroes = [
+        r"Dados\s+T[eé]cnicos\s+do\s+Produto(?P<bloco>.*?)(?:\n\s*(?:Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Garantias|Outras\s+Unidades\s+Fabris)\b|$)",
+        r"Especifica[cç][oõ]es\s+Complementares\s*[:\-]?\s*(?P<bloco>.*?)(?:\n\s*(?:Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Garantias|Outras\s+Unidades\s+Fabris)\b|$)",
+    ]
+
+    bloco_dados = texto
+
+    m_dados = re.search(padroes[0], texto, flags=re.I | re.S)
+    if m_dados:
+        bloco_dados = m_dados.group("bloco") or ""
+
+    m_especificacoes = re.search(
+        r"Especifica[cç][oõ]es\s+Complementares\s*[:\-]?\s*(?P<bloco>.*?)(?:\n\s*(?:Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Garantias|Outras\s+Unidades\s+Fabris)\b|$)",
+        bloco_dados,
+        flags=re.I | re.S,
+    )
+
+    if m_especificacoes:
+        recorte = str(m_especificacoes.group("bloco") or "").strip()
+        if recorte:
+            return recorte
+
+    return texto.strip()
+
+
 def _detectar_regras_especificacoes_complementares_retorno(conteudo):
     """
     Detecta palavras especiais no conteúdo original da minuta.
@@ -7088,6 +7126,7 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
     wait,
     req=None,
     aba_original_sch=None,
+    texto_especificacoes_versao_nova="",
 ):
     """
     Tratamento de Especificações Complementares na fila Retorno Para Estudo.
@@ -7116,6 +7155,11 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         "tipo_produto": tipo_produto,
         "campo_encontrado": False,
         "conteudo_anterior": "",
+        "texto_especificacoes_versao_nova": str(
+            texto_especificacoes_versao_nova or ""
+        ),
+        "texto_analisado_palavras_chave": "",
+        "fontes_analisadas": [],
         "conteudo_final_esperado": "",
         "conteudo_final_confirmado": "",
         "palavras_identificadas": [],
@@ -7186,8 +7230,49 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
         conteudo_anterior = _ler_valor_campo_minuta(driver, campo)
         resultado["conteudo_anterior"] = conteudo_anterior
 
+        fontes_analisadas = []
+        partes_para_analisar = []
+
+        texto_versao_nova = str(
+            texto_especificacoes_versao_nova or ""
+        ).strip()
+
+        if texto_versao_nova:
+            fontes_analisadas.append(
+                "Comparar Versões - documento da direita"
+            )
+            partes_para_analisar.append(texto_versao_nova)
+
+        if conteudo_anterior.strip():
+            fontes_analisadas.append(
+                "Corrigir Minuta - Especificações Complementares"
+            )
+            partes_para_analisar.append(conteudo_anterior)
+
+        texto_para_analisar = "\n".join(partes_para_analisar).strip()
+
+        resultado["fontes_analisadas"] = fontes_analisadas
+        resultado["texto_analisado_palavras_chave"] = texto_para_analisar
+
         regra = _detectar_regras_especificacoes_complementares_retorno(
-            conteudo_anterior
+            texto_para_analisar
+        )
+
+        print(
+            "[SCH][MINUTA] Fonte Comparar Versões - lado direito: "
+            f"{'capturada' if texto_versao_nova else 'não capturada'}"
+        )
+        print(
+            "[SCH][MINUTA] Fonte Corrigir Minuta: "
+            f"{'capturada' if conteudo_anterior.strip() else 'vazia'}"
+        )
+        print(
+            "[SCH][MINUTA] IPv6 encontrado: "
+            f"{'SIM' if regra.get('tem_ipv6') else 'NÃO'}"
+        )
+        print(
+            "[SCH][MINUTA] E.I.R.P. encontrado: "
+            f"{'SIM' if regra.get('tem_eirp') else 'NÃO'}"
         )
 
         texto_final = regra["texto_final"]
@@ -12156,6 +12241,24 @@ def analisar_retorno_para_estudo(
 
         texto_antigo = captura.get("texto_esquerda", "") or ""
         texto_novo = captura.get("texto_direita", "") or ""
+
+        especificacoes_versao_nova = (
+            _extrair_especificacoes_complementares_do_texto_direita(
+                texto_novo
+            )
+        )
+
+        resultado["especificacoes_complementares_versao_nova"] = (
+            especificacoes_versao_nova
+        )
+        resultado["captura"][
+            "especificacoes_complementares_versao_nova"
+        ] = especificacoes_versao_nova
+
+        print(
+            "[SCH][RETORNO] Especificações Complementares da versão nova: "
+            f"{'capturadas' if especificacoes_versao_nova else 'não capturadas'}"
+        )
 
         if not texto_antigo and not texto_novo:
             texto_total = captura.get("texto_total", "") or ""
