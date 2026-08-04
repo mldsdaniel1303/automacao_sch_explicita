@@ -1,16 +1,39 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('automacao_sch_explicita\\config', 'config'), ('.\\.venv\\Lib\\site-packages\\selenium\\webdriver\\remote', 'selenium\\webdriver\\remote')]
-binaries = []
-hiddenimports = ['selenium.webdriver.chrome.options', 'selenium.webdriver.chrome.service', 'selenium.webdriver.edge.options', 'selenium.webdriver.edge.service', 'webdriver_manager.chrome', 'webdriver_manager.microsoft']
-tmp_ret = collect_all('selenium')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('webdriver_manager')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('pdfplumber')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+datas = [
+    ('automacao_sch_explicita\\config', 'config'),
+    (
+        '.\\.venv\\Lib\\site-packages\\selenium\\webdriver\\remote',
+        'selenium\\webdriver\\remote',
+    ),
+]
 
+binaries = []
+
+hiddenimports = [
+    'selenium.webdriver.chrome.options',
+    'selenium.webdriver.chrome.service',
+    'selenium.webdriver.edge.options',
+    'selenium.webdriver.edge.service',
+    'webdriver_manager.chrome',
+    'webdriver_manager.microsoft',
+]
+
+tmp_ret = collect_all('selenium')
+datas += tmp_ret[0]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+tmp_ret = collect_all('webdriver_manager')
+datas += tmp_ret[0]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+tmp_ret = collect_all('pdfplumber')
+datas += tmp_ret[0]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
 
 a = Analysis(
     ['automacao_sch_explicita\\main.py'],
@@ -25,6 +48,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -36,7 +60,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -44,12 +68,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='AutomacaoSCH',
 )
