@@ -6775,6 +6775,43 @@ TIPOS_PRODUTO_LIMPAR_ESPECIFICACOES_COMPLEMENTARES = [
 ]
 
 
+# Lista separada da regra de Corrigir Minuta. Ela deve receber somente tipos
+# formalmente definidos pelos analistas como fora da avaliação automática.
+# Mantida vazia até que a relação oficial seja aprovada.
+TIPOS_PRODUTO_NAO_AVALIADOS_AUTOMATICAMENTE_RETORNO = []
+
+
+def listar_tipos_produto_tratamento_minuta_retorno():
+    """Retorna os tipos que exigem tratamento da minuta no Retorno."""
+    return list(TIPOS_PRODUTO_LIMPAR_ESPECIFICACOES_COMPLEMENTARES)
+
+
+def listar_tipos_produto_nao_avaliados_retorno():
+    """Retorna a lista oficial configurada como fora da avaliação automática."""
+    return list(TIPOS_PRODUTO_NAO_AVALIADOS_AUTOMATICAMENTE_RETORNO)
+
+
+def tipo_produto_nao_avaliado_automaticamente_retorno(tipo_produto):
+    tipo_norm = _normalizar_tipo_produto_minuta(tipo_produto)
+
+    if not tipo_norm:
+        return False
+
+    for tipo_bloqueado in TIPOS_PRODUTO_NAO_AVALIADOS_AUTOMATICAMENTE_RETORNO:
+        bloqueado_norm = _normalizar_tipo_produto_minuta(tipo_bloqueado)
+
+        if tipo_norm == bloqueado_norm:
+            return True
+
+        if len(bloqueado_norm) >= 12 and bloqueado_norm in tipo_norm:
+            return True
+
+        if len(tipo_norm) >= 12 and tipo_norm in bloqueado_norm:
+            return True
+
+    return False
+
+
 def _normalizar_tipo_produto_minuta(valor):
     texto = _normalizar_texto_comparacao(valor)
     texto = texto.replace("radio frequencias", "radiofrequencias")
@@ -6914,7 +6951,7 @@ def _limpar_elemento_especificacoes_complementares(driver, campo):
     return True
 
 
-TEXTO_MINUTA_IPV6 = "Suporta o protocolo IPv6"
+TEXTO_MINUTA_IPV6 = "Suporta o protocolo IPv6."
 
 TEXTO_MINUTA_EIRP = (
     "Valores de potência indicados nas faixas de 5150 – 5350 MHz, "
@@ -7135,7 +7172,7 @@ def limpar_especificacoes_complementares_minuta_se_necessario(
 
     Após abrir o campo:
     - se encontrar IPv6, substitui todo o conteúdo por:
-      "Suporta o protocolo IPv6";
+      "Suporta o protocolo IPv6.";
     - se encontrar E.I.R.P./EIRP, substitui todo o conteúdo pela frase
       padronizada de potência média em E.I.R.P.;
     - se encontrar ambos, grava as duas frases, uma por linha;
@@ -7892,6 +7929,144 @@ def preencher_informacoes_adicionais_com_analise(
             "modo_preenchimento": "acompanhar_processo",
             "erro": str(e),
         }
+
+
+FRASE_MARCACAO_AUTOMACAO_RETORNO = (
+    "Este processo foi avaliado por automação quando em Retorno para Estudo."
+)
+
+
+def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
+    driver,
+    wait,
+    frase=FRASE_MARCACAO_AUTOMACAO_RETORNO,
+):
+    """
+    Acrescenta a marcação da automação sem apagar o conteúdo já existente.
+
+    A função é idempotente: quando a frase já existe, apenas salva/confirma.
+    """
+    frase = str(frase or "").strip()
+    resultado = {
+        "exigida": True,
+        "frase": frase,
+        "campo_encontrado": False,
+        "conteudo_anterior": "",
+        "conteudo_final": "",
+        "ja_existia": False,
+        "preenchida": False,
+        "salva": False,
+        "confirmada_apos_salvar": False,
+        "status": "pendente",
+    }
+
+    if not frase:
+        resultado["status"] = "frase_vazia"
+        resultado["erro"] = "Frase de marcação vazia."
+        return resultado
+
+    xpaths_texto = [
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
+        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "(//textarea[not(@disabled)])[1]",
+    ]
+
+    def localizar_campo():
+        entrar_iframe_detalhe_analise(driver, wait)
+        return _achar_primeiro_elemento_visivel(
+            driver,
+            xpaths_texto,
+            "campo de Informações Adicionais/Acompanhar Processo",
+            timeout=5,
+        )
+
+    def ler(campo):
+        try:
+            return str(driver.execute_script(
+                "return String(arguments[0].value || arguments[0].textContent || '');",
+                campo,
+            ) or "").strip()
+        except Exception:
+            return str(campo.get_attribute("value") or "").strip()
+
+    try:
+        clicar_aba_informacoes_adicionais(driver, wait)
+        resultado["acompanhar_processo_marcado"] = bool(
+            marcar_acompanhar_processo(driver, wait)
+        )
+
+        campo = localizar_campo()
+        resultado["campo_encontrado"] = True
+
+        conteudo_anterior = ler(campo)
+        resultado["conteudo_anterior"] = conteudo_anterior
+
+        frase_norm = _normalizar_texto_comparacao(frase)
+        anterior_norm = _normalizar_texto_comparacao(conteudo_anterior)
+        ja_existia = bool(frase_norm and frase_norm in anterior_norm)
+        resultado["ja_existia"] = ja_existia
+
+        if ja_existia:
+            conteudo_final = conteudo_anterior
+            resultado["preenchida"] = True
+        else:
+            separador = "\n" if conteudo_anterior.strip() else ""
+            conteudo_final = f"{conteudo_anterior.rstrip()}{separador}{frase}".strip()
+
+            confirmado_campo = _definir_valor_campo_minuta(
+                driver,
+                campo,
+                conteudo_final,
+            )
+            resultado["preenchida"] = bool(confirmado_campo)
+
+            if not confirmado_campo:
+                raise RuntimeError(
+                    "Não foi possível confirmar a frase antes do salvamento."
+                )
+
+        resultado["conteudo_final"] = conteudo_final
+        resultado["salva"] = bool(salvar_informacoes_adicionais(driver, wait))
+
+        try:
+            campo_confirmacao = localizar_campo()
+            valor_confirmado = ler(campo_confirmacao)
+        except Exception:
+            captura = _extrair_texto_informacoes_adicionais_retorno(driver, wait)
+            valor_confirmado = str(captura.get("texto") or "")
+
+        resultado["conteudo_confirmado"] = valor_confirmado
+        resultado["confirmada_apos_salvar"] = bool(
+            frase_norm
+            and frase_norm in _normalizar_texto_comparacao(valor_confirmado)
+        )
+
+        if resultado["salva"] and resultado["confirmada_apos_salvar"]:
+            resultado["status"] = (
+                "frase_ja_existia_e_confirmada"
+                if ja_existia
+                else "frase_inserida_salva_e_confirmada"
+            )
+        else:
+            resultado["status"] = "marcacao_nao_confirmada"
+
+        print(
+            "[SCH][RETORNO] Marcação em Informações Adicionais: "
+            f"{resultado['status']}"
+        )
+        return resultado
+
+    except Exception as e:
+        resultado["status"] = "erro"
+        resultado["erro"] = str(e)
+        print(
+            "[SCH][RETORNO][WARN] Não foi possível registrar a marcação "
+            f"da automação em Informações Adicionais: {e}"
+        )
+        return resultado
+
 
 
 
@@ -8761,13 +8936,13 @@ def _coletar_visao_comparar_versoes(driver):
 
 
 
-def _capturar_comparar_versoes(driver, wait=None, timeout=12):
+def _capturar_comparar_versoes(driver, wait=None, timeout=45):
     """
-    Aguarda a renderização efetiva da tela Comparar Versões.
+    Captura a tela Comparar Versões sem exigir leituras consecutivas iguais.
 
-    A página pode estar com readyState completo antes de as duas tabelas de
-    anexos terminarem de renderizar. Por isso, repetimos a captura e guardamos
-    a melhor visão encontrada.
+    Assim que as tabelas de anexos dos dois lados forem localizadas, a captura
+    é aceita imediatamente. O tempo restante é usado apenas quando a página
+    ainda não disponibilizou uma captura completa.
     """
     inicio = time.time()
     melhor_captura = {}
@@ -8778,26 +8953,16 @@ def _capturar_comparar_versoes(driver, wait=None, timeout=12):
         if not isinstance(cap, dict):
             return -1
 
-        docs_esquerda = (
-            cap.get("documentos_anexos_esquerda", []) or []
-        )
-        docs_direita = (
-            cap.get("documentos_anexos_direita", []) or []
-        )
-        vermelhos_esquerda = (
-            cap.get("documentos_anexos_vermelhos_esquerda", []) or []
-        )
-        vermelhos_direita = (
-            cap.get("documentos_anexos_vermelhos_direita", []) or []
-        )
+        docs_esquerda = cap.get("documentos_anexos_esquerda", []) or []
+        docs_direita = cap.get("documentos_anexos_direita", []) or []
+        vermelhos_esquerda = cap.get("documentos_anexos_vermelhos_esquerda", []) or []
+        vermelhos_direita = cap.get("documentos_anexos_vermelhos_direita", []) or []
 
-        texto = " ".join(
-            [
-                str(cap.get("texto_total", "")),
-                str(cap.get("texto_esquerda", "")),
-                str(cap.get("texto_direita", "")),
-            ]
-        )
+        texto = " ".join([
+            str(cap.get("texto_total", "")),
+            str(cap.get("texto_esquerda", "")),
+            str(cap.get("texto_direita", "")),
+        ])
         texto_norm = _normalizar_texto_retorno(texto)
 
         pontos = 0
@@ -8839,17 +9004,12 @@ def _capturar_comparar_versoes(driver, wait=None, timeout=12):
 
         try:
             driver.switch_to.default_content()
-            quantidade_frames = len(
-                driver.find_elements(By.CSS_SELECTOR, "iframe, frame")
-            )
+            quantidade_frames = len(driver.find_elements(By.CSS_SELECTOR, "iframe, frame"))
 
             for indice in range(quantidade_frames):
                 try:
                     driver.switch_to.default_content()
-                    frames = driver.find_elements(
-                        By.CSS_SELECTOR,
-                        "iframe, frame",
-                    )
+                    frames = driver.find_elements(By.CSS_SELECTOR, "iframe, frame")
 
                     if indice >= len(frames):
                         continue
@@ -8858,15 +9018,15 @@ def _capturar_comparar_versoes(driver, wait=None, timeout=12):
                     cap = _coletar_visao_comparar_versoes(driver)
 
                     if isinstance(cap, dict):
-                        cap["_contexto_captura"] = (
-                            f"iframe_direto_{indice}"
-                        )
+                        cap["_contexto_captura"] = f"iframe_direto_{indice}"
                         capturas.append(cap)
                 except Exception:
                     continue
         except Exception:
             pass
 
+        # A primeira captura que contiver as tabelas dos dois lados é aceita.
+        # Não há uma segunda leitura para confirmar estabilidade da página.
         for cap in capturas:
             pontos = pontuacao(cap)
 
@@ -8874,24 +9034,33 @@ def _capturar_comparar_versoes(driver, wait=None, timeout=12):
                 melhor_pontuacao = pontos
                 melhor_captura = cap
 
-        docs_esquerda = (
-            melhor_captura.get(
-                "documentos_anexos_esquerda",
-                [],
-            ) or []
-        )
-        docs_direita = (
-            melhor_captura.get(
-                "documentos_anexos_direita",
-                [],
-            ) or []
-        )
-        vermelhos_direita = (
-            melhor_captura.get(
-                "documentos_anexos_vermelhos_direita",
-                [],
-            ) or []
-        )
+            docs_esquerda = cap.get("documentos_anexos_esquerda", []) or []
+            docs_direita = cap.get("documentos_anexos_direita", []) or []
+
+            if docs_esquerda and docs_direita:
+                cap["_captura_completa"] = True
+                cap["_tentativas_captura"] = tentativa
+                cap["_tempo_captura_segundos"] = round(time.time() - inicio, 2)
+
+                print(
+                    "[SCH][RETORNO][CAPTURA] "
+                    f"tentativa={tentativa} | "
+                    f"contexto={cap.get('_contexto_captura', '')} | "
+                    f"anexos_esquerda={len(docs_esquerda)} | "
+                    f"anexos_direita={len(docs_direita)} | "
+                    "captura_completa=SIM"
+                )
+
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
+
+                return cap
+
+        docs_esquerda = melhor_captura.get("documentos_anexos_esquerda", []) or []
+        docs_direita = melhor_captura.get("documentos_anexos_direita", []) or []
+        vermelhos_direita = melhor_captura.get("documentos_anexos_vermelhos_direita", []) or []
 
         print(
             "[SCH][RETORNO][CAPTURA] "
@@ -8899,29 +9068,27 @@ def _capturar_comparar_versoes(driver, wait=None, timeout=12):
             f"contexto={melhor_captura.get('_contexto_captura', '')} | "
             f"anexos_esquerda={len(docs_esquerda)} | "
             f"anexos_direita={len(docs_direita)} | "
-            f"anexos_vermelhos_direita={len(vermelhos_direita)}"
+            f"anexos_vermelhos_direita={len(vermelhos_direita)} | "
+            "captura_completa=NÃO"
         )
 
-        # A captura está pronta quando as duas tabelas foram encontradas.
-        # Não é obrigatório haver linha vermelha.
-        if docs_esquerda and docs_direita:
-            try:
-                driver.switch_to.default_content()
-            except Exception:
-                pass
-
-            return melhor_captura
-
-        time.sleep(0.4)
+        time.sleep(0.5)
 
     try:
         driver.switch_to.default_content()
     except Exception:
         pass
 
+    melhor_captura["_captura_completa"] = bool(
+        melhor_captura.get("documentos_anexos_esquerda")
+        and melhor_captura.get("documentos_anexos_direita")
+    )
+    melhor_captura["_tentativas_captura"] = tentativa
+    melhor_captura["_tempo_captura_segundos"] = round(time.time() - inicio, 2)
+
     print(
-        "[SCH][RETORNO][WARN] A captura da comparação terminou "
-        "sem encontrar as duas tabelas completas."
+        "[SCH][RETORNO][WARN] A captura da comparação terminou sem localizar "
+        "as tabelas de anexos dos dois lados. Será usada a melhor captura disponível."
     )
 
     return melhor_captura
@@ -10631,6 +10798,9 @@ def _texto_parece_documento_anexo_retorno(texto):
         "carta de representacao",
         "outros",
         "ocd",
+        "maintenance",
+        "maintenance declaration",
+        "declaration of maintenance",
         ".pdf",
         "_nov",
         "_m1",
@@ -10896,13 +11066,10 @@ def _comparar_documentos_anexos_retorno(
     """
     Compara somente a seção/tabela 'Relação de Arquivos Anexos'.
 
-    Prioridade de captura:
-    1. Linhas reais da tabela Relação de Arquivos Anexos capturadas pelo DOM.
-    2. Fallback pelo texto recortado da seção.
-
-    Para documentos adicionados/removidos, quando houver linhas vermelhas na tabela,
-    elas são a fonte mais confiável. Isso evita capturar texto vermelho de Laboratórios,
-    Garantias ou outros blocos que não fazem parte dos anexos.
+    Remoção só é considerada confirmada quando está associada ao lado antigo
+    da tabela. Diferenças puramente textuais são registradas como inconclusivas,
+    evitando afirmar que uma alteração técnica ou um documento incluído foi
+    removido.
     """
     documentos_antigos_tabela = _lista_docs_capturados_tabela_retorno(
         docs_tabela_esquerda,
@@ -10913,8 +11080,14 @@ def _comparar_documentos_anexos_retorno(
         somente_vermelhos=False,
     )
 
-    documentos_antigos = documentos_antigos_tabela or _extrair_documentos_comparar_versoes(texto_antigo)
-    documentos_novos = documentos_novos_tabela or _extrair_documentos_comparar_versoes(texto_novo)
+    documentos_antigos = (
+        documentos_antigos_tabela
+        or _extrair_documentos_comparar_versoes(texto_antigo)
+    )
+    documentos_novos = (
+        documentos_novos_tabela
+        or _extrair_documentos_comparar_versoes(texto_novo)
+    )
 
     adicionados_por_vermelho_tabela = _lista_docs_capturados_tabela_retorno(
         docs_tabela_vermelhos_direita,
@@ -10937,7 +11110,6 @@ def _comparar_documentos_anexos_retorno(
         for x in documentos_antigos
         if _normalizar_texto_retorno(x)
     }
-
     set_novos = {
         _normalizar_texto_retorno(x)
         for x in documentos_novos
@@ -10948,19 +11120,17 @@ def _comparar_documentos_anexos_retorno(
         x for x in documentos_novos
         if _normalizar_texto_retorno(x) not in set_antigos
     ]
-
     removidos_por_diff = [
         x for x in documentos_antigos
         if _normalizar_texto_retorno(x) not in set_novos
     ]
 
-    set_adicionados = {
+    set_adicionados_diff = {
         _normalizar_texto_retorno(x)
         for x in adicionados_por_diff
         if _normalizar_texto_retorno(x)
     }
-
-    set_removidos = {
+    set_removidos_diff = {
         _normalizar_texto_retorno(x)
         for x in removidos_por_diff
         if _normalizar_texto_retorno(x)
@@ -10970,39 +11140,42 @@ def _comparar_documentos_anexos_retorno(
     for item in vermelhos_direita or []:
         texto = _texto_documento_anexo_capturado_retorno(item)
         texto_norm = _normalizar_texto_retorno(texto)
-        if texto_norm and texto_norm in set_adicionados:
+        if texto_norm and texto_norm in set_adicionados_diff:
             vermelhos_docs_direita_na_relacao.append(texto)
 
     vermelhos_docs_esquerda_na_relacao = []
     for item in vermelhos_esquerda or []:
         texto = _texto_documento_anexo_capturado_retorno(item)
         texto_norm = _normalizar_texto_retorno(texto)
-        if texto_norm and texto_norm in set_removidos:
+        if texto_norm and texto_norm in set_removidos_diff:
             vermelhos_docs_esquerda_na_relacao.append(texto)
 
-    # Quando a tabela DOM foi capturada e há linhas vermelhas, a fonte oficial
-    # para inclusão/exclusão é a cor da linha na própria tabela:
-    # - vermelho no lado novo/direito = documento adicionado;
-    # - vermelho no lado antigo/esquerdo = documento removido.
-    # Não usar diff por conjunto nesse cenário, porque documentos repetidos
-    # podem existir antes e serem anexados novamente.
-    if documentos_antigos_tabela or documentos_novos_tabela:
-        if adicionados_por_vermelho_tabela or removidos_por_vermelho_tabela:
-            docs_adicionados = _lista_unica_retorno(adicionados_por_vermelho_tabela)
-            docs_removidos = _lista_unica_retorno(removidos_por_vermelho_tabela)
-        else:
-            docs_adicionados = _lista_unica_retorno(adicionados_por_diff)
-            docs_removidos = _lista_unica_retorno(removidos_por_diff)
-    else:
-        docs_adicionados = _lista_unica_retorno(
-            vermelhos_docs_direita_na_relacao
-            or adicionados_por_diff
-        )
+    tem_tabelas_dom = bool(documentos_antigos_tabela and documentos_novos_tabela)
 
-        docs_removidos = _lista_unica_retorno(
-            vermelhos_docs_esquerda_na_relacao
-            or removidos_por_diff
-        )
+    # Inclusões podem usar a linha vermelha do lado novo ou, quando a tabela foi
+    # capturada por completo, a diferença entre as listas.
+    docs_adicionados = _lista_unica_retorno(
+        adicionados_por_vermelho_tabela
+        or vermelhos_docs_direita_na_relacao
+        or adicionados_por_diff
+    )
+
+    # Exclusões exigem evidência do lado antigo. O simples desaparecimento de
+    # uma linha em captura textual/possivelmente parcial não basta.
+    docs_removidos = _lista_unica_retorno(
+        removidos_por_vermelho_tabela
+        or vermelhos_docs_esquerda_na_relacao
+    )
+
+    norm_rem_confirmados = {
+        _normalizar_texto_retorno(x)
+        for x in docs_removidos
+        if _normalizar_texto_retorno(x)
+    }
+    removidos_inconclusivos = _lista_unica_retorno([
+        x for x in removidos_por_diff
+        if _normalizar_texto_retorno(x) not in norm_rem_confirmados
+    ])
 
     norm_add = {
         _normalizar_texto_retorno(x)
@@ -11015,29 +11188,47 @@ def _comparar_documentos_anexos_retorno(
         if _normalizar_texto_retorno(x)
     }
 
-    # Proteção contra falso positivo: em algumas capturas o mesmo bloco vermelho
-    # pode ser associado aos dois lados por causa de scroll/posição. Se a lista
-    # de removidos ficou idêntica à lista de adicionados, não tratar como remoção.
     if norm_add and norm_add == norm_rem:
+        removidos_inconclusivos = _lista_unica_retorno(
+            removidos_inconclusivos + docs_removidos
+        )
         docs_removidos = []
+        norm_rem = set()
+
+    if docs_removidos:
+        confianca_remocao = "alta"
+        metodo_remocao = "linha_vermelha_lado_antigo"
+    elif removidos_inconclusivos:
+        confianca_remocao = "inconclusiva"
+        metodo_remocao = "diferenca_sem_confirmacao_visual"
+    else:
+        confianca_remocao = "sem_indicio"
+        metodo_remocao = "nenhuma_remocao_identificada"
 
     return {
         "documentos_antigos": documentos_antigos,
         "documentos_novos": documentos_novos,
         "documentos_adicionados": docs_adicionados,
         "documentos_removidos": docs_removidos,
+        "documentos_removidos_inconclusivos": removidos_inconclusivos,
         "tem_documento_adicionado": bool(docs_adicionados),
         "tem_documento_removido": bool(docs_removidos),
+        "tem_remocao_inconclusiva": bool(removidos_inconclusivos),
+        "remocao_confirmada": bool(docs_removidos),
+        "confianca_remocao": confianca_remocao,
+        "metodo_remocao": metodo_remocao,
         "origem_documentos": (
             "tabela_dom_relacao_arquivos_anexos"
-            if (documentos_antigos_tabela or documentos_novos_tabela)
+            if tem_tabelas_dom
             else "texto_recortado_relacao_arquivos_anexos"
         ),
+        "captura_tabelas_completa": tem_tabelas_dom,
         "qtd_linhas_tabela_antiga": len(documentos_antigos_tabela),
         "qtd_linhas_tabela_nova": len(documentos_novos_tabela),
         "qtd_linhas_vermelhas_tabela_nova": len(adicionados_por_vermelho_tabela),
         "qtd_linhas_vermelhas_tabela_antiga": len(removidos_por_vermelho_tabela),
     }
+
 
 
 def _normalizar_bloco_para_comparacao_retorno(texto):
@@ -11694,6 +11885,45 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
     }
 
 
+
+def _descricao_tipos_re_detectados(analise_numeros_info):
+    """Monta o identificador e a descrição humana dos tipos RE detectados."""
+    analise_numeros_info = analise_numeros_info or {}
+    tipos = analise_numeros_info.get("tipos_detectados", []) or []
+
+    numeros = []
+    descricoes = []
+
+    for item in tipos:
+        if not isinstance(item, dict):
+            continue
+
+        numero = str(item.get("numero") or "").strip()
+        nome = str(item.get("nome") or "").strip()
+
+        if numero and numero not in numeros:
+            numeros.append(numero)
+
+        if numero and nome:
+            descricoes.append(f"{numero}. {nome}")
+        elif numero:
+            descricoes.append(numero)
+
+    if not numeros:
+        return {
+            "tipo_re": "6",
+            "descricao_tipo_re": "6. Manutenção tácita",
+            "origem": "padrao_sem_numero_explicito",
+        }
+
+    return {
+        "tipo_re": "+".join(numeros),
+        "descricao_tipo_re": " + ".join(descricoes),
+        "origem": "informacoes_adicionais",
+    }
+
+
+
 def _regra_doc_retorno(chave, nome, aliases, obrigatorio=True, tipos=None):
     return {
         "chave": chave,
@@ -11764,6 +11994,10 @@ def _regras_documentos_por_tipo_re_retorno():
                 "Declaracao de alteracao",
                 "manutenção",
                 "manutencao",
+                "Maintenance",
+                "Maintenance Declaration",
+                "Declaration of Maintenance",
+                "Maintenance Statement",
             ],
         ),
         base_art,
@@ -12112,8 +12346,9 @@ def analisar_retorno_para_estudo(
 
     resultado = {
         "tipo_relatorio": "retorno_para_estudo",
-        "tipo_re": "manutencao_tacita",
-        "descricao_tipo_re": "6. Manutenção tácita",
+        "tipo_re": "nao_identificado",
+        "descricao_tipo_re": "Não identificado",
+        "origem_tipo_re": "pendente",
         "requerimento": numero_req,
 
         "tipo_produto": req.get("tipo_produto", "") if isinstance(req, dict) else "",
@@ -12156,6 +12391,12 @@ def analisar_retorno_para_estudo(
         "documentos_novos_detectados": None,
         "documentos_adicionados": [],
         "documentos_removidos": [],
+        "documentos_removidos_inconclusivos": [],
+        "documentos_removidos_detectados": False,
+        "remocao_documental_inconclusiva": False,
+        "diagnostico_documentos": {},
+        "tempos_comparar_versoes": {},
+        "marcacao_automacao_informacoes_adicionais": {},
 
         "pode_enviar_para_aprovacao": False,
         "deve_enviar_para_aprovacao": False,
@@ -12224,9 +12465,30 @@ def analisar_retorno_para_estudo(
             except Exception:
                 pass
 
+        inicio_abertura_comparacao = time.time()
         info_abertura = clicar_comparar_versoes(driver, wait)
+        tempo_abertura_comparacao = round(
+            time.time() - inicio_abertura_comparacao,
+            2,
+        )
 
-        captura = _capturar_comparar_versoes(driver, wait)
+        inicio_captura_comparacao = time.time()
+        captura = _capturar_comparar_versoes(driver, wait, timeout=45)
+        tempo_captura_comparacao = round(
+            time.time() - inicio_captura_comparacao,
+            2,
+        )
+
+        resultado["tempos_comparar_versoes"] = {
+            "abertura_segundos": tempo_abertura_comparacao,
+            "captura_segundos": tempo_captura_comparacao,
+            "total_segundos": round(
+                tempo_abertura_comparacao + tempo_captura_comparacao,
+                2,
+            ),
+            "tentativas_captura": captura.get("_tentativas_captura", 0),
+            "captura_completa": bool(captura.get("_captura_completa")),
+        }
 
         resultado["captura"] = {
             "url": captura.get("url", ""),
@@ -12237,6 +12499,9 @@ def analisar_retorno_para_estudo(
             "qtd_anexos_tabela_direita": len(captura.get("documentos_anexos_direita", []) or []),
             "qtd_anexos_vermelhos_direita": len(captura.get("documentos_anexos_vermelhos_direita", []) or []),
             "qtd_anexos_vermelhos_esquerda": len(captura.get("documentos_anexos_vermelhos_esquerda", []) or []),
+            "captura_completa": bool(captura.get("_captura_completa")),
+            "tentativas_captura": captura.get("_tentativas_captura", 0),
+            "tempo_captura_segundos": captura.get("_tempo_captura_segundos", 0),
         }
 
         texto_antigo = captura.get("texto_esquerda", "") or ""
@@ -12332,6 +12597,16 @@ def analisar_retorno_para_estudo(
 
         resultado["documentos_adicionados"] = documentos.get("documentos_adicionados", []) or []
         resultado["documentos_removidos"] = documentos.get("documentos_removidos", []) or []
+        resultado["documentos_removidos_inconclusivos"] = (
+            documentos.get("documentos_removidos_inconclusivos", []) or []
+        )
+        resultado["documentos_removidos_detectados"] = bool(
+            documentos.get("remocao_confirmada")
+        )
+        resultado["remocao_documental_inconclusiva"] = bool(
+            documentos.get("tem_remocao_inconclusiva")
+        )
+        resultado["diagnostico_documentos"] = documentos
 
         print(
             "[SCH][RETORNO] Relação de Arquivos Anexos capturada: "
@@ -12356,6 +12631,11 @@ def analisar_retorno_para_estudo(
         resultado["info_adicionais_tem_numero_nao_permitido"] = bool(
             analise_numeros_info.get("tem_numero_nao_permitido")
         )
+
+        descricao_tipos = _descricao_tipos_re_detectados(analise_numeros_info)
+        resultado["tipo_re"] = descricao_tipos["tipo_re"]
+        resultado["descricao_tipo_re"] = descricao_tipos["descricao_tipo_re"]
+        resultado["origem_tipo_re"] = descricao_tipos["origem"]
 
         tipos_re_para_validacao = _tipos_re_para_validacao_documentos(
             analise_numeros_info
@@ -12395,6 +12675,9 @@ def analisar_retorno_para_estudo(
         tem_alteracao_tecnica = bool(resultado["alteracoes_dados_tecnicos"])
         tem_documento_adicionado = bool(resultado["documentos_adicionados"])
         tem_documento_removido = bool(resultado["documentos_removidos"])
+        tem_remocao_inconclusiva = bool(
+            resultado["documentos_removidos_inconclusivos"]
+        )
 
         tem_alteracao_produto = bool(resultado["produto_alterado"])
         tem_alteracao_unidade_fabril = bool(resultado["unidade_fabril_alterada"])
@@ -12455,7 +12738,14 @@ def analisar_retorno_para_estudo(
 
         if tem_documento_removido:
             resultado["alertas"].append(
-                "Foi identificada remoção de documento na Relação de Arquivos Anexos."
+                "Foi identificada remoção confirmada de documento no lado antigo "
+                "da Relação de Arquivos Anexos."
+            )
+
+        if tem_remocao_inconclusiva:
+            resultado["alertas"].append(
+                "Há diferença documental sem confirmação visual de remoção. "
+                "O caso foi classificado como inconclusivo e requer revisão manual."
             )
 
         if (
@@ -12463,13 +12753,15 @@ def analisar_retorno_para_estudo(
             and not tem_alteracao_tecnica
             and tem_documento_adicionado
             and not tem_documento_removido
+            and not tem_remocao_inconclusiva
             and documentos_obrigatorios_ok
             and not resultado.get("info_adicionais_tem_numero_nao_permitido")
         ):
             resultado["status_comparacao"] = "manutencao_tacita_apta"
             resultado["resultado"] = (
                 "Análise de Retorno Para Estudo concluída: não houve alteração em Produto "
-                "nem em Dados Técnicos do Produto, houve documento novo, não houve documento removido, "
+                "nem em Dados Técnicos do Produto, houve documento novo, não houve remoção confirmada "
+                "nem diferença documental inconclusiva, "
                 "os documentos obrigatórios do(s) tipo(s) RE citado(s) foram identificados e "
                 "as Informações Adicionais não citaram número de análise fora do escopo permitido."
             )

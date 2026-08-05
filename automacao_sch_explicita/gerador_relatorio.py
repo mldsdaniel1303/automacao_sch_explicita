@@ -845,7 +845,6 @@ def _html_comparacao_tabela_tecnica(resultado):
         f"<tr><td>Combinações técnicas comparadas no CCT</td><td>{escape(str(linhas_cct))}</td></tr>",
         f"<tr><td>Campos comparados</td><td>{escape(', '.join(str(c) for c in campos_comparados) or 'Não informado')}</td></tr>",
         f"<tr><td>Colunas ignoradas do CCT</td><td>{escape(', '.join(str(c) for c in colunas_ignoradas) or 'Não informado')}</td></tr>",
-        "</tbody></table>",
     ]
 
     linhas_extraidas_sch = comparacao.get("linhas_extraidas_sch", "")
@@ -860,6 +859,8 @@ def _html_comparacao_tabela_tecnica(resultado):
         linhas.append(
             f"<tr><td>Linhas extraídas do CCT antes de remover repetidas</td><td>{escape(str(linhas_extraidas_cct))}</td></tr>"
         )
+
+    linhas.append("</tbody></table>")
 
     if not divergencias:
         linhas.append(
@@ -1447,17 +1448,46 @@ def _html_tipos_re_informacoes_adicionais_retorno(analise):
 
     return "".join(linhas)
 
+
+def _descricao_tipos_re_retorno(retorno):
+    retorno = retorno or {}
+    analise = retorno.get("analise_numeros_informacoes_adicionais") or {}
+    tipos = analise.get("tipos_detectados", []) or []
+
+    descricoes = []
+    for item in tipos:
+        if not isinstance(item, dict):
+            continue
+
+        numero = str(item.get("numero") or "").strip()
+        nome = str(item.get("nome") or "").strip()
+
+        if numero and nome:
+            descricoes.append(f"{numero}. {nome}")
+        elif numero:
+            descricoes.append(numero)
+
+    if descricoes:
+        return " + ".join(descricoes)
+
+    numeros = retorno.get("numeros_tipo_re_detectados", []) or []
+    if numeros:
+        return " + ".join(str(numero) for numero in numeros)
+
+    return (
+        retorno.get("descricao_tipo_re")
+        or retorno.get("tipo_re")
+        or "6. Manutenção tácita"
+    )
+
+
 def _html_retorno_para_estudo_bloco(resultado):
     retorno = _fmt_retorno_para_estudo(resultado)
     req_numero = _fmt_req(resultado)
 
     status = retorno.get("status_comparacao") or "Não executada"
 
-    tipo_re = (
-        retorno.get("descricao_tipo_re")
-        or retorno.get("tipo_re")
-        or "6. Manutenção tácita"
-    )
+    tipo_re = _descricao_tipos_re_retorno(retorno)
 
     itens_analisados = retorno.get("itens_analisados_pela_automacao") or [
         "Produto",
@@ -1475,6 +1505,14 @@ def _html_retorno_para_estudo_bloco(resultado):
 
     docs_adicionados = retorno.get("documentos_adicionados") or []
     docs_removidos = retorno.get("documentos_removidos") or []
+    docs_removidos_inconclusivos = (
+        retorno.get("documentos_removidos_inconclusivos") or []
+    )
+    diagnostico_documentos = retorno.get("diagnostico_documentos") or {}
+    marcacao_automacao = (
+        retorno.get("marcacao_automacao_informacoes_adicionais") or {}
+    )
+    tempos_comparar = retorno.get("tempos_comparar_versoes") or {}
 
     documentos_obrigatorios_encontrados = (
         retorno.get("documentos_obrigatorios_encontrados") or []
@@ -1563,7 +1601,14 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Dados Técnicos do Produto alterados?</td><td>{_sim_nao_retorno(dados_tecnicos_alterados)}</td></tr>
                 <tr><td>Unidade fabril alterada?</td><td>{_sim_nao_retorno(unidade_fabril_alterada)}</td></tr>
                 <tr><td>Documento novo identificado?</td><td>{_sim_nao_retorno(documentos_novos_detectados)}</td></tr>
-                <tr><td>Documento removido identificado?</td><td>{_sim_nao_retorno(bool(docs_removidos))}</td></tr>
+                <tr><td>Documento removido confirmado?</td><td>{_sim_nao_retorno(bool(docs_removidos))}</td></tr>
+                <tr><td>Diferença documental inconclusiva?</td><td>{_sim_nao_retorno(bool(docs_removidos_inconclusivos))}</td></tr>
+                <tr><td>Confiança da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('confianca_remocao') or 'Não informada'))}</td></tr>
+                <tr><td>Método da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('metodo_remocao') or 'Não informado'))}</td></tr>
+                <tr><td>Tabelas dos dois lados localizadas?</td><td>{_sim_nao_retorno(tempos_comparar.get('captura_completa'))}</td></tr>
+                <tr><td>Tempo do Comparar Versões</td><td>{escape(str(tempos_comparar.get('total_segundos', 'Não informado')))} segundo(s)</td></tr>
+                <tr><td>Marcação da automação exigida?</td><td>{_sim_nao_retorno(marcacao_automacao.get('exigida'))}</td></tr>
+                <tr><td>Marcação salva e confirmada?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva') and marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
                 <tr><td>Documentos obrigatórios OK?</td><td>{_sim_nao_retorno(documentos_obrigatorios_ok)}</td></tr>
                 <tr><td>Números RE detectados nas Informações Adicionais</td><td>{escape(', '.join(str(n) for n in numeros_tipo_re_detectados) or 'Nenhum')}</td></tr>
                 <tr><td>Números RE fora do escopo?</td><td>{_sim_nao_retorno(info_adicionais_tem_numero_nao_permitido)}</td></tr>
@@ -1584,10 +1629,11 @@ def _html_retorno_para_estudo_bloco(resultado):
             <b>não houver alteração em Produto</b>,
             <b>não houver alteração em Dados Técnicos do Produto</b>,
             <b>houver documento novo anexado</b>,
-            <b>não houver documento removido</b>,
-            <b>os documentos obrigatórios do(s) tipo(s) RE citado(s) forem identificados</b>
-            e a aba <b>Informações Adicionais</b> não citar número de análise fora do escopo
-            permitido. Tipos aceitos neste fluxo: <b>1, 5, 6, 10 e 12</b>.
+            <b>não houver documento removido confirmado nem diferença documental inconclusiva</b>,
+            <b>os documentos obrigatórios do(s) tipo(s) RE citado(s) forem identificados</b>,
+            a aba <b>Informações Adicionais</b> não citar número de análise fora do escopo
+            permitido e, quando houver aprovação automática, a marcação da análise por
+            automação for salva e confirmada. Tipos aceitos neste fluxo: <b>1, 5, 6, 10 e 12</b>.
             A alteração de Unidade Fabril é registrada no relatório para conferência.
         </p>
 
@@ -1623,8 +1669,26 @@ def _html_retorno_para_estudo_bloco(resultado):
         <h3>Documentos adicionados</h3>
         {_html_lista_retorno(docs_adicionados, "Nenhum documento adicionado identificado.")}
 
-        <h3>Documentos removidos</h3>
-        {_html_lista_retorno(docs_removidos, "Nenhum documento removido identificado.")}
+        <h3>Documentos removidos confirmados</h3>
+        {_html_lista_retorno(docs_removidos, "Nenhum documento removido confirmado.")}
+
+        <h3>Diferenças documentais inconclusivas</h3>
+        {_html_lista_retorno(
+            docs_removidos_inconclusivos,
+            "Nenhuma diferença documental inconclusiva identificada.",
+        )}
+
+        <h3>Registro da análise por automação</h3>
+        <table>
+            <thead><tr><th>Item</th><th>Valor</th></tr></thead>
+            <tbody>
+                <tr><td>Status</td><td>{escape(str(marcacao_automacao.get('status') or 'Não exigida/não executada'))}</td></tr>
+                <tr><td>Frase</td><td>{escape(str(marcacao_automacao.get('frase') or 'Não informada'))}</td></tr>
+                <tr><td>Já existia?</td><td>{_sim_nao_retorno(marcacao_automacao.get('ja_existia'))}</td></tr>
+                <tr><td>Salva?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva'))}</td></tr>
+                <tr><td>Confirmada após salvar?</td><td>{_sim_nao_retorno(marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
+            </tbody>
+        </table>
 
         <h3>Resultado detalhado</h3>
         <div class="{classe_aprovacao}">
@@ -1818,7 +1882,19 @@ def _motivo_principal_retorno(resultado):
 
     documentos_removidos = _lista_resumo_retorno(retorno.get("documentos_removidos"))
     if documentos_removidos:
-        return "Documento removido"
+        return "Documento removido confirmado"
+
+    removidos_inconclusivos = _lista_resumo_retorno(
+        retorno.get("documentos_removidos_inconclusivos")
+    )
+    if removidos_inconclusivos:
+        return "Diferença documental inconclusiva"
+
+    marcacao = retorno.get("marcacao_automacao_informacoes_adicionais") or {}
+    if marcacao.get("exigida") and not (
+        marcacao.get("salva") and marcacao.get("confirmada_apos_salvar")
+    ):
+        return "Marcação da automação não confirmada"
 
     if _bool_resumo_retorno(retorno.get("info_adicionais_tem_numero_nao_permitido")):
         numeros = _lista_resumo_retorno(retorno.get("numeros_tipo_re_nao_permitidos"))
@@ -2196,7 +2272,19 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
 
         documentos_removidos = _lista(retorno.get("documentos_removidos"))
         if _bool(retorno.get("documentos_removidos_detectados")) or documentos_removidos:
-            return "Documento removido"
+            return "Documento removido confirmado"
+
+        removidos_inconclusivos = _lista(
+            retorno.get("documentos_removidos_inconclusivos")
+        )
+        if removidos_inconclusivos:
+            return "Diferença documental inconclusiva"
+
+        marcacao = retorno.get("marcacao_automacao_informacoes_adicionais") or {}
+        if marcacao.get("exigida") and not (
+            marcacao.get("salva") and marcacao.get("confirmada_apos_salvar")
+        ):
+            return "Marcação da automação não confirmada"
 
         if _bool(retorno.get("info_adicionais_tem_numero_nao_permitido")):
             numeros = _lista(retorno.get("numeros_tipo_re_nao_permitidos"))

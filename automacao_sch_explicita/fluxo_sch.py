@@ -21,6 +21,7 @@ from funcoes_sch import (
     avisar_resultado_conferencia_sch_cct,
     preencher_caracteristicas_tecnicas_com_analise,
     preencher_informacoes_adicionais_com_analise,
+    registrar_avaliacao_automacao_informacoes_adicionais_retorno,
     avaliar_validade_cct,
     comparar_datas_certificado_sch_x_cct,
     preencher_minuta_sar_se_necessario,
@@ -40,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.2"
+VERSAO_SCRIPT = "0.8.4"
 
 
 def _normalizar_texto(valor):
@@ -1182,9 +1183,67 @@ def executar_fluxo_sch(
                             "Complementares (limpeza ou substituição) e o salvamento."
                         )
 
+                    # A marcação é exigida somente quando o requerimento está apto
+                    # e o envio automático foi autorizado pelo analista.
+                    marcacao_exigida = bool(
+                        executar_envio_retorno_para_estudo
+                        and retorno_estudo.get("deve_enviar_para_aprovacao")
+                    )
+
+                    if marcacao_exigida:
+                        marcacao_automacao = (
+                            registrar_avaliacao_automacao_informacoes_adicionais_retorno(
+                                driver=driver,
+                                wait=wait,
+                            )
+                        )
+                    else:
+                        marcacao_automacao = {
+                            "exigida": False,
+                            "preenchida": False,
+                            "salva": False,
+                            "confirmada_apos_salvar": False,
+                            "status": (
+                                "nao_exigida_envio_desabilitado"
+                                if not executar_envio_retorno_para_estudo
+                                else "nao_exigida_requerimento_nao_apto"
+                            ),
+                        }
+
+                    retorno_estudo[
+                        "marcacao_automacao_informacoes_adicionais"
+                    ] = marcacao_automacao
+
+                    marcacao_confirmada = bool(
+                        not marcacao_exigida
+                        or (
+                            marcacao_automacao.get("salva")
+                            and marcacao_automacao.get(
+                                "confirmada_apos_salvar"
+                            )
+                        )
+                    )
+
+                    if marcacao_exigida and not marcacao_confirmada:
+                        retorno_estudo["pode_enviar_para_aprovacao"] = False
+                        retorno_estudo["deve_enviar_para_aprovacao"] = False
+                        retorno_estudo["acao_recomendada"] = (
+                            "Não enviar para aprovação / Revisar marcação em "
+                            "Informações Adicionais"
+                        )
+                        retorno_estudo["status_comparacao"] = (
+                            "bloqueado_por_falha_na_marcacao_da_automacao"
+                        )
+                        retorno_estudo.setdefault("alertas", []).append(
+                            "A aprovação automática foi bloqueada porque a frase "
+                            "de registro da análise por automação não foi salva e "
+                            "confirmada em Informações Adicionais."
+                        )
+
                     # A análise já encerrou a tela Comparar Versões. Agora o envio
-                    # pode ocorrer somente se a comparação estiver apta e, quando
-                    # exigida, a limpeza da minuta estiver confirmada.
+                    # pode ocorrer somente se a comparação estiver apta, o tratamento
+                    # da minuta estiver confirmado quando exigido e a marcação da
+                    # automação tiver sido registrada antes da aprovação.
                     retorno_estudo["envio_para_aprovacao"] = (
                         enviar_retorno_para_aprovacao_se_apto(
                             driver=driver,
@@ -1200,12 +1259,19 @@ def executar_fluxo_sch(
                         restauracao_requerimento
                     )
                     resumo["resultado_minuta"] = resultado_minuta
+                    resumo["marcacao_automacao_informacoes_adicionais"] = (
+                        retorno_estudo.get(
+                            "marcacao_automacao_informacoes_adicionais",
+                            {},
+                        )
+                    )
                     resumo["sar_minuta"] = {
                         "status": "nao_aplicavel_fila_retorno_para_estudo",
                         "mensagem": (
                             "A fila Retorno Para Estudo não executa julgamento de SAR. "
-                            "O tratamento da minuta nesta fila é somente a limpeza "
-                            "de Especificações Complementares por tipo de produto."
+                            "O tratamento da minuta nesta fila pode limpar ou substituir "
+                            "Especificações Complementares, conforme IPv6/E.I.R.P. e o "
+                            "tipo de produto configurado."
                         ),
                         "preencher_frase": False,
                         "preenchido_automaticamente": False,

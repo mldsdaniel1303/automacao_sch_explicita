@@ -4,6 +4,10 @@ import re
 import sys
 
 from fluxo_sch import executar_fluxo_sch
+from funcoes_sch import (
+    listar_tipos_produto_tratamento_minuta_retorno,
+    listar_tipos_produto_nao_avaliados_retorno,
+)
 from modo_analise_local import executar_modo_analise_local
 
 
@@ -363,10 +367,31 @@ def escolher_acoes_da_fila(fila_sch):
     print("As etapas próprias desta fila serão executadas automaticamente:")
     print("- Comparar Versões")
     print(
-        "- Limpar Especificações Complementares quando o tipo de "
+        "- Tratar Especificações Complementares quando o tipo de "
         "produto estiver na lista configurada"
     )
-    print("- Bloquear aprovação quando a limpeza obrigatória não for confirmada")
+    print(
+        "- Registrar em Informações Adicionais que o processo foi avaliado "
+        "por automação antes de uma aprovação automática"
+    )
+    print(
+        "- Bloquear aprovação quando o tratamento da minuta ou a marcação "
+        "obrigatória não forem confirmados"
+    )
+
+    tipos_minuta = listar_tipos_produto_tratamento_minuta_retorno()
+    print("\nTipos com tratamento automático da minuta:")
+    for tipo in tipos_minuta:
+        print(f"- {tipo}")
+
+    tipos_fora_escopo = listar_tipos_produto_nao_avaliados_retorno()
+    print("\nTipos fora da avaliação automática configurados:")
+    if tipos_fora_escopo:
+        for tipo in tipos_fora_escopo:
+            print(f"- {tipo}")
+    else:
+        print("- Nenhum tipo configurado até o momento")
+
     print()
 
     executar_envio = perguntar_sim_nao(
@@ -593,8 +618,12 @@ def exibir_resumo_fluxo_completo(opcoes):
     else:
         print("Comparar Versões: Sim")
         print(
-            "Limpeza de Especificações Complementares: "
-            "Automática quando aplicável"
+            "Tratamento de Especificações Complementares: "
+            "Automático quando aplicável (limpeza ou substituição)"
+        )
+        print(
+            "Marcação em Informações Adicionais antes da aprovação: "
+            "Automática e obrigatória"
         )
         print(
             "Aprovação automática quando apto: "
