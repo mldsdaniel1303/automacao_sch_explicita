@@ -1498,10 +1498,12 @@ def _html_retorno_para_estudo_bloco(resultado):
         "Informações Adicionais / justificativa do Retorno Para Estudo",
     ]
 
-    produto_alterado = retorno.get("produto_alterado", False)
-    dados_tecnicos_alterados = retorno.get("dados_tecnicos_alterados", False)
-    unidade_fabril_alterada = retorno.get("unidade_fabril_alterada", False)
-    documentos_novos_detectados = retorno.get("documentos_novos_detectados", False)
+    comparacao_executada = _comparacao_retorno_executada(retorno)
+
+    produto_alterado = retorno.get("produto_alterado") if comparacao_executada else None
+    dados_tecnicos_alterados = retorno.get("dados_tecnicos_alterados") if comparacao_executada else None
+    unidade_fabril_alterada = retorno.get("unidade_fabril_alterada") if comparacao_executada else None
+    documentos_novos_detectados = retorno.get("documentos_novos_detectados") if comparacao_executada else None
 
     docs_adicionados = retorno.get("documentos_adicionados") or []
     docs_removidos = retorno.get("documentos_removidos") or []
@@ -1532,12 +1534,17 @@ def _html_retorno_para_estudo_bloco(resultado):
         False,
     )
 
-    documentos_obrigatorios_ok = retorno.get("documentos_obrigatorios_ok")
-    if documentos_obrigatorios_ok is None:
+    documentos_obrigatorios_ok = (
+        retorno.get("documentos_obrigatorios_ok")
+        if comparacao_executada
+        else None
+    )
+
+    if comparacao_executada and documentos_obrigatorios_ok is None:
         if documentos_obrigatorios_encontrados or documentos_obrigatorios_faltantes:
-            documentos_obrigatorios_ok = not bool(documentos_obrigatorios_faltantes)
-        else:
-            documentos_obrigatorios_ok = False
+            documentos_obrigatorios_ok = not bool(
+                documentos_obrigatorios_faltantes
+            )
 
     pode_enviar = (
         retorno.get("pode_enviar_para_aprovacao")
@@ -1596,12 +1603,13 @@ def _html_retorno_para_estudo_bloco(resultado):
             <tbody>
                 <tr><td>Requerimento</td><td>{escape(str(req_numero))}</td></tr>
                 <tr><td>Tipo de RE analisado</td><td>{escape(str(tipo_re))}</td></tr>
+                <tr><td>Comparar Versões executado?</td><td>{'SIM' if comparacao_executada else 'NÃO'}</td></tr>
                 <tr><td>Status da comparação</td><td>{escape(str(status))}</td></tr>
-                <tr><td>Produto alterado?</td><td>{_sim_nao_retorno(produto_alterado)}</td></tr>
-                <tr><td>Dados Técnicos do Produto alterados?</td><td>{_sim_nao_retorno(dados_tecnicos_alterados)}</td></tr>
-                <tr><td>Unidade fabril alterada?</td><td>{_sim_nao_retorno(unidade_fabril_alterada)}</td></tr>
-                <tr><td>Documento novo identificado?</td><td>{_sim_nao_retorno(documentos_novos_detectados)}</td></tr>
-                <tr><td>Documento removido confirmado?</td><td>{_sim_nao_retorno(bool(docs_removidos))}</td></tr>
+                <tr><td>Produto alterado?</td><td>{_rotulo_tri_retorno(produto_alterado)}</td></tr>
+                <tr><td>Dados Técnicos do Produto alterados?</td><td>{_rotulo_tri_retorno(dados_tecnicos_alterados)}</td></tr>
+                <tr><td>Unidade fabril alterada?</td><td>{_rotulo_tri_retorno(unidade_fabril_alterada)}</td></tr>
+                <tr><td>Documento novo identificado?</td><td>{_rotulo_tri_retorno(documentos_novos_detectados)}</td></tr>
+                <tr><td>Documento removido confirmado?</td><td>{_rotulo_tri_retorno(bool(docs_removidos) if comparacao_executada else None)}</td></tr>
                 <tr><td>Diferença documental inconclusiva?</td><td>{_sim_nao_retorno(bool(docs_removidos_inconclusivos))}</td></tr>
                 <tr><td>Confiança da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('confianca_remocao') or 'Não informada'))}</td></tr>
                 <tr><td>Método da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('metodo_remocao') or 'Não informado'))}</td></tr>
@@ -1609,7 +1617,7 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Tempo do Comparar Versões</td><td>{escape(str(tempos_comparar.get('total_segundos', 'Não informado')))} segundo(s)</td></tr>
                 <tr><td>Marcação da automação exigida?</td><td>{_sim_nao_retorno(marcacao_automacao.get('exigida'))}</td></tr>
                 <tr><td>Marcação salva e confirmada?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva') and marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
-                <tr><td>Documentos obrigatórios OK?</td><td>{_sim_nao_retorno(documentos_obrigatorios_ok)}</td></tr>
+                <tr><td>Documentos obrigatórios OK?</td><td>{_rotulo_documentos_ok_retorno(documentos_obrigatorios_ok)}</td></tr>
                 <tr><td>Números RE detectados nas Informações Adicionais</td><td>{escape(', '.join(str(n) for n in numeros_tipo_re_detectados) or 'Nenhum')}</td></tr>
                 <tr><td>Números RE fora do escopo?</td><td>{_sim_nao_retorno(info_adicionais_tem_numero_nao_permitido)}</td></tr>
                 <tr><td>Números RE fora do escopo identificados</td><td>{escape(', '.join(str(n) for n in numeros_tipo_re_nao_permitidos) or 'Nenhum')}</td></tr>
@@ -1678,13 +1686,18 @@ def _html_retorno_para_estudo_bloco(resultado):
             "Nenhuma diferença documental inconclusiva identificada.",
         )}
 
-        <h3>Registro da análise por automação</h3>
+        <h3>Registro da análise por automação - Acompanhar Processo</h3>
         <table>
             <thead><tr><th>Item</th><th>Valor</th></tr></thead>
             <tbody>
                 <tr><td>Status</td><td>{escape(str(marcacao_automacao.get('status') or 'Não exigida/não executada'))}</td></tr>
-                <tr><td>Frase</td><td>{escape(str(marcacao_automacao.get('frase') or 'Não informada'))}</td></tr>
-                <tr><td>Já existia?</td><td>{_sim_nao_retorno(marcacao_automacao.get('ja_existia'))}</td></tr>
+                <tr><td>Campo de destino</td><td>{escape(str(marcacao_automacao.get('campo_destino') or 'Acompanhar Processo'))}</td></tr>
+                <tr><td>Justificativa do OCD preservada?</td><td>{_sim_nao_retorno(marcacao_automacao.get('justificativa_preservada'))}</td></tr>
+                <tr><td>Justificativa capturada antes do registro?</td><td>{_sim_nao_retorno(marcacao_automacao.get('texto_original_capturado_antes_do_registro'))}</td></tr>
+                <tr><td>Tipo RE analisado antes do registro?</td><td>{_sim_nao_retorno(marcacao_automacao.get('tipo_re_analisado_antes_do_registro'))}</td></tr>
+                <tr><td>Desejo acompanhar este processo marcado?</td><td>{_sim_nao_retorno(marcacao_automacao.get('acompanhar_processo_marcado'))}</td></tr>
+                <tr><td>Conteúdo anterior de Acompanhar Processo</td><td>{escape(str(marcacao_automacao.get('conteudo_anterior') or 'Vazio/não informado'))}</td></tr>
+                <tr><td>Frase registrada</td><td>{escape(str(marcacao_automacao.get('frase') or 'Não informada'))}</td></tr>
                 <tr><td>Salva?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva'))}</td></tr>
                 <tr><td>Confirmada após salvar?</td><td>{_sim_nao_retorno(marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
             </tbody>
@@ -1788,6 +1801,74 @@ def _sim_nao_resumo_retorno(valor):
     return "SIM" if _bool_resumo_retorno(valor) else "NÃO"
 
 
+def _comparacao_retorno_executada(retorno):
+    """
+    True somente quando Comparar Versões realmente produziu uma comparação.
+
+    O fluxo 0.8.6 grava 'comparacao_executada' explicitamente. Os fallbacks
+    abaixo mantêm compatibilidade com resultados antigos.
+    """
+    retorno = retorno or {}
+
+    if "comparacao_executada" in retorno:
+        return retorno.get("comparacao_executada") is True
+
+    status = str(retorno.get("status_comparacao") or "").strip().lower()
+
+    if status in {
+        "manutencao_tacita_apta",
+        "manutencao_tacita_nao_apta",
+        "bloqueado_por_falha_no_tratamento_da_minuta",
+        "bloqueado_por_falha_na_marcacao_da_automacao",
+        "bloqueado_por_falha_ao_restaurar_requerimento",
+    }:
+        return True
+
+    campos = (
+        "produto_alterado",
+        "dados_tecnicos_alterados",
+        "unidade_fabril_alterada",
+        "documentos_novos_detectados",
+        "documentos_obrigatorios_ok",
+        "documentos_removidos_detectados",
+    )
+
+    return any(
+        campo in retorno and retorno.get(campo) is not None
+        for campo in campos
+    )
+
+
+def _rotulo_tri_retorno(
+    valor,
+    *,
+    verdadeiro="SIM",
+    falso="NÃO",
+    nao_analisado="NÃO ANALISADO",
+):
+    if valor is None:
+        return nao_analisado
+
+    return verdadeiro if _bool_resumo_retorno(valor) else falso
+
+
+def _rotulo_alteracao_retorno(valor, feminino=False):
+    if valor is None:
+        return "NÃO ANALISADO"
+
+    if _bool_resumo_retorno(valor):
+        return "Alterada" if feminino else "Alterado"
+
+    return "OK"
+
+
+def _rotulo_documentos_ok_retorno(valor):
+    if valor is None:
+        return "NÃO ANALISADO"
+
+    return "OK" if _bool_resumo_retorno(valor) else "NÃO OK"
+
+
 def _lista_resumo_retorno(valor):
     if not valor:
         return []
@@ -1816,15 +1897,19 @@ def _texto_curto_resumo_retorno(valor, limite=120):
 def _resultado_executivo_retorno(resultado):
     retorno = _retorno_resultado_resumo(resultado)
 
-    envio = retorno.get("envio_para_aprovacao") or resultado.get("envio_para_aprovacao") or {}
-    erro = (
-        retorno.get("erro")
-        or resultado.get("erro")
-        or ""
+    envio = (
+        retorno.get("envio_para_aprovacao")
+        or resultado.get("envio_para_aprovacao")
+        or {}
     )
+    erro = retorno.get("erro") or resultado.get("erro") or ""
 
-    status_comparacao = str(retorno.get("status_comparacao") or "").strip().lower()
-    status_processamento = str(resultado.get("status") or retorno.get("status") or "").strip().lower()
+    status_comparacao = str(
+        retorno.get("status_comparacao") or ""
+    ).strip().lower()
+    status_processamento = str(
+        resultado.get("status") or retorno.get("status") or ""
+    ).strip().lower()
 
     enviado = _bool_resumo_retorno(envio.get("executado"))
 
@@ -1843,6 +1928,9 @@ def _resultado_executivo_retorno(resultado):
     if pode_enviar:
         return "Apto para aprovação"
 
+    if not _comparacao_retorno_executada(retorno):
+        return "Não analisado / Fora do escopo"
+
     return "Revisão manual"
 
 
@@ -1858,6 +1946,9 @@ def _classe_resultado_executivo_retorno(resultado_exec):
     if "erro" in texto:
         return "status-nc"
 
+    if "nao analisado" in texto or "não analisado" in texto:
+        return "status-na"
+
     return "status-revisar"
 
 
@@ -1867,6 +1958,23 @@ def _motivo_principal_retorno(resultado):
     erro = retorno.get("erro") or resultado.get("erro") or ""
     if erro:
         return f"Erro: {_texto_curto_resumo_retorno(erro, 160)}"
+
+    if not _comparacao_retorno_executada(retorno):
+        if _bool_resumo_retorno(
+            retorno.get("info_adicionais_tem_numero_nao_permitido")
+        ):
+            numeros = _lista_resumo_retorno(
+                retorno.get("numeros_tipo_re_nao_permitidos")
+            )
+            if numeros:
+                return "Número RE fora do escopo: " + ", ".join(numeros)
+            return "Número RE fora do escopo"
+
+        status = str(retorno.get("status_comparacao") or "").strip()
+        if status:
+            return "Comparar Versões não executado: " + status
+
+        return "Comparar Versões não executado"
 
     if _bool_resumo_retorno(retorno.get("produto_alterado")):
         return "Produto alterado"
@@ -1963,6 +2071,9 @@ def _acao_recomendada_resumo(resultado):
     if resultado_exec == "Erro na análise":
         return "Revisar manualmente"
 
+    if resultado_exec == "Não analisado / Fora do escopo":
+        return "Não analisado automaticamente / Fora do escopo"
+
     return "Não enviar para aprovação / Revisar manualmente"
 
 
@@ -1974,6 +2085,7 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
     qtd_aprovado = 0
     qtd_apto = 0
     qtd_revisar = 0
+    qtd_nao_analisado = 0
     qtd_erro = 0
 
     linhas = []
@@ -1990,17 +2102,25 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
             qtd_apto += 1
         elif resultado_exec == "Erro na análise":
             qtd_erro += 1
+        elif resultado_exec == "Não analisado / Fora do escopo":
+            qtd_nao_analisado += 1
         else:
             qtd_revisar += 1
 
         classe_resultado = _classe_resultado_executivo_retorno(resultado_exec)
 
-        produto_ok = not _bool_resumo_retorno(retorno.get("produto_alterado"))
-        dados_ok = not _bool_resumo_retorno(retorno.get("dados_tecnicos_alterados"))
-        unidade_ok = not _bool_resumo_retorno(retorno.get("unidade_fabril_alterada"))
-        docs_novos = _bool_resumo_retorno(retorno.get("documentos_novos_detectados"))
-        docs_ok = _bool_resumo_retorno(retorno.get("documentos_obrigatorios_ok"))
-        removido = bool(_lista_resumo_retorno(retorno.get("documentos_removidos")))
+        comparacao_executada = _comparacao_retorno_executada(retorno)
+
+        produto_valor = retorno.get("produto_alterado") if comparacao_executada else None
+        dados_valor = retorno.get("dados_tecnicos_alterados") if comparacao_executada else None
+        unidade_valor = retorno.get("unidade_fabril_alterada") if comparacao_executada else None
+        docs_novos_valor = retorno.get("documentos_novos_detectados") if comparacao_executada else None
+        docs_ok_valor = retorno.get("documentos_obrigatorios_ok") if comparacao_executada else None
+        removido_valor = (
+            bool(_lista_resumo_retorno(retorno.get("documentos_removidos")))
+            if comparacao_executada
+            else None
+        )
 
         envio = retorno.get("envio_para_aprovacao") or {}
         envio_txt = "SIM" if _bool_resumo_retorno(envio.get("executado")) else "NÃO"
@@ -2013,12 +2133,12 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
             f"<td><b>{escape(str(req_numero))}</b></td>"
             f"<td class='status-cell {classe_resultado}'>{escape(resultado_exec)}</td>"
             f"<td>{escape(_acao_recomendada_resumo(resultado))}</td>"
-            f"<td>{'OK' if produto_ok else 'Alterado'}</td>"
-            f"<td>{'OK' if dados_ok else 'Alterado'}</td>"
-            f"<td>{'OK' if unidade_ok else 'Alterada'}</td>"
-            f"<td>{'SIM' if docs_novos else 'NÃO'}</td>"
-            f"<td>{'OK' if docs_ok else 'NÃO OK'}</td>"
-            f"<td>{'SIM' if removido else 'NÃO'}</td>"
+            f"<td>{_rotulo_alteracao_retorno(produto_valor)}</td>"
+            f"<td>{_rotulo_alteracao_retorno(dados_valor)}</td>"
+            f"<td>{_rotulo_alteracao_retorno(unidade_valor, feminino=True)}</td>"
+            f"<td>{_rotulo_tri_retorno(docs_novos_valor)}</td>"
+            f"<td>{_rotulo_documentos_ok_retorno(docs_ok_valor)}</td>"
+            f"<td>{_rotulo_tri_retorno(removido_valor)}</td>"
             f"<td>{escape(_numeros_re_resumo(resultado))}</td>"
             f"<td>{escape(envio_txt)}</td>"
             f"<td>{escape(motivo)}</td>"
@@ -2036,6 +2156,7 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
                     <th>Aprovados automaticamente</th>
                     <th>Aptos, mas não enviados</th>
                     <th>Revisão manual</th>
+                    <th>Não analisados</th>
                     <th>Erros</th>
                 </tr>
             </thead>
@@ -2045,6 +2166,7 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
                     <td class="status-cell status-c">{escape(str(qtd_aprovado))}</td>
                     <td class="status-cell status-revisar">{escape(str(qtd_apto))}</td>
                     <td class="status-cell status-revisar">{escape(str(qtd_revisar))}</td>
+                    <td class="status-cell status-na">{escape(str(qtd_nao_analisado))}</td>
                     <td class="status-cell status-nc">{escape(str(qtd_erro))}</td>
                 </tr>
             </tbody>
@@ -2202,6 +2324,9 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
         if pode_enviar:
             return "Apto para aprovação"
 
+        if not _comparacao_retorno_executada(retorno):
+            return "Não analisado / Fora do escopo"
+
         return "Revisão manual"
 
     def _classe_resultado(resultado_exec):
@@ -2215,6 +2340,9 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
 
         if "erro" in texto:
             return "erro"
+
+        if "nao analisado" in texto or "não analisado" in texto:
+            return "revisar"
 
         return "revisar"
 
@@ -2241,6 +2369,9 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
         if resultado_exec == "Erro na análise":
             return "Revisar manualmente"
 
+        if resultado_exec == "Não analisado / Fora do escopo":
+            return "Não analisado automaticamente / Fora do escopo"
+
         return "Não enviar para aprovação / Revisar manualmente"
 
     def _numeros_re(resultado):
@@ -2260,6 +2391,25 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
         erro = retorno.get("erro") or resultado.get("erro") or ""
         if erro:
             return f"Erro: {str(erro)[:180]}"
+
+        if not _comparacao_retorno_executada(retorno):
+            if _bool(
+                retorno.get("info_adicionais_tem_numero_nao_permitido")
+            ):
+                numeros = _lista(
+                    retorno.get("numeros_tipo_re_nao_permitidos")
+                )
+                if numeros:
+                    return "Número RE fora do escopo: " + ", ".join(
+                        str(n) for n in numeros
+                    )
+                return "Número RE fora do escopo"
+
+            status = str(retorno.get("status_comparacao") or "").strip()
+            if status:
+                return "Comparar Versões não executado: " + status
+
+            return "Comparar Versões não executado"
 
         if _bool(retorno.get("produto_alterado")):
             return "Produto alterado"
@@ -2328,6 +2478,7 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
     qtd_aprovado = 0
     qtd_apto = 0
     qtd_revisar = 0
+    qtd_nao_analisado = 0
     qtd_erro = 0
 
     linhas_resumo = []
@@ -2345,18 +2496,28 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
             qtd_apto += 1
         elif resultado_exec == "Erro na análise":
             qtd_erro += 1
+        elif resultado_exec == "Não analisado / Fora do escopo":
+            qtd_nao_analisado += 1
         else:
             qtd_revisar += 1
 
-        produto_ok = not _bool(retorno.get("produto_alterado"))
-        dados_ok = not _bool(retorno.get("dados_tecnicos_alterados"))
-        unidade_ok = not _bool(retorno.get("unidade_fabril_alterada"))
+        comparacao_executada = _comparacao_retorno_executada(retorno)
 
-        docs_novos = _bool(retorno.get("documentos_novos_detectados"))
-        docs_ok = _bool(retorno.get("documentos_obrigatorios_ok"))
+        produto_valor = retorno.get("produto_alterado") if comparacao_executada else None
+        dados_valor = retorno.get("dados_tecnicos_alterados") if comparacao_executada else None
+        unidade_valor = retorno.get("unidade_fabril_alterada") if comparacao_executada else None
+        docs_novos_valor = retorno.get("documentos_novos_detectados") if comparacao_executada else None
+        docs_ok_valor = retorno.get("documentos_obrigatorios_ok") if comparacao_executada else None
 
         documentos_removidos = _lista(retorno.get("documentos_removidos"))
-        doc_removido = _bool(retorno.get("documentos_removidos_detectados")) or bool(documentos_removidos)
+        doc_removido_valor = (
+            (
+                _bool(retorno.get("documentos_removidos_detectados"))
+                or bool(documentos_removidos)
+            )
+            if comparacao_executada
+            else None
+        )
 
         envio = retorno.get("envio_para_aprovacao") or {}
         envio_txt = "SIM" if _bool(envio.get("executado")) else "NÃO"
@@ -2367,12 +2528,12 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
             f"<td><b>{_safe_txt(req_numero)}</b></td>"
             f"<td><span class='badge {classe}'>{_safe_txt(resultado_exec)}</span></td>"
             f"<td>{_safe_txt(_acao_recomendada(resultado))}</td>"
-            f"<td>{'OK' if produto_ok else 'Alterado'}</td>"
-            f"<td>{'OK' if dados_ok else 'Alterado'}</td>"
-            f"<td>{'OK' if unidade_ok else 'Alterada'}</td>"
-            f"<td>{'SIM' if docs_novos else 'NÃO'}</td>"
-            f"<td>{'OK' if docs_ok else 'NÃO OK'}</td>"
-            f"<td>{'SIM' if doc_removido else 'NÃO'}</td>"
+            f"<td>{_rotulo_alteracao_retorno(produto_valor)}</td>"
+            f"<td>{_rotulo_alteracao_retorno(dados_valor)}</td>"
+            f"<td>{_rotulo_alteracao_retorno(unidade_valor, feminino=True)}</td>"
+            f"<td>{_rotulo_tri_retorno(docs_novos_valor)}</td>"
+            f"<td>{_rotulo_documentos_ok_retorno(docs_ok_valor)}</td>"
+            f"<td>{_rotulo_tri_retorno(doc_removido_valor)}</td>"
             f"<td>{_safe_txt(_numeros_re(resultado))}</td>"
             f"<td>{_safe_txt(envio_txt)}</td>"
             f"<td>{_safe_txt(_motivo_principal(resultado))}</td>"
@@ -2449,7 +2610,7 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
 
         .kpis {{
             display: grid;
-            grid-template-columns: repeat(5, minmax(140px, 1fr));
+            grid-template-columns: repeat(6, minmax(140px, 1fr));
             gap: 12px;
             margin: 16px 0 22px 0;
         }}
@@ -2577,6 +2738,11 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
             <div class="kpi">
                 <div class="numero">{qtd_revisar}</div>
                 <div class="rotulo">Revisão manual</div>
+            </div>
+
+            <div class="kpi">
+                <div class="numero">{qtd_nao_analisado}</div>
+                <div class="rotulo">Não analisados</div>
             </div>
 
             <div class="kpi">

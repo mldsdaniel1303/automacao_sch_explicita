@@ -27,6 +27,7 @@ from funcoes_sch import (
     preencher_minuta_sar_se_necessario,
     limpar_especificacoes_complementares_minuta_se_necessario,
     tipo_produto_deve_limpar_especificacoes_complementares,
+    tipo_produto_nao_avaliado_automaticamente_retorno,
     enviar_retorno_para_aprovacao_se_apto,
     garantir_sessao_ativa_sch,
     voltar_para_fila,
@@ -41,7 +42,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.4"
+VERSAO_SCRIPT = "0.8.6"
 
 
 def _normalizar_texto(valor):
@@ -446,7 +447,9 @@ def _montar_ignorados_resumidos(requerimentos_ignorados):
                 {
                     "requerimento": _numero_requerimento(req),
                     "tipo_produto": req.get("tipo_produto", ""),
+                    "fila_sch": req.get("fila_sch", ""),
                     "motivo": req.get("motivo", "fora_escopo_radiacao_restrita"),
+                    "mensagem": req.get("mensagem", ""),
                 }
             )
         else:
@@ -794,9 +797,48 @@ def executar_fluxo_sch(
             processar_apenas_rr=processar_apenas_rr_efetivo,
         )
 
+        ignorados_tipo_produto_retorno = []
+
+        if fila_retorno:
+            processaveis_retorno = []
+
+            for req in requerimentos_processaveis:
+                tipo_produto = (
+                    req.get("tipo_produto", "")
+                    if isinstance(req, dict)
+                    else ""
+                )
+
+                if tipo_produto_nao_avaliado_automaticamente_retorno(
+                    tipo_produto
+                ):
+                    item = dict(req)
+                    item["motivo"] = (
+                        "tipo_produto_fora_escopo_automatico_retorno"
+                    )
+                    item["mensagem"] = (
+                        "Requerimento não analisado automaticamente porque o "
+                        "tipo de produto 'Telefone Móvel Celular' está fora "
+                        "do escopo da automação na fila Retorno Para Estudo."
+                    )
+                    ignorados_tipo_produto_retorno.append(item)
+
+                    print(
+                        "[SCH][RETORNO][IGNORADO] "
+                        f"Requerimento={_numero_requerimento(item)} | "
+                        f"Tipo={tipo_produto or 'não identificado'} | "
+                        "Motivo=tipo de produto fora do escopo automático"
+                    )
+                    continue
+
+                processaveis_retorno.append(req)
+
+            requerimentos_processaveis = processaveis_retorno
+
         requerimentos_ignorados = (
             list(ignorados_homologacao_26)
             + list(requerimentos_ignorados_escopo)
+            + list(ignorados_tipo_produto_retorno)
         )
 
         pasta_requerimentos, mapeados = preparar_pastas_requerimentos(
@@ -843,6 +885,21 @@ def executar_fluxo_sch(
 
         if not requerimentos_processaveis:
             print("[SCH][WARN] Nenhum requerimento selecionado para processamento.")
+            _gerar_relatorios_parciais_execucao(
+                pasta_base=pasta_base,
+                relatorio_execucao=relatorio_execucao,
+                inicio_execucao=inicio_execucao,
+                fila_sch=fila_sch,
+                requerimentos=requerimentos,
+                requerimentos_processaveis=requerimentos_processaveis,
+                requerimentos_ignorados=requerimentos_ignorados,
+                ignorados_resumidos=ignorados_resumidos,
+                versao_script=VERSAO_SCRIPT,
+                categorias_anexos_ativas=categorias_anexos_ativas,
+                processar_apenas_rr_efetivo=processar_apenas_rr_efetivo,
+                status_execucao="finalizado",
+                imprimir=True,
+            )
             return
 
         for req in requerimentos_processaveis:
@@ -1040,6 +1097,149 @@ def executar_fluxo_sch(
                         executar_envio=False,
                     )
 
+                    # IMPORTANTE:
+                    # analisar_retorno_para_estudo pode encerrar cedo quando
+                    # Informações Adicionais indicam tipo RE fora do escopo,
+                    # quando não foi possível ler o campo ou quando Comparar
+                    # Versões falhou. Nesses casos NÃO podemos abrir Corrigir
+                    # Minuta, substituir Informações Adicionais nem aprovar.
+                    status_retorno_inicial = str(
+                        retorno_estudo.get("status_comparacao") or ""
+                    ).strip()
+
+                    comparacao_concluida = status_retorno_inicial in {
+                        "manutencao_tacita_apta",
+                        "manutencao_tacita_nao_apta",
+                    }
+                    retorno_estudo["comparacao_executada"] = bool(
+                        comparacao_concluida
+                    )
+
+                    if not comparacao_concluida:
+                        tipo_produto = req.get("tipo_produto", "")
+
+                        resultado_minuta = {
+                            "aplicavel": False,
+                            "tratado": False,
+                            "limpo": False,
+                            "substituido": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                            "status": "nao_executada_analise_interrompida",
+                            "mensagem": (
+                                "Corrigir Minuta não foi executado porque a "
+                                "análise do Retorno Para Estudo foi encerrada "
+                                "antes de uma comparação válida."
+                            ),
+                            "modo": (
+                                "tratamento_especificacoes_complementares_"
+                                "retorno_para_estudo"
+                            ),
+                            "tipo_produto": tipo_produto,
+                        }
+
+                        retorno_estudo["corrigir_minuta"] = resultado_minuta
+                        retorno_estudo["tratamento_minuta_exigido"] = False
+                        retorno_estudo["tratamento_minuta_confirmado"] = False
+                        retorno_estudo["limpeza_minuta_exigida"] = False
+                        retorno_estudo["limpeza_minuta_confirmada"] = False
+
+                        retorno_estudo[
+                            "marcacao_automacao_informacoes_adicionais"
+                        ] = {
+                            "exigida": False,
+                            "preenchida": False,
+                            "salva": False,
+                            "confirmada_apos_salvar": False,
+                            "status": (
+                                "nao_executada_analise_interrompida_antes_da_aprovacao"
+                            ),
+                        }
+
+                        retorno_estudo["envio_para_aprovacao"] = {
+                            "executado": False,
+                            "motivo": (
+                                "analise_retorno_interrompida_antes_da_etapa_de_aprovacao"
+                            ),
+                        }
+                        retorno_estudo["pode_enviar_para_aprovacao"] = False
+                        retorno_estudo["deve_enviar_para_aprovacao"] = False
+                        retorno_estudo["resultado_execucao_analise"] = (
+                            "nao_analisado_comparar_versoes"
+                        )
+
+                        # Não transformar ausência de comparação em False.
+                        # O relatório deve conseguir distinguir:
+                        # True=alterado, False=conferido/sem alteração,
+                        # None=não analisado.
+                        for campo_nao_analisado in (
+                            "produto_alterado",
+                            "dados_tecnicos_alterados",
+                            "unidade_fabril_alterada",
+                            "documentos_novos_detectados",
+                            "documentos_obrigatorios_ok",
+                            "documentos_removidos_detectados",
+                        ):
+                            retorno_estudo[campo_nao_analisado] = None
+
+                        resumo["retorno_para_estudo"] = retorno_estudo
+                        resumo["resultado_minuta"] = resultado_minuta
+                        resumo[
+                            "marcacao_automacao_informacoes_adicionais"
+                        ] = retorno_estudo.get(
+                            "marcacao_automacao_informacoes_adicionais",
+                            {},
+                        )
+                        resumo["sar_minuta"] = {
+                            "status": "nao_aplicavel_fila_retorno_para_estudo",
+                            "mensagem": (
+                                "A fila Retorno Para Estudo não executa "
+                                "julgamento de SAR."
+                            ),
+                            "preencher_frase": False,
+                            "preenchido_automaticamente": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                        }
+                        resumo["minuta"] = {
+                            "preenchida": False,
+                            "campo_limpo": False,
+                            "campo_substituido": False,
+                            "tratado": False,
+                            "alterada": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                            "status": resultado_minuta["status"],
+                            "mensagem": resultado_minuta["mensagem"],
+                            "frase": "",
+                            "modo": resultado_minuta["modo"],
+                            "tipo_produto": tipo_produto,
+                        }
+                        resumo["preenchimento_sch"]["minuta"] = False
+                        resumo["status"] = "sucesso"
+                        resumo["fim"] = datetime.now().isoformat()
+
+                        _salvar_controle_downloads(
+                            pasta_req=pasta_req,
+                            numero=numero,
+                            qtd_downloads=qtd_downloads,
+                            categorias_anexos_ativas=categorias_anexos_ativas,
+                            anexos_baixados=resumo["anexos_baixados"],
+                            escopo_processamento=resumo["escopo_processamento"],
+                            fila_sch=fila_sch,
+                            retorno_para_estudo=retorno_estudo,
+                        )
+
+                        print(
+                            "[SCH][RETORNO] Pós-processamento não executado. "
+                            f"Status={status_retorno_inicial or 'não informado'} | "
+                            "Corrigir Minuta=NÃO | "
+                            "Registro em Acompanhar Processo=NÃO | "
+                            "Aprovação=NÃO"
+                        )
+
+                        continue
+
                     # A análise também tenta restaurar a tela em seu finally,
                     # mas repetimos a confirmação de forma idempotente antes
                     # de qualquer clique em Corrigir Minuta.
@@ -1069,9 +1269,34 @@ def executar_fluxo_sch(
                         )
                     )
 
-                    # O tipo do produto NÃO filtra a análise. Ele serve apenas
-                    # para decidir se este caminho deve ser executado.
-                    if restauracao_requerimento.get("restaurado"):
+                    # Corrigir Minuta é uma etapa de pós-processamento para
+                    # requerimentos que já ficaram APTOS na comparação.
+                    # Se Comparar Versões concluiu que o processo exige revisão
+                    # manual, a automação não deve modificar a minuta.
+                    apto_antes_pos_processamento = bool(
+                        retorno_estudo.get("deve_enviar_para_aprovacao")
+                    )
+
+                    if not apto_antes_pos_processamento:
+                        resultado_minuta = {
+                            "aplicavel": bool(limpeza_exigida),
+                            "tratado": False,
+                            "limpo": False,
+                            "substituido": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                            "retornou_para_requerimento": bool(
+                                restauracao_requerimento.get("restaurado")
+                            ),
+                            "status": "nao_executada_requerimento_nao_apto",
+                            "mensagem": (
+                                "Corrigir Minuta não foi executado porque "
+                                "Comparar Versões classificou o requerimento "
+                                "para revisão manual."
+                            ),
+                        }
+
+                    elif restauracao_requerimento.get("restaurado"):
                         resultado_minuta = (
                             limpar_especificacoes_complementares_minuta_se_necessario(
                                 driver=driver,
@@ -1093,7 +1318,9 @@ def executar_fluxo_sch(
                     else:
                         resultado_minuta = {
                             "aplicavel": bool(limpeza_exigida),
+                            "tratado": False,
                             "limpo": False,
+                            "substituido": False,
                             "salvo": False,
                             "confirmado_apos_salvar": False,
                             "retornou_para_requerimento": False,
@@ -1122,14 +1349,14 @@ def executar_fluxo_sch(
                         "retorno_para_estudo"
                     )
                     resultado_minuta["tratamento_exigido"] = bool(
-                        limpeza_exigida
+                        apto_antes_pos_processamento and limpeza_exigida
                     )
                     resultado_minuta["tratamento_confirmado"] = bool(
                         tratamento_confirmado
                     )
 
                     resultado_minuta["limpeza_exigida"] = bool(
-                        limpeza_exigida
+                        apto_antes_pos_processamento and limpeza_exigida
                     )
                     resultado_minuta["limpeza_confirmada"] = bool(
                         tratamento_confirmado
@@ -1137,13 +1364,13 @@ def executar_fluxo_sch(
 
                     retorno_estudo["corrigir_minuta"] = resultado_minuta
                     retorno_estudo["tratamento_minuta_exigido"] = bool(
-                        limpeza_exigida
+                        apto_antes_pos_processamento and limpeza_exigida
                     )
                     retorno_estudo["tratamento_minuta_confirmado"] = bool(
                         tratamento_confirmado
                     )
                     retorno_estudo["limpeza_minuta_exigida"] = bool(
-                        limpeza_exigida
+                        apto_antes_pos_processamento and limpeza_exigida
                     )
                     retorno_estudo["limpeza_minuta_confirmada"] = bool(
                         tratamento_confirmado
@@ -1168,7 +1395,11 @@ def executar_fluxo_sch(
 
                     # Se o tipo exige limpeza, a aprovação automática fica
                     # bloqueada até que apagar + salvar + confirmar tenha sucesso.
-                    if limpeza_exigida and not tratamento_confirmado:
+                    if (
+                        apto_antes_pos_processamento
+                        and limpeza_exigida
+                        and not tratamento_confirmado
+                    ):
                         retorno_estudo["pode_enviar_para_aprovacao"] = False
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["acao_recomendada"] = (
@@ -1195,6 +1426,16 @@ def executar_fluxo_sch(
                             registrar_avaliacao_automacao_informacoes_adicionais_retorno(
                                 driver=driver,
                                 wait=wait,
+                                texto_original_analisado=(
+                                    retorno_estudo.get(
+                                        "informacoes_adicionais_retorno",
+                                        {},
+                                    ).get("texto", "")
+                                ),
+                                analise_tipos_re=retorno_estudo.get(
+                                    "analise_numeros_informacoes_adicionais",
+                                    {},
+                                ),
                             )
                         )
                     else:
@@ -1228,8 +1469,8 @@ def executar_fluxo_sch(
                         retorno_estudo["pode_enviar_para_aprovacao"] = False
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["acao_recomendada"] = (
-                            "Não enviar para aprovação / Revisar marcação em "
-                            "Informações Adicionais"
+                            "Não enviar para aprovação / Revisar registro em "
+                            "Acompanhar Processo"
                         )
                         retorno_estudo["status_comparacao"] = (
                             "bloqueado_por_falha_na_marcacao_da_automacao"
@@ -1237,7 +1478,7 @@ def executar_fluxo_sch(
                         retorno_estudo.setdefault("alertas", []).append(
                             "A aprovação automática foi bloqueada porque a frase "
                             "de registro da análise por automação não foi salva e "
-                            "confirmada em Informações Adicionais."
+                            "confirmada no campo Acompanhar Processo."
                         )
 
                     # A análise já encerrou a tela Comparar Versões. Agora o envio
@@ -1363,7 +1604,10 @@ def executar_fluxo_sch(
                     print(
                         "[SCH][RETORNO] Requerimento finalizado. "
                         f"Resultado={retorno_estudo.get('status_comparacao')} | "
+                        f"Comparar Versões={'SIM' if retorno_estudo.get('comparacao_executada') else 'NÃO'} | "
                         f"Tratamento da minuta={'SIM' if tratamento_confirmado else 'NÃO'} | "
+                        f"Registro em Acompanhar Processo="
+                        f"{'SIM' if marcacao_automacao.get('confirmada_apos_salvar') else 'NÃO'} | "
                         f"Ação={retorno_estudo.get('acao_recomendada')}"
                     )
 

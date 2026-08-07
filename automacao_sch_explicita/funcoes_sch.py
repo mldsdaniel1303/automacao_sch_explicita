@@ -6771,14 +6771,15 @@ TIPOS_PRODUTO_LIMPAR_ESPECIFICACOES_COMPLEMENTARES = [
     "Sistemas de Identificação por Radiofrequências",
     "Sistema de Identificação por Radiofrequências",
     "Equipamento de Radiocomunicação de Radiação Restrita",
-    "Telefone Móvel Celular",
 ]
 
 
-# Lista separada da regra de Corrigir Minuta. Ela deve receber somente tipos
-# formalmente definidos pelos analistas como fora da avaliação automática.
-# Mantida vazia até que a relação oficial seja aprovada.
-TIPOS_PRODUTO_NAO_AVALIADOS_AUTOMATICAMENTE_RETORNO = []
+# Tipos que NÃO devem ser analisados automaticamente na fila
+# Retorno Para Estudo. O filtro deve ocorrer ainda na lista da fila,
+# antes de abrir o requerimento ou executar qualquer etapa da análise.
+TIPOS_PRODUTO_NAO_AVALIADOS_AUTOMATICAMENTE_RETORNO = [
+    "Telefone Móvel Celular",
+]
 
 
 def listar_tipos_produto_tratamento_minuta_retorno():
@@ -7717,73 +7718,100 @@ def _checkbox_esta_marcado(elemento):
 
 
 def marcar_acompanhar_processo(driver, wait):
+    """
+    Marca especificamente a opção:
+    'Desejo acompanhar este processo.'
+
+    Não usa mais o primeiro checkbox genérico da página, para evitar clicar
+    em outro controle do SCH.
+    """
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
     checkbox_xpaths = [
         "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
-        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/ancestor::*[1]//input[@type='checkbox'][1]",
-        "//input[@type='checkbox'][contains(@name,'acompanh')]",
-        "//input[@type='checkbox'][contains(@id,'acompanh')]",
-        "(//input[@type='checkbox'])[1]",
+        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/ancestor::*[self::td or self::div or self::span][1]//input[@type='checkbox'][1]",
+        "//input[@type='checkbox' and contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+        "//input[@type='checkbox' and contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
     ]
 
     label_xpaths = [
         "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]",
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]",
+        "//*[self::span or self::div or self::td][contains(normalize-space(), 'Desejo acompanhar este processo')]",
     ]
 
     checkbox = None
 
     for xpath in checkbox_xpaths:
         try:
-            elementos = driver.find_elements(By.XPATH, xpath)
-            for el in elementos:
+            for el in driver.find_elements(By.XPATH, xpath):
                 try:
-                    if el.is_displayed():
+                    if el.is_displayed() and el.is_enabled():
                         checkbox = el
                         break
                 except Exception:
                     continue
-            if checkbox:
+            if checkbox is not None:
                 break
         except Exception:
             continue
 
-    if checkbox and _checkbox_esta_marcado(checkbox):
+    if checkbox is not None and _checkbox_esta_marcado(checkbox):
         print("[SCH] Opção 'Desejo acompanhar este processo' já está marcada.")
         return True
 
-    alvo_clique = checkbox or _achar_primeiro_elemento_visivel(
-        driver,
-        label_xpaths,
-        "checkbox/label de acompanhar processo",
-        timeout=3,
-    )
+    alvo_clique = checkbox
 
+    if alvo_clique is None:
+        alvo_clique = _achar_primeiro_elemento_visivel(
+            driver,
+            label_xpaths,
+            "checkbox/label de acompanhar processo",
+            timeout=3,
+        )
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        alvo_clique,
+    )
     _clicar_com_fallback(driver, alvo_clique)
-    esperar_tela_carregar(driver, 0.04)
+    esperar_tela_carregar(driver, 0.12)
 
     entrar_iframe_detalhe_analise(driver, wait)
 
     for xpath in checkbox_xpaths:
         try:
-            elementos = driver.find_elements(By.XPATH, xpath)
-            for el in elementos:
+            for el in driver.find_elements(By.XPATH, xpath):
                 try:
                     if el.is_displayed() and _checkbox_esta_marcado(el):
-                        print("[SCH] Opção 'Desejo acompanhar este processo' marcada com sucesso.")
+                        print(
+                            "[SCH] Opção 'Desejo acompanhar este processo' "
+                            "marcada com sucesso."
+                        )
                         return True
                 except Exception:
                     continue
         except Exception:
             continue
 
-    print("[SCH][WARN] Não foi possível validar visualmente a marcação do acompanhamento.")
+    print(
+        "[SCH][WARN] Não foi possível confirmar que "
+        "'Desejo acompanhar este processo' ficou marcado."
+    )
     return False
 
 
 def preencher_acompanhar_processo(driver, wait, texto):
+    """
+    Preenche SOMENTE o textarea grande da seção 'Acompanhar Processo',
+    imediatamente associado a 'Desejo acompanhar este processo.'.
+
+    Importante:
+    - não altera a Justificativa do OCD;
+    - não usa o primeiro textarea genérico da página como fallback.
+    """
+    texto = str(texto or "").strip()
+
     if not texto:
         print("[SCH][WARN] Texto vazio para Acompanhar Processo.")
         return False
@@ -7791,63 +7819,94 @@ def preencher_acompanhar_processo(driver, wait, texto):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.04)
 
-    marcar_acompanhar_processo(driver, wait)
+    if not marcar_acompanhar_processo(driver, wait):
+        raise RuntimeError(
+            "Não foi possível marcar 'Desejo acompanhar este processo'."
+        )
+
+    entrar_iframe_detalhe_analise(driver, wait)
 
     xpaths_texto = [
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
-        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "(//textarea[not(@disabled)])[1]",
+        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
+        "//*[normalize-space(.)='Acompanhar Processo']/following::textarea[not(@disabled)][1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[not(@disabled)][1]",
+        "//textarea[not(@disabled) and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
     ]
 
     campo = _achar_primeiro_elemento_visivel(
         driver,
         xpaths_texto,
-        "campo Acompanhar Processo",
-        timeout=4,
+        "textarea da seção Acompanhar Processo",
+        timeout=5,
     )
 
-    _clicar_com_fallback(driver, campo)
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        campo,
+    )
 
     try:
+        campo.click()
         campo.send_keys(Keys.CONTROL, "a")
         campo.send_keys(Keys.DELETE)
         campo.send_keys(texto)
     except Exception:
         driver.execute_script(
             """
-            arguments[0].value = arguments[1];
-            arguments[0].dispatchEvent(new Event('input', {bubbles:true}));
-            arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-            arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));
+            const campo = arguments[0];
+            const valor = arguments[1];
+
+            const proto = Object.getPrototypeOf(campo);
+            const desc =
+                Object.getOwnPropertyDescriptor(proto, 'value') ||
+                Object.getOwnPropertyDescriptor(
+                    HTMLTextAreaElement.prototype,
+                    'value'
+                );
+
+            if (desc && typeof desc.set === 'function') {
+                desc.set.call(campo, valor);
+            } else {
+                campo.value = valor;
+            }
+
+            campo.dispatchEvent(new Event('input', {bubbles:true}));
+            campo.dispatchEvent(new Event('change', {bubbles:true}));
+            campo.dispatchEvent(new Event('blur', {bubbles:true}));
             """,
             campo,
             texto,
         )
 
-    esperar_tela_carregar(driver, 0.04)
-
     try:
-        valor = (campo.get_attribute("value") or "").strip()
-        if texto.strip() in valor:
-            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
-            return True
+        campo.send_keys(Keys.TAB)
     except Exception:
         pass
 
-    try:
-        valor_js = driver.execute_script(
-            "return (arguments[0].value || arguments[0].textContent || '').trim();",
+    esperar_tela_carregar(driver, 0.08)
+
+    valor = str(
+        driver.execute_script(
+            "return arguments[0].value == null ? '' : String(arguments[0].value);",
             campo,
         )
-        if texto.strip() in (valor_js or ""):
-            print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
-            return True
-    except Exception:
-        pass
+        or ""
+    ).strip()
 
-    print("[SCH][WARN] O campo de acompanhamento foi preenchido, mas não foi possível validar o valor.")
+    confirmado = (
+        _normalizar_texto_comparacao(valor)
+        == _normalizar_texto_comparacao(texto)
+    )
+
+    if confirmado:
+        print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
+        return True
+
+    print(
+        "[SCH][WARN] O campo 'Acompanhar Processo' foi alterado, "
+        "mas o valor exato não pôde ser confirmado."
+    )
     return False
 
 
@@ -7932,7 +7991,7 @@ def preencher_informacoes_adicionais_com_analise(
 
 
 FRASE_MARCACAO_AUTOMACAO_RETORNO = (
-    "Este processo foi avaliado por automação quando em Retorno para Estudo."
+    "Este processo foi avaliado por automação, quando em Retorno para Estudo."
 )
 
 
@@ -7940,20 +7999,45 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
     driver,
     wait,
     frase=FRASE_MARCACAO_AUTOMACAO_RETORNO,
+    texto_original_analisado="",
+    analise_tipos_re=None,
 ):
     """
-    Acrescenta a marcação da automação sem apagar o conteúdo já existente.
+    Registra a análise automática no local correto da aba Informações Adicionais.
 
-    A função é idempotente: quando a frase já existe, apenas salva/confirma.
+    Fluxo:
+    1. A Justificativa do OCD já deve ter sido lida anteriormente para decidir
+       o(s) tipo(s) RE. Esta função NÃO altera a Justificativa.
+    2. Marca 'Desejo acompanhar este processo.'.
+    3. Preenche SOMENTE o textarea grande da seção 'Acompanhar Processo' com
+       a frase da automação.
+    4. Salva Informações Adicionais.
+    5. Reabre/confere o mesmo textarea e exige a frase exata antes de permitir
+       que o fluxo siga para a aprovação automática.
     """
     frase = str(frase or "").strip()
+    texto_original_analisado = str(texto_original_analisado or "").strip()
+
     resultado = {
         "exigida": True,
         "frase": frase,
+        "campo_destino": "Acompanhar Processo",
+        "justificativa_preservada": True,
+        "conteudo_original_analisado": texto_original_analisado,
+        "analise_tipos_re": analise_tipos_re or {},
+        "texto_original_capturado_antes_do_registro": bool(
+            texto_original_analisado
+        ),
+        "tipo_re_analisado_antes_do_registro": bool(
+            isinstance(analise_tipos_re, dict)
+        ),
+        "acompanhar_processo_marcado": False,
         "campo_encontrado": False,
         "conteudo_anterior": "",
         "conteudo_final": "",
+        "conteudo_confirmado": "",
         "ja_existia": False,
+        "substituida": False,
         "preenchida": False,
         "salva": False,
         "confirmada_apos_salvar": False,
@@ -7965,39 +8049,74 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
         resultado["erro"] = "Frase de marcação vazia."
         return resultado
 
-    xpaths_texto = [
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[1]",
-        "//textarea[contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//textarea[contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "(//textarea[not(@disabled)])[1]",
+    # Mantemos esta trava apenas como segurança final. A decisão do tipo RE
+    # deve ocorrer antes, usando exclusivamente a Justificativa atual do OCD.
+    if not isinstance(analise_tipos_re, dict):
+        resultado["status"] = "bloqueado_sem_analise_previa_tipo_re"
+        resultado["erro"] = (
+            "A marcação não foi executada porque a análise prévia do tipo RE "
+            "não foi informada."
+        )
+        return resultado
+
+    if analise_tipos_re.get("tem_numero_nao_permitido"):
+        resultado["status"] = "bloqueado_tipo_re_fora_escopo"
+        resultado["erro"] = (
+            "A marcação não foi executada porque o tipo RE atual está fora "
+            "do escopo de aprovação automática."
+        )
+        return resultado
+
+    if not analise_tipos_re.get("combinacao_ok", True):
+        resultado["status"] = "bloqueado_combinacao_tipo_re_nao_permitida"
+        resultado["erro"] = (
+            "A marcação não foi executada porque a combinação atual de tipos "
+            "RE não está no escopo de aprovação automática."
+        )
+        return resultado
+
+    xpaths_acompanhar = [
+        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
+        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
+        "//*[normalize-space(.)='Acompanhar Processo']/following::textarea[not(@disabled)][1]",
+        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[not(@disabled)][1]",
+        "//textarea[not(@disabled) and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
     ]
 
-    def localizar_campo():
+    def localizar_campo_acompanhar():
         entrar_iframe_detalhe_analise(driver, wait)
         return _achar_primeiro_elemento_visivel(
             driver,
-            xpaths_texto,
-            "campo de Informações Adicionais/Acompanhar Processo",
+            xpaths_acompanhar,
+            "textarea da seção Acompanhar Processo",
             timeout=5,
         )
 
     def ler(campo):
         try:
-            return str(driver.execute_script(
-                "return String(arguments[0].value || arguments[0].textContent || '');",
-                campo,
-            ) or "").strip()
+            return str(
+                driver.execute_script(
+                    "return arguments[0].value == null ? '' : String(arguments[0].value);",
+                    campo,
+                )
+                or ""
+            ).strip()
         except Exception:
             return str(campo.get_attribute("value") or "").strip()
 
     try:
         clicar_aba_informacoes_adicionais(driver, wait)
-        resultado["acompanhar_processo_marcado"] = bool(
-            marcar_acompanhar_processo(driver, wait)
-        )
 
-        campo = localizar_campo()
+        marcado = marcar_acompanhar_processo(driver, wait)
+        resultado["acompanhar_processo_marcado"] = bool(marcado)
+
+        if not marcado:
+            raise RuntimeError(
+                "Não foi possível confirmar a opção "
+                "'Desejo acompanhar este processo'."
+            )
+
+        campo = localizar_campo_acompanhar()
         resultado["campo_encontrado"] = True
 
         conteudo_anterior = ler(campo)
@@ -8005,65 +8124,75 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
 
         frase_norm = _normalizar_texto_comparacao(frase)
         anterior_norm = _normalizar_texto_comparacao(conteudo_anterior)
-        ja_existia = bool(frase_norm and frase_norm in anterior_norm)
-        resultado["ja_existia"] = ja_existia
 
-        if ja_existia:
-            conteudo_final = conteudo_anterior
+        resultado["ja_existia"] = bool(
+            frase_norm and anterior_norm == frase_norm
+        )
+
+        if resultado["ja_existia"]:
             resultado["preenchida"] = True
+            resultado["conteudo_final"] = frase
         else:
-            separador = "\n" if conteudo_anterior.strip() else ""
-            conteudo_final = f"{conteudo_anterior.rstrip()}{separador}{frase}".strip()
-
-            confirmado_campo = _definir_valor_campo_minuta(
+            preenchido = preencher_acompanhar_processo(
                 driver,
-                campo,
-                conteudo_final,
+                wait,
+                frase,
             )
-            resultado["preenchida"] = bool(confirmado_campo)
 
-            if not confirmado_campo:
+            resultado["preenchida"] = bool(preenchido)
+            resultado["substituida"] = bool(
+                preenchido and bool(conteudo_anterior)
+            )
+            resultado["conteudo_final"] = frase
+
+            if not preenchido:
                 raise RuntimeError(
-                    "Não foi possível confirmar a frase antes do salvamento."
+                    "Não foi possível confirmar o preenchimento do textarea "
+                    "da seção Acompanhar Processo."
                 )
 
-        resultado["conteudo_final"] = conteudo_final
-        resultado["salva"] = bool(salvar_informacoes_adicionais(driver, wait))
+        resultado["salva"] = bool(
+            salvar_informacoes_adicionais(driver, wait)
+        )
 
-        try:
-            campo_confirmacao = localizar_campo()
-            valor_confirmado = ler(campo_confirmacao)
-        except Exception:
-            captura = _extrair_texto_informacoes_adicionais_retorno(driver, wait)
-            valor_confirmado = str(captura.get("texto") or "")
+        if not resultado["salva"]:
+            raise RuntimeError(
+                "O salvamento de Informações Adicionais não foi confirmado."
+            )
+
+        # A aba pode ser rerenderizada por AJAX depois do Salvar.
+        clicar_aba_informacoes_adicionais(driver, wait)
+        campo_confirmacao = localizar_campo_acompanhar()
+        valor_confirmado = ler(campo_confirmacao)
 
         resultado["conteudo_confirmado"] = valor_confirmado
         resultado["confirmada_apos_salvar"] = bool(
             frase_norm
-            and frase_norm in _normalizar_texto_comparacao(valor_confirmado)
+            and _normalizar_texto_comparacao(valor_confirmado) == frase_norm
         )
 
-        if resultado["salva"] and resultado["confirmada_apos_salvar"]:
+        if resultado["confirmada_apos_salvar"]:
             resultado["status"] = (
-                "frase_ja_existia_e_confirmada"
-                if ja_existia
-                else "frase_inserida_salva_e_confirmada"
+                "frase_ja_existia_salva_e_confirmada"
+                if resultado["ja_existia"]
+                else "acompanhar_processo_preenchido_salvo_e_confirmado"
             )
         else:
             resultado["status"] = "marcacao_nao_confirmada"
 
         print(
-            "[SCH][RETORNO] Marcação em Informações Adicionais: "
+            "[SCH][RETORNO] Registro da automação em Acompanhar Processo: "
             f"{resultado['status']}"
         )
+
         return resultado
 
     except Exception as e:
         resultado["status"] = "erro"
         resultado["erro"] = str(e)
         print(
-            "[SCH][RETORNO][WARN] Não foi possível registrar a marcação "
-            f"da automação em Informações Adicionais: {e}"
+            "[SCH][RETORNO][WARN] Não foi possível registrar a frase em "
+            f"Acompanhar Processo: {e}"
         )
         return resultado
 
@@ -8102,7 +8231,6 @@ TIPOS_PRODUTO_RETORNO_PARA_ESTUDO_PERMITIDOS = [
     "Sistemas de Identificação por Radiofrequências",
     "Sistema de Identificação por Radiofrequências",
     "Equipamento de Radiocomunicação de Radiação Restrita",
-    "Telefone Móvel Celular",
 ]
 
 
@@ -9959,138 +10087,118 @@ def _aguardar_primefaces_estavel_no_iframe(driver, wait=None, timeout=60):
 
 def _clicar_botao_interno_comparar_versao_robusto(driver, wait, tentativas=8):
     """
-    Clica no botão interno 'Comparar Versão' do modal.
+    Clica no botão interno "Comparar Versão" preservando o comportamento
+    real do navegador.
 
-    Evita StaleElementReferenceException porque não reutiliza WebElement antigo.
-    A cada tentativa, entra novamente no iframe e localiza o botão direto no DOM.
+    O popup do SCH é sensível à forma do clique. Um ``element.click()``
+    disparado dentro de JavaScript pode abrir somente ``about:blank``.
+    Por isso, o clique físico/nativo é sempre tentado antes do JavaScript.
     """
-
     ultimo_erro = None
 
+    xpaths = [
+        "//*[@id='formAnalise:j_idt10:j_idt26']",
+        "//button[normalize-space(.)='Comparar Versão']",
+        "//a[normalize-space(.)='Comparar Versão']",
+        "//input[normalize-space(@value)='Comparar Versão']",
+        "//span[normalize-space(.)='Comparar Versão']/ancestor::*[self::button or self::a][1]",
+    ]
+
     for tentativa in range(1, tentativas + 1):
+        botao = None
+
         try:
             print(
-                f"[SCH][RETORNO] Tentando clicar no botão interno "
-                f"'Comparar Versão'... tentativa {tentativa}/{tentativas}"
+                f"[SCH][RETORNO] Tentando clique nativo em 'Comparar Versão' "
+                f"- tentativa {tentativa}/{tentativas}"
             )
 
-            try:
-                driver.switch_to.default_content()
-            except Exception:
-                pass
+            for contexto in ("iframe", "default"):
+                try:
+                    if contexto == "iframe":
+                        entrar_iframe_detalhe_analise(driver, wait)
+                    else:
+                        driver.switch_to.default_content()
+                except Exception:
+                    continue
 
-            try:
-                entrar_iframe_detalhe_analise(driver, wait)
-            except Exception:
-                # Em alguns momentos o modal pode estar no contexto atual.
-                pass
+                for xpath in xpaths:
+                    try:
+                        elementos = driver.find_elements(By.XPATH, xpath)
+                    except Exception:
+                        elementos = []
 
-            esperar_tela_carregar(driver, 0.3)
+                    for el in elementos:
+                        try:
+                            if el.is_displayed() and el.is_enabled():
+                                botao = el
+                                break
+                        except Exception:
+                            continue
 
-            clicou = driver.execute_script(
-                """
-                function normalizar(txt) {
-                    return String(txt || '')
-                        .normalize('NFD')
-                        .replace(/[\\u0300-\\u036f]/g, '')
-                        .replace(/\\s+/g, ' ')
-                        .trim()
-                        .toLowerCase();
-                }
+                    if botao is not None:
+                        break
 
-                function texto(el) {
-                    if (!el) return '';
-                    return normalizar(
-                        el.innerText ||
-                        el.textContent ||
-                        el.value ||
-                        el.title ||
-                        el.getAttribute('aria-label') ||
-                        ''
-                    );
-                }
+                if botao is not None:
+                    break
 
-                // 1) Tenta primeiro pelo ID conhecido do PrimeFaces.
-                var idsPossiveis = [
-                    'formAnalise:j_idt10:j_idt26'
-                ];
+            if botao is None:
+                ultimo_erro = "botao_interno_nao_encontrado"
+                time.sleep(0.35)
+                continue
 
-                for (var i = 0; i < idsPossiveis.length; i++) {
-                    var elId = document.getElementById(idsPossiveis[i]);
-
-                    if (elId) {
-                        elId.scrollIntoView({block: 'center', inline: 'center'});
-                        elId.click();
-                        return 'clicou_por_id:' + idsPossiveis[i];
-                    }
-                }
-
-                // 2) Procura por botões/links/inputs com texto Comparar Versão.
-                var candidatos = Array.from(
-                    document.querySelectorAll(
-                        'button, a, input[type="button"], input[type="submit"], span.ui-button-text'
-                    )
-                );
-
-                for (var j = 0; j < candidatos.length; j++) {
-                    var el = candidatos[j];
-                    var t = texto(el);
-
-                    if (
-                        t === 'comparar versao' ||
-                        t === 'comparar versão' ||
-                        (t.includes('comparar') && t.includes('versao')) ||
-                        (t.includes('comparar') && t.includes('versão'))
-                    ) {
-                        var clicavel = el;
-
-                        if (el.tagName && el.tagName.toLowerCase() === 'span') {
-                            clicavel = el.closest('button, a') || el;
-                        }
-
-                        clicavel.scrollIntoView({block: 'center', inline: 'center'});
-                        clicavel.click();
-                        return 'clicou_por_texto:' + t;
-                    }
-                }
-
-                return '';
-                """
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                botao,
             )
+            time.sleep(0.2)
 
-            if clicou:
+            try:
+                ActionChains(driver).move_to_element(botao).pause(0.2).click().perform()
                 print(
-                    "[SCH][RETORNO] Clique interno executado no botão "
-                    f"'Comparar Versão' ({clicou})."
+                    "[SCH][RETORNO] Clique físico executado no botão interno "
+                    "'Comparar Versão'."
                 )
                 return True
+            except Exception as e_action:
+                ultimo_erro = e_action
 
-            ultimo_erro = "botao_interno_nao_encontrado_no_dom"
+            try:
+                botao.click()
+                print(
+                    "[SCH][RETORNO] Clique nativo do WebElement executado no "
+                    "botão interno 'Comparar Versão'."
+                )
+                return True
+            except Exception as e_native:
+                ultimo_erro = e_native
+
+            try:
+                driver.execute_script(
+                    """
+                    arguments[0].scrollIntoView({block:'center', inline:'center'});
+                    arguments[0].focus();
+                    arguments[0].click();
+                    """,
+                    botao,
+                )
+                print(
+                    "[SCH][RETORNO][WARN] Clique JavaScript usado somente como "
+                    "último fallback em 'Comparar Versão'."
+                )
+                return True
+            except Exception as e_js:
+                ultimo_erro = e_js
 
         except Exception as e:
-            ultimo_erro = str(e)
+            ultimo_erro = e
 
-            if "stale element reference" in ultimo_erro.lower():
-                print(
-                    "[SCH][RETORNO][WARN] Botão interno ficou stale. "
-                    "Tentando localizar novamente..."
-                )
-            else:
-                print(
-                    "[SCH][RETORNO][WARN] Falha temporária ao clicar no botão interno "
-                    f"'Comparar Versão': {e}"
-                )
+        time.sleep(0.45)
 
-        try:
-            time.sleep(0.8)
-        except Exception:
-            pass
-
-    raise RuntimeError(
-        "Falha ao clicar no botão interno 'Comparar Versão' após "
-        f"{tentativas} tentativa(s). Último erro: {ultimo_erro}"
+    raise Exception(
+        "Não foi possível clicar no botão interno 'Comparar Versão'. "
+        f"Último erro: {ultimo_erro}"
     )
-
 
 
 def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
@@ -10536,6 +10644,7 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
     inicio_carregamento = time.time()
     avisou_blank = False
     avisou_url = False
+    inicio_blank = None
 
     while time.time() - inicio_carregamento < timeout_resultado:
         try:
@@ -10582,23 +10691,69 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
             url_norm = url_atual.lower()
 
             if url_norm in {"", "about:blank"}:
+                if inicio_blank is None:
+                    inicio_blank = time.time()
+
                 if not avisou_blank:
                     print("[SCH][RETORNO] Aba ainda em about:blank.")
                     avisou_blank = True
 
                 if url_comparacao_resolvida and not url_forcada_na_mesma_aba:
                     url_forcada_na_mesma_aba = _navegar_url_capturada_na_aba_atual()
-                    time.sleep(3.0)
+                    time.sleep(2.0)
                     continue
 
-            elif not avisou_url:
+                tempo_blank = time.time() - inicio_blank
+
+                # Não deixa a automação parada por minutos em uma aba vazia.
+                # Sem URL capturada, 12 s de about:blank já caracteriza falha.
+                # Com URL capturada/navegação tentada, tolera até 25 s.
+                limite_blank = 25 if url_comparacao_resolvida else 12
+
+                if tempo_blank >= limite_blank:
+                    print(
+                        "[SCH][RETORNO][WARN] Comparar Versões permaneceu em "
+                        f"about:blank por {tempo_blank:.1f}s. Abortando esta "
+                        "comparação e retornando ao requerimento."
+                    )
+
+                    try:
+                        if nova_aba in driver.window_handles:
+                            driver.close()
+                    except Exception:
+                        pass
+
+                    try:
+                        if aba_origem and aba_origem in driver.window_handles:
+                            driver.switch_to.window(aba_origem)
+                    except Exception:
+                        pass
+
+                    raise RuntimeError(
+                        "Comparar Versões abriu somente about:blank. "
+                        "A comparação foi interrompida para não travar o fluxo."
+                    )
+
+            else:
+                inicio_blank = None
+
+                if not avisou_url:
+                    print(f"[SCH][RETORNO] URL atual da aba de comparação: {url_atual}")
+                    avisou_url = True
+
+            if url_norm not in {"", "about:blank"} and not avisou_url:
                 print(f"[SCH][RETORNO] URL atual da aba de comparação: {url_atual}")
                 avisou_url = True
 
             time.sleep(0.7)
 
         except Exception as e:
-            if "Proxy Error detectado" in str(e):
+            erro_loop = str(e)
+
+            if (
+                "Proxy Error detectado" in erro_loop
+                or "Comparar Versões abriu somente about:blank" in erro_loop
+            ):
                 raise
 
             print(f"[SCH][RETORNO][WARN] Erro aguardando aba de comparação: {e}")
@@ -11553,197 +11708,134 @@ def _doc_match_retorno(documento, aliases):
 
 def _extrair_texto_informacoes_adicionais_retorno(driver, wait):
     """
-    Captura o texto da aba Informações Adicionais do Retorno Para Estudo.
+    Lê SOMENTE a Justificativa atual do OCD na aba Informações Adicionais.
 
-    Prioridade:
-    1. Campo Justificativa
-    2. Campo Motivação do Retorno para Estudo
-    3. Fallback: texto geral da aba
+    Essa Justificativa é a fonte usada para identificar o(s) tipo(s) RE.
+    Não mistura:
+    - histórico da tabela inferior;
+    - Motivação do Retorno para Estudo;
+    - textarea de Acompanhar Processo;
+    - campo Descrição de Informações Adicionais;
+    - texto geral do body.
+
+    Se a Justificativa atual não puder ser localizada com segurança, retorna
+    capturado=False em vez de inferir o tipo RE a partir de outros textos.
     """
-
     resultado = {
         "capturado": False,
         "texto": "",
+        "origem": "justificativa_atual_ocd",
+        "campo": "Justificativa",
         "erro": "",
     }
 
     try:
-        print("[SCH][RETORNO] Capturando Informações Adicionais do retorno para estudo...")
+        print(
+            "[SCH][RETORNO] Capturando somente a Justificativa atual "
+            "do OCD em Informações Adicionais..."
+        )
 
         clicar_aba_informacoes_adicionais(driver, wait)
-        esperar_tela_carregar(driver, 0.8)
+        esperar_tela_carregar(driver, 0.25)
 
         entrar_iframe_detalhe_analise(driver, wait)
 
-        script = r"""
-        const partes = [];
+        xpaths_justificativa = [
+            "//*[normalize-space(.)='Justificativa:' or normalize-space(.)='Justificativa']/following::textarea[1]",
+            "//label[normalize-space(.)='Justificativa:' or normalize-space(.)='Justificativa']/following::textarea[1]",
+            "//*[contains(normalize-space(.), 'Justificativa:')]/ancestor::tr[1]//textarea[1]",
+            "//*[contains(normalize-space(.), 'Justificativa:')]/following::textarea[1]",
+        ]
 
-        function add(txt, origem) {
-            txt = String(txt || '')
-                .replace(/\u00a0/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim();
+        campo = None
 
-            if (!txt) return;
+        for xpath in xpaths_justificativa:
+            try:
+                elementos = driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                elementos = []
 
-            partes.push((origem ? '[' + origem + '] ' : '') + txt);
-        }
+            for el in elementos:
+                try:
+                    if (
+                        str(el.tag_name or "").lower() == "textarea"
+                        and el.is_displayed()
+                    ):
+                        campo = el
+                        break
+                except Exception:
+                    continue
 
-        function norm(txt) {
-            return String(txt || '')
-                .normalize('NFD')
-                .replace(/[\u0300-\u036f]/g, '')
-                .toLowerCase()
-                .replace(/\s+/g, ' ')
-                .trim();
-        }
+            if campo is not None:
+                break
 
-        function valorCampo(el) {
-            if (!el) return '';
+        # Fallback controlado: na tela mostrada do Retorno Para Estudo,
+        # a Justificativa atual é o primeiro textarea antes da seção
+        # 'Acompanhar Processo'. Só aceitamos esse fallback quando conseguimos
+        # confirmar a existência da seção de acompanhamento depois dele.
+        if campo is None:
+            try:
+                candidatos = [
+                    el
+                    for el in driver.find_elements(
+                        By.XPATH,
+                        "//textarea[not(@disabled)]",
+                    )
+                    if el.is_displayed()
+                ]
 
-            const tag = String(el.tagName || '').toLowerCase();
+                marcador_acompanhar = driver.find_elements(
+                    By.XPATH,
+                    "//*[contains(normalize-space(), 'Acompanhar Processo') "
+                    "or contains(normalize-space(), "
+                    "'Desejo acompanhar este processo')]",
+                )
 
-            if (tag === 'textarea' || tag === 'input') {
-                return el.value || el.getAttribute('value') || '';
-            }
+                if candidatos and marcador_acompanhar:
+                    campo = candidatos[0]
+            except Exception:
+                campo = None
 
-            if (tag === 'select') {
-                const opt = el.options && el.selectedIndex >= 0
-                    ? el.options[el.selectedIndex]
-                    : null;
+        if campo is None:
+            raise RuntimeError(
+                "Textarea da Justificativa atual do OCD não foi localizado "
+                "com segurança."
+            )
 
-                return opt
-                    ? (opt.textContent || opt.innerText || opt.value || '')
-                    : (el.value || '');
-            }
-
-            return el.innerText || el.textContent || '';
-        }
-
-        // 1) Captura específica do campo Justificativa
-        const todos = Array.from(document.querySelectorAll('label, span, div, td, th, p'));
-
-        for (const el of todos) {
-            const txt = norm(el.innerText || el.textContent || '');
-
-            if (txt.includes('justificativa')) {
-                let campo = null;
-
-                try {
-                    campo = el.parentElement
-                        ? el.parentElement.querySelector('textarea, input:not([type="hidden"]), select')
-                        : null;
-                } catch (e) {}
-
-                if (!campo) {
-                    let atual = el;
-
-                    for (let i = 0; i < 8 && atual; i++) {
-                        try {
-                            campo = atual.querySelector
-                                ? atual.querySelector('textarea, input:not([type="hidden"]), select')
-                                : null;
-
-                            if (campo) break;
-                        } catch (e) {}
-
-                        atual = atual.nextElementSibling;
-                    }
-                }
-
-                if (!campo) {
-                    try {
-                        const xpath = ".//following::*[self::textarea or self::input[not(@type='hidden')] or self::select][1]";
-                        campo = document.evaluate(
-                            xpath,
-                            el,
-                            null,
-                            XPathResult.FIRST_ORDERED_NODE_TYPE,
-                            null
-                        ).singleNodeValue;
-                    } catch (e) {}
-                }
-
-                if (campo) {
-                    add(valorCampo(campo), 'justificativa');
-                }
-            }
-        }
-
-        // 2) Captura específica do campo Motivação do Retorno para Estudo
-        for (const el of todos) {
-            const txt = norm(el.innerText || el.textContent || '');
-
-            if (txt.includes('motivacao do retorno para estudo')) {
-                let campo = null;
-
-                try {
-                    campo = el.parentElement
-                        ? el.parentElement.querySelector('select, input:not([type="hidden"]), textarea')
-                        : null;
-                } catch (e) {}
-
-                if (!campo) {
-                    try {
-                        const xpath = ".//following::*[self::select or self::input[not(@type='hidden')] or self::textarea][1]";
-                        campo = document.evaluate(
-                            xpath,
-                            el,
-                            null,
-                            XPathResult.FIRST_ORDERED_NODE_TYPE,
-                            null
-                        ).singleNodeValue;
-                    } catch (e) {}
-                }
-
-                if (campo) {
-                    add(valorCampo(campo), 'motivacao');
-                }
-            }
-        }
-
-        // 3) Fallback: captura todos os textareas/selects/inputs visíveis
-        document.querySelectorAll('textarea, input:not([type="hidden"]), select').forEach(function(el) {
-            add(valorCampo(el), 'campo');
-        });
-
-        // 4) Fallback final: texto visível da página
-        if (document.body) {
-            add(document.body.innerText || document.body.textContent || '', 'body');
-        }
-
-        const vistos = new Set();
-        const saida = [];
-
-        for (const parte of partes) {
-            const chave = norm(parte);
-
-            if (!chave || vistos.has(chave)) continue;
-
-            vistos.add(chave);
-            saida.push(parte);
-        }
-
-        return saida.join('\n');
-        """
-
-        texto = driver.execute_script(script) or ""
-        texto = str(texto or "").strip()
+        texto = str(
+            driver.execute_script(
+                "return arguments[0].value == null ? '' : String(arguments[0].value);",
+                campo,
+            )
+            or ""
+        ).strip()
 
         resultado["capturado"] = bool(texto)
         resultado["texto"] = texto
+        resultado["id_campo"] = str(campo.get_attribute("id") or "")
+        resultado["name_campo"] = str(campo.get_attribute("name") or "")
 
-        resumo_terminal = " ".join(texto.split())[:500]
-        print(
-            "[SCH][RETORNO] Informações Adicionais capturadas"
-            + (f": {resumo_terminal}" if resumo_terminal else ".")
-        )
+        if texto:
+            resumo_terminal = " ".join(texto.split())[:500]
+            print(
+                "[SCH][RETORNO] Justificativa atual do OCD capturada: "
+                f"{resumo_terminal}"
+            )
+        else:
+            resultado["erro"] = "Justificativa atual do OCD está vazia."
+            print(
+                "[SCH][RETORNO][WARN] A Justificativa atual do OCD "
+                "foi localizada, mas está vazia."
+            )
 
         return resultado
 
     except Exception as e:
         resultado["erro"] = str(e)
-        print(f"[SCH][RETORNO][WARN] Falha ao capturar Informações Adicionais: {e}")
+        print(
+            "[SCH][RETORNO][WARN] Falha ao capturar a Justificativa "
+            f"atual do OCD: {e}"
+        )
 
         try:
             driver.switch_to.default_content()
@@ -12416,15 +12508,15 @@ def analisar_retorno_para_estudo(
 
     info_abertura = {}
 
-    # O tipo de produto NÃO filtra a análise de Retorno Para Estudo.
-    # A decisão da análise vem de Informações Adicionais e da comparação
-    # das versões. O tipo de produto é usado somente, fora desta função,
-    # para decidir se Corrigir Minuta deve ter Especificações Complementares
-    # apagadas.
-    resultado["tipo_produto_no_escopo"] = None
+    # O filtro de tipos de produto explicitamente fora do escopo é aplicado
+    # no fluxo antes de abrir o requerimento. Esta função recebe apenas os
+    # requerimentos restantes e decide o escopo de análise pelo texto original
+    # de Informações Adicionais e pela comparação das versões.
+    resultado["tipo_produto_no_escopo"] = True
     resultado["filtro_tipo_produto_retorno"] = {
-        "aplicado": False,
-        "motivo": "tipo_produto_nao_filtra_analise_retorno_para_estudo",
+        "aplicado": True,
+        "no_escopo": True,
+        "motivo": "filtro_previo_de_tipos_explicitamente_nao_avaliados",
     }
 
     try:
@@ -12444,6 +12536,70 @@ def analisar_retorno_para_estudo(
                 "[SCH][RETORNO][WARN] Não foi possível capturar Informações Adicionais: "
                 f"{info_adicionais_retorno.get('erro', '')}"
             )
+
+        # A decisão de escopo do tipo RE é feita ANTES de qualquer alteração
+        # em Informações Adicionais e antes de abrir Comparar Versões.
+        analise_numeros_info = _analisar_numeros_tipo_re_informacoes_adicionais(
+            info_adicionais_retorno.get("texto", "")
+        )
+        resultado["analise_numeros_informacoes_adicionais"] = analise_numeros_info
+        resultado["numeros_tipo_re_detectados"] = (
+            analise_numeros_info.get("numeros_detectados", []) or []
+        )
+        resultado["numeros_tipo_re_nao_permitidos"] = (
+            analise_numeros_info.get("numeros_nao_permitidos", []) or []
+        )
+        resultado["info_adicionais_tem_numero_nao_permitido"] = bool(
+            analise_numeros_info.get("tem_numero_nao_permitido")
+        )
+
+        descricao_tipos = _descricao_tipos_re_detectados(analise_numeros_info)
+        resultado["tipo_re"] = descricao_tipos["tipo_re"]
+        resultado["descricao_tipo_re"] = descricao_tipos["descricao_tipo_re"]
+        resultado["origem_tipo_re"] = descricao_tipos["origem"]
+
+        if not info_adicionais_retorno.get("capturado"):
+            resultado["status_comparacao"] = "bloqueado_sem_informacoes_adicionais"
+            resultado["resultado"] = (
+                "O processo não foi analisado automaticamente porque não foi "
+                "possível ler Informações Adicionais e confirmar o tipo de análise "
+                "solicitado pelo OCD."
+            )
+            resultado["acao_recomendada"] = (
+                "Não enviar para aprovação / Revisar Informações Adicionais"
+            )
+            resultado["alertas"].append(
+                "A análise automática foi interrompida antes de Comparar Versões "
+                "porque o tipo RE não pôde ser verificado em Informações Adicionais."
+            )
+            return resultado
+
+        if (
+            analise_numeros_info.get("tem_numero_nao_permitido")
+            or not analise_numeros_info.get("combinacao_ok", True)
+        ):
+            numeros_txt = ", ".join(
+                str(n)
+                for n in analise_numeros_info.get("numeros_nao_permitidos", [])
+            ) or "não especificado"
+            resultado["status_comparacao"] = "fora_escopo_tipo_re"
+            resultado["resultado"] = (
+                "O processo não foi analisado automaticamente porque Informações "
+                "Adicionais indicam tipo de análise RE fora do escopo automático."
+            )
+            resultado["acao_recomendada"] = (
+                "Não enviar para aprovação / Revisar manualmente"
+            )
+            resultado["alertas"].append(
+                "Tipo RE fora do escopo automático identificado antes de Comparar "
+                f"Versões: {numeros_txt}."
+            )
+            return resultado
+
+        print(
+            "[SCH][RETORNO] Tipo RE validado antes da comparação: "
+            f"{resultado.get('descricao_tipo_re', 'Não identificado')}"
+        )
 
         print("[SCH][RETORNO] Retornando para Dados Gerais antes de abrir Comparar Versões...")
 
@@ -12617,25 +12773,10 @@ def analisar_retorno_para_estudo(
             f"origem={documentos.get('origem_documentos', '')}"
         )
 
-        analise_numeros_info = _analisar_numeros_tipo_re_informacoes_adicionais(
-            resultado.get("informacoes_adicionais_retorno", {}).get("texto", "")
+        # O tipo RE já foi identificado e validado antes de abrir Comparar Versões.
+        analise_numeros_info = (
+            resultado.get("analise_numeros_informacoes_adicionais") or {}
         )
-
-        resultado["analise_numeros_informacoes_adicionais"] = analise_numeros_info
-        resultado["numeros_tipo_re_detectados"] = (
-            analise_numeros_info.get("numeros_detectados", []) or []
-        )
-        resultado["numeros_tipo_re_nao_permitidos"] = (
-            analise_numeros_info.get("numeros_nao_permitidos", []) or []
-        )
-        resultado["info_adicionais_tem_numero_nao_permitido"] = bool(
-            analise_numeros_info.get("tem_numero_nao_permitido")
-        )
-
-        descricao_tipos = _descricao_tipos_re_detectados(analise_numeros_info)
-        resultado["tipo_re"] = descricao_tipos["tipo_re"]
-        resultado["descricao_tipo_re"] = descricao_tipos["descricao_tipo_re"]
-        resultado["origem_tipo_re"] = descricao_tipos["origem"]
 
         tipos_re_para_validacao = _tipos_re_para_validacao_documentos(
             analise_numeros_info

@@ -365,6 +365,10 @@ def escolher_acoes_da_fila(fila_sch):
         }
 
     print("As etapas próprias desta fila serão executadas automaticamente:")
+    print(
+        "- Ignorar completamente os tipos de produto configurados como "
+        "fora da avaliação automática"
+    )
     print("- Comparar Versões")
     print(
         "- Tratar Especificações Complementares quando o tipo de "
