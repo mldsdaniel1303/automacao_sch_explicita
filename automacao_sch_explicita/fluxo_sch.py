@@ -42,7 +42,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.6"
+VERSAO_SCRIPT = "0.8.6.3"
 
 
 def _normalizar_texto(valor):
@@ -1269,34 +1269,36 @@ def executar_fluxo_sch(
                         )
                     )
 
-                    # Corrigir Minuta é uma etapa de pós-processamento para
-                    # requerimentos que já ficaram APTOS na comparação.
-                    # Se Comparar Versões concluiu que o processo exige revisão
-                    # manual, a automação não deve modificar a minuta.
+                    # O tratamento em Corrigir Minuta é uma etapa técnica
+                    # independente da decisão final de aprovação.
+                    #
+                    # Se o tipo de produto está na lista configurada, o
+                    # tratamento deve ser executado após uma comparação válida
+                    # e após restaurar a tela do requerimento, mesmo que o
+                    # resultado do Comparar Versões seja "revisão manual".
+                    #
+                    # IMPORTANTE: isso NÃO torna o requerimento apto. A decisão
+                    # de aprovação continua obedecendo ao resultado original da
+                    # comparação e aos demais bloqueios.
                     apto_antes_pos_processamento = bool(
                         retorno_estudo.get("deve_enviar_para_aprovacao")
                     )
 
-                    if not apto_antes_pos_processamento:
-                        resultado_minuta = {
-                            "aplicavel": bool(limpeza_exigida),
-                            "tratado": False,
-                            "limpo": False,
-                            "substituido": False,
-                            "salvo": False,
-                            "confirmado_apos_salvar": False,
-                            "retornou_para_requerimento": bool(
-                                restauracao_requerimento.get("restaurado")
-                            ),
-                            "status": "nao_executada_requerimento_nao_apto",
-                            "mensagem": (
-                                "Corrigir Minuta não foi executado porque "
-                                "Comparar Versões classificou o requerimento "
-                                "para revisão manual."
-                            ),
-                        }
+                    minuta_deve_executar = bool(
+                        comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
+                        and limpeza_exigida
+                    )
 
-                    elif restauracao_requerimento.get("restaurado"):
+                    print(
+                        "[SCH][RETORNO][MINUTA] "
+                        f"Tipo produto='{tipo_produto}' | "
+                        f"tratamento configurado={'SIM' if limpeza_exigida else 'NÃO'} | "
+                        f"comparação apta={'SIM' if apto_antes_pos_processamento else 'NÃO'} | "
+                        f"executar Corrigir Minuta={'SIM' if minuta_deve_executar else 'NÃO'}"
+                    )
+
+                    if minuta_deve_executar:
                         resultado_minuta = (
                             limpar_especificacoes_complementares_minuta_se_necessario(
                                 driver=driver,
@@ -1315,6 +1317,26 @@ def executar_fluxo_sch(
                                 ),
                             )
                         )
+
+                    elif not limpeza_exigida:
+                        resultado_minuta = {
+                            "aplicavel": False,
+                            "tratado": False,
+                            "limpo": False,
+                            "substituido": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                            "retornou_para_requerimento": bool(
+                                restauracao_requerimento.get("restaurado")
+                            ),
+                            "status": "nao_aplicavel_tipo_produto",
+                            "mensagem": (
+                                "Corrigir Minuta não foi executado porque o "
+                                "tipo de produto não está na lista de tratamento "
+                                "automático de Especificações Complementares."
+                            ),
+                        }
+
                     else:
                         resultado_minuta = {
                             "aplicavel": bool(limpeza_exigida),
@@ -1349,14 +1371,18 @@ def executar_fluxo_sch(
                         "retorno_para_estudo"
                     )
                     resultado_minuta["tratamento_exigido"] = bool(
-                        apto_antes_pos_processamento and limpeza_exigida
+                        limpeza_exigida
+                        and comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
                     )
                     resultado_minuta["tratamento_confirmado"] = bool(
                         tratamento_confirmado
                     )
 
                     resultado_minuta["limpeza_exigida"] = bool(
-                        apto_antes_pos_processamento and limpeza_exigida
+                        limpeza_exigida
+                        and comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
                     )
                     resultado_minuta["limpeza_confirmada"] = bool(
                         tratamento_confirmado
@@ -1364,13 +1390,17 @@ def executar_fluxo_sch(
 
                     retorno_estudo["corrigir_minuta"] = resultado_minuta
                     retorno_estudo["tratamento_minuta_exigido"] = bool(
-                        apto_antes_pos_processamento and limpeza_exigida
+                        limpeza_exigida
+                        and comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
                     )
                     retorno_estudo["tratamento_minuta_confirmado"] = bool(
                         tratamento_confirmado
                     )
                     retorno_estudo["limpeza_minuta_exigida"] = bool(
-                        apto_antes_pos_processamento and limpeza_exigida
+                        limpeza_exigida
+                        and comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
                     )
                     retorno_estudo["limpeza_minuta_confirmada"] = bool(
                         tratamento_confirmado
@@ -1396,32 +1426,58 @@ def executar_fluxo_sch(
                     # Se o tipo exige limpeza, a aprovação automática fica
                     # bloqueada até que apagar + salvar + confirmar tenha sucesso.
                     if (
-                        apto_antes_pos_processamento
-                        and limpeza_exigida
+                        limpeza_exigida
+                        and comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
                         and not tratamento_confirmado
                     ):
-                        retorno_estudo["pode_enviar_para_aprovacao"] = False
-                        retorno_estudo["deve_enviar_para_aprovacao"] = False
-                        retorno_estudo["acao_recomendada"] = (
-                            "Não enviar para aprovação / Revisar tratamento da minuta"
-                        )
-                        retorno_estudo["status_comparacao"] = (
-                            "bloqueado_por_falha_no_tratamento_da_minuta"
-                        )
                         retorno_estudo.setdefault("alertas", []).append(
-                            "A aprovação automática foi bloqueada porque não foi "
-                            "possível confirmar o tratamento de Especificações "
-                            "Complementares (limpeza ou substituição) e o salvamento."
+                            "Não foi possível confirmar o tratamento de "
+                            "Especificações Complementares e o salvamento "
+                            "em Corrigir Minuta."
                         )
 
-                    # A marcação é exigida somente quando o requerimento está apto
-                    # e o envio automático foi autorizado pelo analista.
-                    marcacao_exigida = bool(
+                        if apto_antes_pos_processamento:
+                            retorno_estudo["pode_enviar_para_aprovacao"] = False
+                            retorno_estudo["deve_enviar_para_aprovacao"] = False
+                            retorno_estudo["acao_recomendada"] = (
+                                "Não enviar para aprovação / Revisar tratamento da minuta"
+                            )
+                            retorno_estudo["status_comparacao"] = (
+                                "bloqueado_por_falha_no_tratamento_da_minuta"
+                            )
+
+                    # ======================================================
+                    # REGISTRO DA ANÁLISE EM ACOMPANHAR PROCESSO
+                    #
+                    # A frase indica que o processo FOI AVALIADO pela automação.
+                    # Portanto, ela deve ser registrada sempre que:
+                    # - Comparar Versões foi concluído com análise válida; e
+                    # - a tela original do requerimento foi restaurada.
+                    #
+                    # Isso independe de:
+                    # - o resultado ser apto ou revisão manual;
+                    # - a aprovação automática estar habilitada no terminal.
+                    #
+                    # A confirmação da frase continua sendo obrigatória antes
+                    # de uma APROVAÇÃO AUTOMÁTICA.
+                    # ======================================================
+                    marcacao_deve_registrar = bool(
+                        comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
+                    )
+
+                    marcacao_obrigatoria_para_envio = bool(
                         executar_envio_retorno_para_estudo
                         and retorno_estudo.get("deve_enviar_para_aprovacao")
                     )
 
-                    if marcacao_exigida:
+                    if marcacao_deve_registrar:
+                        print(
+                            "[SCH][RETORNO] Registrando avaliação da automação "
+                            "em Acompanhar Processo..."
+                        )
+
                         marcacao_automacao = (
                             registrar_avaliacao_automacao_informacoes_adicionais_retorno(
                                 driver=driver,
@@ -1439,33 +1495,63 @@ def executar_fluxo_sch(
                             )
                         )
                     else:
+                        motivo_marcacao = (
+                            "tela original do requerimento não restaurada"
+                            if not restauracao_requerimento.get("restaurado")
+                            else "Comparar Versões não concluiu uma análise válida"
+                        )
+
                         marcacao_automacao = {
                             "exigida": False,
                             "preenchida": False,
                             "salva": False,
                             "confirmada_apos_salvar": False,
-                            "status": (
-                                "nao_exigida_envio_desabilitado"
-                                if not executar_envio_retorno_para_estudo
-                                else "nao_exigida_requerimento_nao_apto"
-                            ),
+                            "status": "nao_executada_sem_condicao_segura",
+                            "motivo": motivo_marcacao,
                         }
+
+                        print(
+                            "[SCH][RETORNO] Acompanhar Processo: "
+                            f"NÃO EXECUTADO — {motivo_marcacao}."
+                        )
 
                     retorno_estudo[
                         "marcacao_automacao_informacoes_adicionais"
                     ] = marcacao_automacao
 
                     marcacao_confirmada = bool(
-                        not marcacao_exigida
-                        or (
-                            marcacao_automacao.get("salva")
-                            and marcacao_automacao.get(
-                                "confirmada_apos_salvar"
-                            )
+                        marcacao_deve_registrar
+                        and marcacao_automacao.get("salva")
+                        and marcacao_automacao.get(
+                            "confirmada_apos_salvar"
                         )
                     )
 
-                    if marcacao_exigida and not marcacao_confirmada:
+                    retorno_estudo[
+                        "registro_automacao_acompanhar_processo_executado"
+                    ] = bool(marcacao_deve_registrar)
+
+                    retorno_estudo[
+                        "registro_automacao_acompanhar_processo_confirmado"
+                    ] = bool(marcacao_confirmada)
+
+                    if (
+                        marcacao_deve_registrar
+                        and not marcacao_confirmada
+                    ):
+                        retorno_estudo.setdefault("alertas", []).append(
+                            "A análise foi concluída, mas não foi possível "
+                            "salvar e confirmar a frase de registro no campo "
+                            "Acompanhar Processo."
+                        )
+
+                    # Se a aprovação automática estiver efetivamente habilitada
+                    # e o requerimento estiver apto, a frase é condição
+                    # obrigatória para permitir o envio.
+                    if (
+                        marcacao_obrigatoria_para_envio
+                        and not marcacao_confirmada
+                    ):
                         retorno_estudo["pode_enviar_para_aprovacao"] = False
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["acao_recomendada"] = (

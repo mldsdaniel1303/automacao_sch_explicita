@@ -7653,18 +7653,129 @@ def preencher_caracteristicas_tecnicas_com_analise(driver, wait, req, anexos_bai
     return analise
 
 
-def clicar_aba_informacoes_adicionais(driver, wait):
-    print("[SCH] Abrindo aba Informações Adicionais...")
-    _clicar_aba_por_rotulo(
-        driver,
-        wait,
-        "Informações Adicionais",
-        rotulos_alternativos=["Informacoes Adicionais", "Informações", "Informacoes"],
-        condicao_pronta=_ha_campo_informacoes_adicionais,
-        timeout_click=1.2,
-        timeout_pronta=1.2,
-    )
 
+def clicar_aba_informacoes_adicionais(driver, wait):
+    """
+    Abre a aba Informações Adicionais de forma tolerante ao retorno do
+    Comparar Versões.
+
+    Após fechar a comparação, o SCH pode mostrar a tela do requerimento antes
+    de os componentes internos da aba estarem completamente clicáveis.
+    Por isso esta rotina:
+    - confirma primeiro se a aba já está aberta;
+    - relocaliza o iframe a cada tentativa;
+    - aceita estruturas PrimeFaces com a/span/li;
+    - usa timeout maior do que o fluxo rápido normal;
+    - confirma a abertura pelo conteúdo real de Acompanhar Processo.
+    """
+    print("[SCH] Abrindo aba Informações Adicionais...")
+
+    xpaths_aba = [
+        "//a[normalize-space(.)='Informações Adicionais']",
+        "//a[normalize-space(.)='Informacoes Adicionais']",
+        "//span[normalize-space(.)='Informações Adicionais']/ancestor::a[1]",
+        "//span[normalize-space(.)='Informacoes Adicionais']/ancestor::a[1]",
+        "//li[.//*[normalize-space(.)='Informações Adicionais']]//a[1]",
+        "//li[.//*[normalize-space(.)='Informacoes Adicionais']]//a[1]",
+        "//*[self::a or self::button][contains(normalize-space(.), 'Informações Adicionais')]",
+        "//*[self::a or self::button][contains(normalize-space(.), 'Informacoes Adicionais')]",
+    ]
+
+    ultimo_erro = None
+
+    for tentativa in range(1, 5):
+        try:
+            entrar_iframe_detalhe_analise(driver, wait)
+        except Exception as e:
+            ultimo_erro = e
+            esperar_tela_carregar(driver, 0.5)
+            continue
+
+        # Se o conteúdo da aba já estiver visível, não precisamos clicar.
+        try:
+            if _ha_campo_informacoes_adicionais(driver):
+                print("[SCH] Aba 'Informações Adicionais' já está aberta.")
+                return True
+        except Exception:
+            pass
+
+        alvo = None
+
+        for xpath in xpaths_aba:
+            try:
+                elementos = WebDriverWait(
+                    driver,
+                    3.5,
+                    poll_frequency=0.12,
+                ).until(
+                    EC.presence_of_all_elements_located((By.XPATH, xpath))
+                )
+
+                for el in elementos:
+                    try:
+                        if el.is_displayed() and el.is_enabled():
+                            alvo = el
+                            break
+                    except Exception:
+                        continue
+
+                if alvo is not None:
+                    break
+
+            except Exception as e:
+                ultimo_erro = e
+                continue
+
+        if alvo is None:
+            print(
+                "[SCH][RETORNO][WARN] Aba Informações Adicionais ainda não "
+                f"clicável. Tentativa {tentativa}/4."
+            )
+            esperar_tela_carregar(driver, 0.6)
+            continue
+
+        try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                alvo,
+            )
+        except Exception:
+            pass
+
+        try:
+            _clicar_com_fallback(driver, alvo)
+        except Exception as e:
+            ultimo_erro = e
+            esperar_tela_carregar(driver, 0.5)
+            continue
+
+        # O clique pode disparar AJAX; aguarda o conteúdo real.
+        inicio = time.time()
+
+        while time.time() - inicio < 6:
+            try:
+                entrar_iframe_detalhe_analise(driver, wait)
+
+                if _ha_campo_informacoes_adicionais(driver):
+                    print("[SCH] Aba 'Informações Adicionais' aberta.")
+                    return True
+
+            except Exception as e:
+                ultimo_erro = e
+
+            time.sleep(0.2)
+
+        print(
+            "[SCH][RETORNO][WARN] Clique em Informações Adicionais foi "
+            f"executado, mas o conteúdo ainda não apareceu. Tentativa {tentativa}/4."
+        )
+        esperar_tela_carregar(driver, 0.6)
+
+    raise Exception(
+        "Não foi possível abrir a aba 'Informações Adicionais' após o "
+        "retorno do Comparar Versões. "
+        f"Último erro: {ultimo_erro}"
+    )
 
 TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES = (
     "Este processo foi analisado conforme Portaria n° 2257, "
@@ -7717,82 +7828,240 @@ def _checkbox_esta_marcado(elemento):
         return False
 
 
-def marcar_acompanhar_processo(driver, wait):
-    """
-    Marca especificamente a opção:
-    'Desejo acompanhar este processo.'
 
-    Não usa mais o primeiro checkbox genérico da página, para evitar clicar
-    em outro controle do SCH.
+def _localizar_textarea_acompanhar_processo(driver, wait=None, timeout=6):
+    """
+    Localiza SOMENTE o textarea grande da seção 'Acompanhar Processo'.
+
+    A tela do Retorno Para Estudo possui outros textareas:
+    - Justificativa do OCD;
+    - Descrição da seção inferior Informações Adicionais.
+
+    Por segurança, esta função nunca usa '(//textarea)[1]' como fallback.
     """
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.04)
+
+    try:
+        timeout = max(0.5, float(timeout or 6))
+    except Exception:
+        timeout = 6.0
+
+    xpaths = [
+        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
+        "//*[self::span or self::div or self::td][contains(normalize-space(.), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
+        "//*[normalize-space(.)='Acompanhar Processo']/following::textarea[not(@disabled)][1]",
+        "//*[contains(normalize-space(.), 'Acompanhar Processo')]/following::textarea[not(@disabled)][1]",
+        "//textarea[not(@disabled) and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+    ]
+
+    inicio = time.time()
+
+    while time.time() - inicio < timeout:
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        for xpath in xpaths:
+            try:
+                elementos = driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                elementos = []
+
+            for campo in elementos:
+                try:
+                    if (
+                        str(campo.tag_name or "").lower() == "textarea"
+                        and campo.is_displayed()
+                        and campo.is_enabled()
+                    ):
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                            campo,
+                        )
+                        return campo
+                except Exception:
+                    continue
+
+        # Fallback DOM controlado:
+        # procura o primeiro textarea VISÍVEL que aparece DEPOIS do texto
+        # "Desejo acompanhar este processo", sem usar posição global da página.
+        try:
+            campo_js = driver.execute_script(
+                """
+                function norm(s) {
+                    return String(s || '')
+                        .normalize('NFD')
+                        .replace(/[\\u0300-\\u036f]/g, '')
+                        .replace(/\\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                }
+
+                function visivel(el) {
+                    if (!el || el.disabled) return false;
+                    const st = getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.display !== 'none'
+                        && st.visibility !== 'hidden'
+                        && Number(st.opacity || 1) !== 0
+                        && r.width > 0
+                        && r.height > 0;
+                }
+
+                const todos = Array.from(
+                    document.querySelectorAll('label, span, div, td, th')
+                );
+
+                const marcador = todos.find(el =>
+                    norm(el.innerText || el.textContent)
+                        .includes('desejo acompanhar este processo')
+                );
+
+                if (!marcador) return null;
+
+                const textareas = Array.from(
+                    document.querySelectorAll('textarea:not([disabled])')
+                ).filter(visivel);
+
+                for (const ta of textareas) {
+                    const pos = marcador.compareDocumentPosition(ta);
+
+                    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) {
+                        return ta;
+                    }
+                }
+
+                return null;
+                """
+            )
+
+            if campo_js is not None:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                    campo_js,
+                )
+                return campo_js
+
+        except Exception:
+            pass
+
+        time.sleep(0.15)
+
+    raise RuntimeError(
+        "Textarea da seção 'Acompanhar Processo' não foi localizado "
+        "com segurança."
+    )
+
+
+
+def marcar_acompanhar_processo(driver, wait):
+    """
+    Marca especificamente:
+    'Desejo acompanhar este processo.'
+
+    Não usa checkbox genérico da página.
+    """
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.05)
 
     checkbox_xpaths = [
-        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
-        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/ancestor::*[self::td or self::div or self::span][1]//input[@type='checkbox'][1]",
+        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
+        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/ancestor::*[self::td or self::div or self::span][1]//input[@type='checkbox'][1]",
         "//input[@type='checkbox' and contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
         "//input[@type='checkbox' and contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
     ]
 
     label_xpaths = [
-        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]",
-        "//*[self::span or self::div or self::td][contains(normalize-space(), 'Desejo acompanhar este processo')]",
+        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]",
+        "//*[self::span or self::div or self::td][contains(normalize-space(.), 'Desejo acompanhar este processo')]",
     ]
 
-    checkbox = None
+    def localizar_checkbox():
+        entrar_iframe_detalhe_analise(driver, wait)
 
-    for xpath in checkbox_xpaths:
-        try:
-            for el in driver.find_elements(By.XPATH, xpath):
-                try:
-                    if el.is_displayed() and el.is_enabled():
-                        checkbox = el
-                        break
-                except Exception:
-                    continue
-            if checkbox is not None:
-                break
-        except Exception:
-            continue
+        for xpath in checkbox_xpaths:
+            try:
+                for el in driver.find_elements(By.XPATH, xpath):
+                    try:
+                        if el.is_enabled():
+                            return el
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        return None
+
+    checkbox = localizar_checkbox()
 
     if checkbox is not None and _checkbox_esta_marcado(checkbox):
         print("[SCH] Opção 'Desejo acompanhar este processo' já está marcada.")
         return True
 
-    alvo_clique = checkbox
+    # Em alguns layouts PrimeFaces o input real pode ficar visualmente oculto;
+    # nesses casos o clique correto é no label.
+    alvo = None
 
-    if alvo_clique is None:
-        alvo_clique = _achar_primeiro_elemento_visivel(
-            driver,
-            label_xpaths,
-            "checkbox/label de acompanhar processo",
-            timeout=3,
-        )
-
-    driver.execute_script(
-        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
-        alvo_clique,
-    )
-    _clicar_com_fallback(driver, alvo_clique)
-    esperar_tela_carregar(driver, 0.12)
-
-    entrar_iframe_detalhe_analise(driver, wait)
-
-    for xpath in checkbox_xpaths:
+    for xpath in label_xpaths:
         try:
             for el in driver.find_elements(By.XPATH, xpath):
                 try:
-                    if el.is_displayed() and _checkbox_esta_marcado(el):
-                        print(
-                            "[SCH] Opção 'Desejo acompanhar este processo' "
-                            "marcada com sucesso."
-                        )
-                        return True
+                    if el.is_displayed():
+                        alvo = el
+                        break
                 except Exception:
                     continue
+            if alvo is not None:
+                break
         except Exception:
             continue
+
+    if alvo is None:
+        alvo = checkbox
+
+    if alvo is None:
+        raise RuntimeError(
+            "Controle 'Desejo acompanhar este processo' não foi localizado."
+        )
+
+    for tentativa in range(1, 3):
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                alvo,
+            )
+        except Exception:
+            pass
+
+        _clicar_com_fallback(driver, alvo)
+        esperar_tela_carregar(driver, 0.18)
+
+        checkbox = localizar_checkbox()
+
+        if checkbox is not None and _checkbox_esta_marcado(checkbox):
+            print(
+                "[SCH] Opção 'Desejo acompanhar este processo' "
+                "marcada com sucesso."
+            )
+            return True
+
+        # Relocaliza o label após eventual AJAX.
+        alvo = None
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        for xpath in label_xpaths:
+            try:
+                for el in driver.find_elements(By.XPATH, xpath):
+                    if el.is_displayed():
+                        alvo = el
+                        break
+                if alvo is not None:
+                    break
+            except Exception:
+                continue
+
+        if alvo is None:
+            alvo = checkbox
 
     print(
         "[SCH][WARN] Não foi possível confirmar que "
@@ -7803,12 +8072,10 @@ def marcar_acompanhar_processo(driver, wait):
 
 def preencher_acompanhar_processo(driver, wait, texto):
     """
-    Preenche SOMENTE o textarea grande da seção 'Acompanhar Processo',
-    imediatamente associado a 'Desejo acompanhar este processo.'.
+    Substitui TODO o conteúdo do textarea grande de Acompanhar Processo
+    pelo texto informado.
 
-    Importante:
-    - não altera a Justificativa do OCD;
-    - não usa o primeiro textarea genérico da página como fallback.
+    Não altera Justificativa nem o campo Descrição inferior.
     """
     texto = str(texto or "").strip()
 
@@ -7816,29 +8083,17 @@ def preencher_acompanhar_processo(driver, wait, texto):
         print("[SCH][WARN] Texto vazio para Acompanhar Processo.")
         return False
 
-    entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.04)
+    clicar_aba_informacoes_adicionais(driver, wait)
 
     if not marcar_acompanhar_processo(driver, wait):
         raise RuntimeError(
             "Não foi possível marcar 'Desejo acompanhar este processo'."
         )
 
-    entrar_iframe_detalhe_analise(driver, wait)
-
-    xpaths_texto = [
-        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
-        "//*[normalize-space(.)='Acompanhar Processo']/following::textarea[not(@disabled)][1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[not(@disabled)][1]",
-        "//textarea[not(@disabled) and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-    ]
-
-    campo = _achar_primeiro_elemento_visivel(
+    campo = _localizar_textarea_acompanhar_processo(
         driver,
-        xpaths_texto,
-        "textarea da seção Acompanhar Processo",
-        timeout=5,
+        wait,
+        timeout=6,
     )
 
     driver.execute_script(
@@ -7846,45 +8101,70 @@ def preencher_acompanhar_processo(driver, wait, texto):
         campo,
     )
 
+    # 1) Simula a ação manual.
     try:
         campo.click()
         campo.send_keys(Keys.CONTROL, "a")
         campo.send_keys(Keys.DELETE)
         campo.send_keys(texto)
-    except Exception:
-        driver.execute_script(
-            """
-            const campo = arguments[0];
-            const valor = arguments[1];
-
-            const proto = Object.getPrototypeOf(campo);
-            const desc =
-                Object.getOwnPropertyDescriptor(proto, 'value') ||
-                Object.getOwnPropertyDescriptor(
-                    HTMLTextAreaElement.prototype,
-                    'value'
-                );
-
-            if (desc && typeof desc.set === 'function') {
-                desc.set.call(campo, valor);
-            } else {
-                campo.value = valor;
-            }
-
-            campo.dispatchEvent(new Event('input', {bubbles:true}));
-            campo.dispatchEvent(new Event('change', {bubbles:true}));
-            campo.dispatchEvent(new Event('blur', {bubbles:true}));
-            """,
-            campo,
-            texto,
+    except Exception as e:
+        print(
+            "[SCH][RETORNO][WARN] Preenchimento pelo teclado falhou; "
+            f"aplicando setter nativo: {e}"
         )
+
+    # 2) Sempre reforça o valor com o setter nativo do textarea.
+    # Isso evita casos em que o texto aparece visualmente mas o JSF/PrimeFaces
+    # não reconhece a alteração.
+    driver.execute_script(
+        """
+        const campo = arguments[0];
+        const valor = arguments[1];
+
+        campo.focus();
+
+        const proto = HTMLTextAreaElement.prototype;
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+
+        if (desc && typeof desc.set === 'function') {
+            desc.set.call(campo, valor);
+        } else {
+            campo.value = valor;
+        }
+
+        campo.defaultValue = valor;
+
+        campo.dispatchEvent(new Event('input', {
+            bubbles: true
+        }));
+        campo.dispatchEvent(new Event('change', {
+            bubbles: true
+        }));
+        campo.dispatchEvent(new KeyboardEvent('keyup', {
+            bubbles: true,
+            key: 'a'
+        }));
+        campo.dispatchEvent(new Event('blur', {
+            bubbles: true
+        }));
+        """,
+        campo,
+        texto,
+    )
 
     try:
         campo.send_keys(Keys.TAB)
     except Exception:
         pass
 
-    esperar_tela_carregar(driver, 0.08)
+    esperar_tela_carregar(driver, 0.20)
+
+    # O AJAX pode recriar o textarea. Relocalizamos antes de validar.
+    campo = _localizar_textarea_acompanhar_processo(
+        driver,
+        wait,
+        timeout=4,
+    )
 
     valor = str(
         driver.execute_script(
@@ -7900,42 +8180,64 @@ def preencher_acompanhar_processo(driver, wait, texto):
     )
 
     if confirmado:
-        print("[SCH] Campo 'Acompanhar Processo' preenchido com sucesso.")
+        print(
+            "[SCH][RETORNO] Frase preenchida no campo correto "
+            "'Acompanhar Processo'."
+        )
         return True
 
     print(
-        "[SCH][WARN] O campo 'Acompanhar Processo' foi alterado, "
-        "mas o valor exato não pôde ser confirmado."
+        "[SCH][RETORNO][WARN] O textarea correto foi localizado, "
+        "mas o valor exato da frase não pôde ser confirmado."
     )
     return False
 
 
 def salvar_informacoes_adicionais(driver, wait):
     entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.04)
+    esperar_tela_carregar(driver, 0.05)
 
     xpaths_salvar = [
         "//button[normalize-space()='Salvar']",
         "//a[normalize-space()='Salvar']",
+        "//input[(@type='submit' or @type='button') and normalize-space(@value)='Salvar']",
         "//span[normalize-space()='Salvar']/ancestor::button[1]",
         "//span[normalize-space()='Salvar']/ancestor::a[1]",
         "//*[@title='Salvar']",
-        "//*[self::a or self::button][contains(normalize-space(), 'Salvar')]",
     ]
 
     botao = _achar_primeiro_elemento_visivel(
         driver,
         xpaths_salvar,
         "botão Salvar em Informações Adicionais",
-        timeout=4,
+        timeout=5,
     )
 
+    print("[SCH][RETORNO] Salvando Informações Adicionais...")
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+        botao,
+    )
     _clicar_com_fallback(driver, botao)
-    esperar_tela_carregar(driver, 0.10)
 
-    print("[SCH] Informações Adicionais salvas.")
+    # Alguns casos apresentam alert nativo; outros atualizam por AJAX.
+    try:
+        alerta = WebDriverWait(driver, 1.5).until(
+            EC.alert_is_present()
+        )
+        print(
+            "[SCH][RETORNO] Confirmação após Salvar: "
+            f"{alerta.text}"
+        )
+        alerta.accept()
+    except Exception:
+        pass
+
+    esperar_tela_carregar(driver, 0.8)
+
+    print("[SCH][RETORNO] Clique em Salvar executado.")
     return True
-
 
 def montar_texto_informacoes_adicionais(req, anexos_baixados, dados_pdf, analise_rapida):
     return TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES
@@ -7995,6 +8297,7 @@ FRASE_MARCACAO_AUTOMACAO_RETORNO = (
 )
 
 
+
 def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
     driver,
     wait,
@@ -8003,17 +8306,18 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
     analise_tipos_re=None,
 ):
     """
-    Registra a análise automática no local correto da aba Informações Adicionais.
+    Registra a frase da automação SOMENTE em:
+    Informações Adicionais > Acompanhar Processo.
 
-    Fluxo:
-    1. A Justificativa do OCD já deve ter sido lida anteriormente para decidir
-       o(s) tipo(s) RE. Esta função NÃO altera a Justificativa.
-    2. Marca 'Desejo acompanhar este processo.'.
-    3. Preenche SOMENTE o textarea grande da seção 'Acompanhar Processo' com
-       a frase da automação.
-    4. Salva Informações Adicionais.
-    5. Reabre/confere o mesmo textarea e exige a frase exata antes de permitir
-       que o fluxo siga para a aprovação automática.
+    A Justificativa do OCD permanece intacta.
+
+    A rotina:
+    - marca 'Desejo acompanhar este processo';
+    - substitui qualquer conteúdo anterior (ex.: 'AS') pela frase exata;
+    - salva;
+    - relê o campo depois do AJAX;
+    - se a frase não persistir, repete o preenchimento/salvamento uma vez;
+    - só retorna confirmada_apos_salvar=True quando o texto exato persistiu.
     """
     frase = str(frase or "").strip()
     texto_original_analisado = str(texto_original_analisado or "").strip()
@@ -8041,6 +8345,7 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
         "preenchida": False,
         "salva": False,
         "confirmada_apos_salvar": False,
+        "tentativas_preenchimento": 0,
         "status": "pendente",
     }
 
@@ -8049,60 +8354,50 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
         resultado["erro"] = "Frase de marcação vazia."
         return resultado
 
-    # Mantemos esta trava apenas como segurança final. A decisão do tipo RE
-    # deve ocorrer antes, usando exclusivamente a Justificativa atual do OCD.
     if not isinstance(analise_tipos_re, dict):
         resultado["status"] = "bloqueado_sem_analise_previa_tipo_re"
         resultado["erro"] = (
-            "A marcação não foi executada porque a análise prévia do tipo RE "
-            "não foi informada."
+            "A marcação não foi executada porque a análise prévia "
+            "do tipo RE não foi informada."
         )
         return resultado
 
     if analise_tipos_re.get("tem_numero_nao_permitido"):
         resultado["status"] = "bloqueado_tipo_re_fora_escopo"
         resultado["erro"] = (
-            "A marcação não foi executada porque o tipo RE atual está fora "
-            "do escopo de aprovação automática."
+            "A marcação não foi executada porque o tipo RE atual "
+            "está fora do escopo de aprovação automática."
         )
         return resultado
 
     if not analise_tipos_re.get("combinacao_ok", True):
         resultado["status"] = "bloqueado_combinacao_tipo_re_nao_permitida"
         resultado["erro"] = (
-            "A marcação não foi executada porque a combinação atual de tipos "
-            "RE não está no escopo de aprovação automática."
+            "A marcação não foi executada porque a combinação atual "
+            "de tipos RE não está no escopo de aprovação automática."
         )
         return resultado
 
-    xpaths_acompanhar = [
-        "//label[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
-        "//*[contains(normalize-space(), 'Desejo acompanhar este processo')]/following::textarea[not(@disabled)][1]",
-        "//*[normalize-space(.)='Acompanhar Processo']/following::textarea[not(@disabled)][1]",
-        "//*[contains(normalize-space(), 'Acompanhar Processo')]/following::textarea[not(@disabled)][1]",
-        "//textarea[not(@disabled) and contains(translate(concat(@id,' ',@name),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-    ]
+    frase_norm = _normalizar_texto_comparacao(frase)
 
-    def localizar_campo_acompanhar():
-        entrar_iframe_detalhe_analise(driver, wait)
-        return _achar_primeiro_elemento_visivel(
+    def ler_campo():
+        clicar_aba_informacoes_adicionais(driver, wait)
+
+        campo = _localizar_textarea_acompanhar_processo(
             driver,
-            xpaths_acompanhar,
-            "textarea da seção Acompanhar Processo",
-            timeout=5,
+            wait,
+            timeout=6,
         )
 
-    def ler(campo):
-        try:
-            return str(
-                driver.execute_script(
-                    "return arguments[0].value == null ? '' : String(arguments[0].value);",
-                    campo,
-                )
-                or ""
-            ).strip()
-        except Exception:
-            return str(campo.get_attribute("value") or "").strip()
+        valor = str(
+            driver.execute_script(
+                "return arguments[0].value == null ? '' : String(arguments[0].value);",
+                campo,
+            )
+            or ""
+        ).strip()
+
+        return campo, valor
 
     try:
         clicar_aba_informacoes_adicionais(driver, wait)
@@ -8116,60 +8411,99 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
                 "'Desejo acompanhar este processo'."
             )
 
-        campo = localizar_campo_acompanhar()
+        campo, conteudo_anterior = ler_campo()
+
         resultado["campo_encontrado"] = True
-
-        conteudo_anterior = ler(campo)
         resultado["conteudo_anterior"] = conteudo_anterior
-
-        frase_norm = _normalizar_texto_comparacao(frase)
-        anterior_norm = _normalizar_texto_comparacao(conteudo_anterior)
-
         resultado["ja_existia"] = bool(
-            frase_norm and anterior_norm == frase_norm
+            frase_norm
+            and _normalizar_texto_comparacao(conteudo_anterior)
+            == frase_norm
         )
 
-        if resultado["ja_existia"]:
-            resultado["preenchida"] = True
-            resultado["conteudo_final"] = frase
-        else:
-            preenchido = preencher_acompanhar_processo(
-                driver,
-                wait,
-                frase,
-            )
+        # Até 2 tentativas: preenchimento inicial + 1 retry pós-save.
+        for tentativa in range(1, 3):
+            resultado["tentativas_preenchimento"] = tentativa
 
-            resultado["preenchida"] = bool(preenchido)
-            resultado["substituida"] = bool(
-                preenchido and bool(conteudo_anterior)
-            )
-            resultado["conteudo_final"] = frase
+            _, valor_atual = ler_campo()
 
-            if not preenchido:
-                raise RuntimeError(
-                    "Não foi possível confirmar o preenchimento do textarea "
-                    "da seção Acompanhar Processo."
+            if (
+                frase_norm
+                and _normalizar_texto_comparacao(valor_atual)
+                == frase_norm
+            ):
+                preenchido = True
+            else:
+                preenchido = preencher_acompanhar_processo(
+                    driver,
+                    wait,
+                    frase,
                 )
 
-        resultado["salva"] = bool(
-            salvar_informacoes_adicionais(driver, wait)
-        )
+            resultado["preenchida"] = bool(preenchido)
 
-        if not resultado["salva"]:
-            raise RuntimeError(
-                "O salvamento de Informações Adicionais não foi confirmado."
+            if not preenchido:
+                if tentativa < 2:
+                    print(
+                        "[SCH][RETORNO][WARN] Primeira tentativa de "
+                        "preenchimento não confirmou. Tentando novamente..."
+                    )
+                    continue
+
+                raise RuntimeError(
+                    "Não foi possível confirmar o preenchimento "
+                    "do campo Acompanhar Processo."
+                )
+
+            resultado["conteudo_final"] = frase
+            resultado["substituida"] = bool(
+                conteudo_anterior
+                and _normalizar_texto_comparacao(conteudo_anterior)
+                != frase_norm
             )
 
-        # A aba pode ser rerenderizada por AJAX depois do Salvar.
-        clicar_aba_informacoes_adicionais(driver, wait)
-        campo_confirmacao = localizar_campo_acompanhar()
-        valor_confirmado = ler(campo_confirmacao)
+            resultado["salva"] = bool(
+                salvar_informacoes_adicionais(driver, wait)
+            )
 
-        resultado["conteudo_confirmado"] = valor_confirmado
-        resultado["confirmada_apos_salvar"] = bool(
-            frase_norm
-            and _normalizar_texto_comparacao(valor_confirmado) == frase_norm
-        )
+            if not resultado["salva"]:
+                if tentativa < 2:
+                    continue
+
+                raise RuntimeError(
+                    "Não foi possível executar o salvamento "
+                    "de Informações Adicionais."
+                )
+
+            # Aguarda o AJAX e relê o MESMO campo correto.
+            esperar_tela_carregar(driver, 0.8)
+
+            marcado_apos = marcar_acompanhar_processo(
+                driver,
+                wait,
+            )
+            resultado["acompanhar_processo_marcado"] = bool(
+                marcado_apos
+            )
+
+            _, valor_confirmado = ler_campo()
+            resultado["conteudo_confirmado"] = valor_confirmado
+
+            resultado["confirmada_apos_salvar"] = bool(
+                frase_norm
+                and _normalizar_texto_comparacao(valor_confirmado)
+                == frase_norm
+                and marcado_apos
+            )
+
+            if resultado["confirmada_apos_salvar"]:
+                break
+
+            if tentativa < 2:
+                print(
+                    "[SCH][RETORNO][WARN] A frase não persistiu após "
+                    "o primeiro Salvar. Repetindo preenchimento e salvamento..."
+                )
 
         if resultado["confirmada_apos_salvar"]:
             resultado["status"] = (
@@ -8177,27 +8511,29 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
                 if resultado["ja_existia"]
                 else "acompanhar_processo_preenchido_salvo_e_confirmado"
             )
+
+            print(
+                "[SCH][RETORNO] Acompanhar Processo confirmado: "
+                f"'{frase}'"
+            )
         else:
             resultado["status"] = "marcacao_nao_confirmada"
-
-        print(
-            "[SCH][RETORNO] Registro da automação em Acompanhar Processo: "
-            f"{resultado['status']}"
-        )
+            resultado["erro"] = (
+                "A frase não permaneceu gravada no campo "
+                "Acompanhar Processo após duas tentativas."
+            )
 
         return resultado
 
     except Exception as e:
         resultado["status"] = "erro"
         resultado["erro"] = str(e)
+
         print(
-            "[SCH][RETORNO][WARN] Não foi possível registrar a frase em "
-            f"Acompanhar Processo: {e}"
+            "[SCH][RETORNO][WARN] Não foi possível registrar a frase "
+            f"em Acompanhar Processo: {e}"
         )
         return resultado
-
-
-
 
 # =============================================================================
 # RETORNO PARA ESTUDO - Comparar Versões
