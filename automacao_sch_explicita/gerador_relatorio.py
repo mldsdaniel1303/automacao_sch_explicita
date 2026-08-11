@@ -1627,7 +1627,7 @@ def _html_retorno_para_estudo_bloco(resultado):
         )
 
     return f"""
-        <h2>Relatório - Retorno Para Estudo</h2>
+        <h2>Relatório - Retorno Para Estudo — Requerimento {escape(str(req_numero))}</h2>
 
         <div class="{classe_aprovacao}">
             <h3>Conclusão da automação</h3>
