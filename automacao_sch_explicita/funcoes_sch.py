@@ -904,108 +904,926 @@ def selecionar_quantidade_registros_fila(
         "valor_final": quantidade,
     }
 
-def coletar_requerimentos(driver, wait, regras):
-    xpath_tabela = "//table[.//th[contains(., 'Requerimento')] or .//td[contains(., 'Requerimento')]]"
-    xpath_linhas = ".//tbody/tr[td]"
 
-    colunas_regras = regras.get("colunas_fila", {})
+def _info_paginacao_fila(driver):
+    """
+    Lê o estado atual do paginator PrimeFaces da fila.
 
-    idx_requerimento = colunas_regras.get("requerimento", 0)
-    idx_homologacao = colunas_regras.get("homologacao", 1)
-    idx_certificado = colunas_regras.get("certificado", 2)
-    idx_tipo_produto = colunas_regras.get("tipo_produto", 3)
-    idx_modelo = colunas_regras.get("modelo", 4)
-    idx_solicitante = colunas_regras.get("solicitante", 5)
-    idx_fabricante = colunas_regras.get("fabricante", 6)
-    idx_data_conclusao = colunas_regras.get("data_conclusao", 7)
+    Retorna página atual, total de páginas e texto exibido, por exemplo:
+    "Registro: 1 - 10 de 12, Página: 1 de 2".
+    """
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
 
-    print("[SCH] Coletando requerimentos da fila...")
-    tabela = wait.until(EC.presence_of_element_located((By.XPATH, xpath_tabela)))
-    linhas = tabela.find_elements(By.XPATH, xpath_linhas)
+    textos = []
 
-    requerimentos = []
+    seletores = [
+        ".ui-paginator-current",
+        "span.ui-paginator-current",
+        "div.ui-paginator .ui-paginator-current",
+    ]
 
-    for idx, linha in enumerate(linhas, start=1):
+    for seletor in seletores:
         try:
-            colunas = linha.find_elements(By.XPATH, "./td")
+            for el in driver.find_elements(By.CSS_SELECTOR, seletor):
+                try:
+                    if el.is_displayed():
+                        txt = _texto_limpo(el.text)
+                        if txt:
+                            textos.append(txt)
+                except Exception:
+                    continue
+        except Exception:
+            continue
 
-            def valor_coluna(posicao):
-                return _texto_limpo(colunas[posicao].text) if len(colunas) > posicao else ""
+    # Fallback: o SCH também deixa o texto do paginator na primeira linha
+    # do cabeçalho da tabela.
+    if not textos:
+        try:
+            tabela = _aguardar_tabela_fila(driver, timeout=3)
+            for el in tabela.find_elements(
+                By.XPATH,
+                ".//*[contains(normalize-space(.), 'Página:') "
+                "and contains(normalize-space(.), 'Registro:')]"
+            ):
+                try:
+                    txt = _texto_limpo(el.text)
+                    if txt and len(txt) < 300:
+                        textos.append(txt)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
-            textos_colunas = [_texto_limpo(td.text) for td in colunas]
-            texto_linha = " | ".join([t for t in textos_colunas if t])
+    texto = next(
+        (
+            t for t in textos
+            if re.search(r"P[aá]gina\s*:\s*\d+\s+de\s+\d+", t, re.I)
+        ),
+        textos[0] if textos else "",
+    )
 
-            requerimento_coluna = valor_coluna(idx_requerimento)
-            requerimento_extraido = _extrair_numero_requerimento_de_linha(
-                texto_linha,
-                colunas,
+    pagina = None
+    total_paginas = None
+    total_registros = None
+
+    m_pag = re.search(
+        r"P[aá]gina\s*:\s*(\d+)\s+de\s+(\d+)",
+        texto,
+        re.I,
+    )
+    if m_pag:
+        pagina = int(m_pag.group(1))
+        total_paginas = int(m_pag.group(2))
+
+    m_total = re.search(
+        r"Registro\s*:\s*\d+\s*-\s*\d+\s+de\s+(\d+)",
+        texto,
+        re.I,
+    )
+    if m_total:
+        total_registros = int(m_total.group(1))
+
+    return {
+        "pagina": pagina,
+        "total_paginas": total_paginas,
+        "total_registros": total_registros,
+        "texto": texto,
+    }
+
+
+def _controle_paginador_fila(driver, tipo, pagina=None):
+    """Localiza um controle visível do paginator da fila."""
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    if tipo == "primeira":
+        seletores = [
+            "a.ui-paginator-first",
+            "span.ui-paginator-first",
+        ]
+    elif tipo == "proxima":
+        seletores = [
+            "a.ui-paginator-next",
+            "span.ui-paginator-next",
+        ]
+    elif tipo == "pagina":
+        seletores = [
+            "a.ui-paginator-page",
+            "span.ui-paginator-page",
+        ]
+    else:
+        return None
+
+    for seletor in seletores:
+        try:
+            elementos = driver.find_elements(By.CSS_SELECTOR, seletor)
+        except Exception:
+            elementos = []
+
+        for el in elementos:
+            try:
+                if not el.is_displayed():
+                    continue
+
+                classe = str(el.get_attribute("class") or "").lower()
+                aria_disabled = str(
+                    el.get_attribute("aria-disabled") or ""
+                ).lower()
+
+                if (
+                    "ui-state-disabled" in classe
+                    or "disabled" in classe
+                    or aria_disabled == "true"
+                ):
+                    continue
+
+                if tipo == "pagina":
+                    txt = _texto_limpo(el.text)
+                    if txt != str(pagina):
+                        continue
+
+                return el
+            except Exception:
+                continue
+
+    return None
+
+
+def _aguardar_troca_pagina_fila(
+    driver,
+    pagina_anterior=None,
+    timeout=8,
+):
+    inicio = time.time()
+
+    while time.time() - inicio < timeout:
+        try:
+            info = _info_paginacao_fila(driver)
+            atual = info.get("pagina")
+
+            if (
+                pagina_anterior is not None
+                and atual is not None
+                and atual != pagina_anterior
+            ):
+                _aguardar_tabela_fila(driver, timeout=4)
+                esperar_tela_carregar(driver, 0.15)
+                return True
+
+            if pagina_anterior is None and atual is not None:
+                _aguardar_tabela_fila(driver, timeout=4)
+                return True
+        except Exception:
+            pass
+
+        time.sleep(0.12)
+
+    try:
+        _aguardar_tabela_fila(driver, timeout=3)
+        return True
+    except Exception:
+        return False
+
+
+def _clicar_controle_paginacao_fila(
+    driver,
+    controle,
+    pagina_anterior=None,
+):
+    if controle is None:
+        return False
+
+    try:
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});",
+            controle,
+        )
+    except Exception:
+        pass
+
+    try:
+        controle.click()
+    except Exception:
+        try:
+            ActionChains(driver).move_to_element(controle).click().perform()
+        except Exception:
+            try:
+                driver.execute_script("arguments[0].click();", controle)
+            except Exception:
+                return False
+
+    return _aguardar_troca_pagina_fila(
+        driver,
+        pagina_anterior=pagina_anterior,
+        timeout=8,
+    )
+
+
+def _ir_para_pagina_fila(driver, pagina_alvo):
+    """
+    Posiciona a fila em uma página específica.
+
+    Usa primeiro o número visível do paginator e, se necessário, volta à
+    primeira página e avança sequencialmente.
+    """
+    try:
+        pagina_alvo = int(pagina_alvo)
+    except Exception:
+        return False
+
+    if pagina_alvo < 1:
+        return False
+
+    info = _info_paginacao_fila(driver)
+    atual = info.get("pagina")
+    total = info.get("total_paginas")
+
+    if atual == pagina_alvo:
+        return True
+
+    if total is not None and pagina_alvo > total:
+        return False
+
+    # Tenta o botão numérico diretamente.
+    controle = _controle_paginador_fila(
+        driver,
+        "pagina",
+        pagina=pagina_alvo,
+    )
+    if controle is not None:
+        if _clicar_controle_paginacao_fila(
+            driver,
+            controle,
+            pagina_anterior=atual,
+        ):
+            if _info_paginacao_fila(driver).get("pagina") == pagina_alvo:
+                return True
+
+    # Volta ao início.
+    info = _info_paginacao_fila(driver)
+    atual = info.get("pagina")
+
+    if atual not in {None, 1}:
+        primeiro = _controle_paginador_fila(driver, "primeira")
+        if primeiro is not None:
+            _clicar_controle_paginacao_fila(
+                driver,
+                primeiro,
+                pagina_anterior=atual,
             )
 
-            numero_requerimento = requerimento_extraido or requerimento_coluna
-            if not numero_requerimento:
-                numero_requerimento = f"sem_numero_linha_{idx}"
+    info = _info_paginacao_fila(driver)
+    atual = info.get("pagina") or 1
 
-            dados = {
-                "row_index": idx,
-                "requerimento": numero_requerimento,
-                "homologacao": valor_coluna(idx_homologacao),
-                "certificado": valor_coluna(idx_certificado),
-                "tipo_produto": valor_coluna(idx_tipo_produto),
-                "modelo": valor_coluna(idx_modelo),
-                "solicitante": valor_coluna(idx_solicitante),
-                "fabricante": valor_coluna(idx_fabricante),
-                "data_conclusao": valor_coluna(idx_data_conclusao),
-                "texto_linha": texto_linha,
-                "fila_sch": FILA_SCH_ATUAL,
-            }
+    # Avança até a página desejada.
+    seguranca = 0
+    while atual < pagina_alvo and seguranca < 200:
+        seguranca += 1
 
-            dados = _garantir_ano_no_requerimento(dados)
-            
-            requerimentos.append(dados)
+        proxima = _controle_paginador_fila(driver, "proxima")
+        if proxima is None:
+            return False
+
+        if not _clicar_controle_paginacao_fila(
+            driver,
+            proxima,
+            pagina_anterior=atual,
+        ):
+            return False
+
+        info = _info_paginacao_fila(driver)
+        nova = info.get("pagina")
+
+        if nova is None:
+            atual += 1
+        elif nova <= atual:
+            return False
+        else:
+            atual = nova
+
+    return atual == pagina_alvo
 
 
+def _avancar_pagina_fila(driver):
+    info = _info_paginacao_fila(driver)
+    atual = info.get("pagina")
+    total = info.get("total_paginas")
 
-        except Exception as e:
-            print(f"[SCH][WARN] Falha ao ler linha {idx}: {e}")
+    if (
+        atual is not None
+        and total is not None
+        and atual >= total
+    ):
+        return False
 
-    print(f"[SCH] {len(requerimentos)} requerimentos encontrados.")
+    proxima = _controle_paginador_fila(driver, "proxima")
+
+    if proxima is None:
+        return False
+
+    return _clicar_controle_paginacao_fila(
+        driver,
+        proxima,
+        pagina_anterior=atual,
+    )
+
+
+def coletar_requerimentos(driver, wait, regras):
+    """
+    Coleta TODOS os requerimentos da fila, percorrendo todas as páginas do
+    paginator PrimeFaces.
+
+    O número configurado em "Registros por página" define apenas quantos itens
+    aparecem de cada vez. Ele não limita a coleta total.
+
+    Os índices das colunas continuam sendo descobertos pelos cabeçalhos reais
+    da tabela para evitar deslocamentos causados pela linha do paginador.
+    """
+    xpath_tabela = (
+        "//table[.//th[contains(., 'Requerimento')] "
+        "or .//td[contains(., 'Requerimento')]]"
+    )
+    xpath_linhas = ".//tbody/tr[td]"
+
+    colunas_regras = regras.get("colunas_fila", {}) or {}
+
+    fallback = {
+        "requerimento": colunas_regras.get("requerimento", 0),
+        "homologacao": colunas_regras.get("homologacao", 1),
+        "certificado": colunas_regras.get("certificado", 2),
+        "tipo_produto": colunas_regras.get("tipo_produto", 3),
+        "modelo": colunas_regras.get("modelo", 4),
+        "solicitante": colunas_regras.get("solicitante", 5),
+        "fabricante": colunas_regras.get("fabricante", 6),
+        "data_conclusao": colunas_regras.get("data_conclusao", 7),
+    }
+
+    print("[SCH] Coletando requerimentos da fila...")
+
+    # A coleta sempre começa na primeira página para que a ordem e os metadados
+    # pagina_fila/row_index_pagina sejam determinísticos.
+    info_inicial = _info_paginacao_fila(driver)
+    pagina_inicial = info_inicial.get("pagina")
+
+    if pagina_inicial and pagina_inicial != 1:
+        _ir_para_pagina_fila(driver, 1)
+
+    tabela = wait.until(
+        EC.presence_of_element_located((By.XPATH, xpath_tabela))
+    )
+
+    # ------------------------------
+    # Mapeamento dinâmico de colunas
+    # ------------------------------
+    cabecalhos = []
+    indice_linha_cabecalho = None
+
+    try:
+        linhas_cabecalho = tabela.find_elements(By.XPATH, ".//thead/tr")
+        candidatos = []
+
+        marcadores = (
+            "requerimento",
+            "homologacao",
+            "certificado",
+            "tipo de produto",
+            "modelo",
+            "solicitante",
+            "fabricante",
+            "data da conclusao",
+            "situacao",
+        )
+
+        for indice_tr, tr in enumerate(linhas_cabecalho):
+            try:
+                celulas = tr.find_elements(By.XPATH, "./th | ./td")
+            except Exception:
+                celulas = []
+
+            if not celulas:
+                continue
+
+            textos = [_texto_limpo(c.text) for c in celulas]
+            texto_norm = _normalizar_texto_comparacao(
+                " | ".join(textos)
+            )
+
+            if "requerimento" not in texto_norm:
+                continue
+
+            pontuacao = sum(
+                1
+                for marcador in marcadores
+                if marcador in texto_norm
+            )
+
+            candidatos.append(
+                (pontuacao, len(celulas), indice_tr, celulas)
+            )
+
+        if candidatos:
+            candidatos.sort(
+                key=lambda item: (item[0], item[1]),
+                reverse=True,
+            )
+
+            _, _, indice_linha_cabecalho, celulas_escolhidas = (
+                candidatos[0]
+            )
+
+            for celula in celulas_escolhidas:
+                titulo = _texto_limpo(celula.text)
+
+                try:
+                    colspan = int(
+                        celula.get_attribute("colspan") or "1"
+                    )
+                except Exception:
+                    colspan = 1
+
+                colspan = max(1, colspan)
+                cabecalhos.append(titulo)
+
+                for _ in range(colspan - 1):
+                    cabecalhos.append("")
+
+        if not cabecalhos:
+            ths = tabela.find_elements(
+                By.XPATH,
+                ".//tr[.//th[contains(., 'Requerimento')]][1]/th",
+            )
+
+            if not ths:
+                ths = tabela.find_elements(By.XPATH, ".//tr[1]/th")
+
+            cabecalhos = [
+                _texto_limpo(th.text)
+                for th in ths
+            ]
+
+    except Exception:
+        cabecalhos = []
+        indice_linha_cabecalho = None
+
+    def _cab_norm(valor):
+        return _normalizar_texto_comparacao(valor)
+
+    aliases = {
+        "requerimento": (
+            "requerimento",
+            "numero do requerimento",
+            "n requerimento",
+        ),
+        "homologacao": (
+            "homologacao",
+            "numero de homologacao",
+            "n de homologacao",
+            "codigo de homologacao",
+        ),
+        "certificado": (
+            "certificado",
+            "numero do certificado",
+            "n do certificado",
+        ),
+        "tipo_produto": (
+            "tipo do produto",
+            "tipo de produto",
+            "produto",
+        ),
+        "modelo": ("modelo",),
+        "solicitante": ("solicitante",),
+        "fabricante": ("fabricante",),
+        "data_conclusao": (
+            "data de conclusao",
+            "data conclusao",
+            "conclusao",
+        ),
+    }
+
+    indices = dict(fallback)
+    origem_indices = {
+        chave: "regras/fallback"
+        for chave in indices
+    }
+
+    for chave, termos in aliases.items():
+        candidatos = []
+
+        for pos, titulo in enumerate(cabecalhos):
+            norm = _cab_norm(titulo)
+
+            if not norm:
+                continue
+
+            for termo in termos:
+                termo_norm = _cab_norm(termo)
+
+                if norm == termo_norm:
+                    candidatos.append((0, pos, titulo))
+                elif termo_norm and termo_norm in norm:
+                    candidatos.append((1, pos, titulo))
+
+        if candidatos:
+            candidatos.sort(key=lambda x: (x[0], x[1]))
+            _, pos, titulo = candidatos[0]
+            indices[chave] = pos
+            origem_indices[chave] = f"cabeçalho: {titulo}"
+
+    if cabecalhos:
+        if indice_linha_cabecalho is not None:
+            print(
+                "[SCH][FILA] Linha real de cabeçalho selecionada no thead: "
+                f"{indice_linha_cabecalho + 1}"
+            )
+
+        print(
+            "[SCH][FILA] Cabeçalhos identificados: "
+            + " | ".join(
+                f"{i}={titulo or '-'}"
+                for i, titulo in enumerate(cabecalhos)
+            )
+        )
+
+        print(
+            "[SCH][FILA] Mapeamento de colunas: "
+            + " | ".join(
+                f"{chave}={indices[chave]} "
+                f"({origem_indices[chave]})"
+                for chave in (
+                    "requerimento",
+                    "homologacao",
+                    "certificado",
+                    "tipo_produto",
+                    "modelo",
+                    "solicitante",
+                    "fabricante",
+                    "data_conclusao",
+                )
+            )
+        )
+    else:
+        print(
+            "[SCH][FILA][WARN] Cabeçalhos não puderam ser lidos; "
+            "usando índices configurados em regras/fallback."
+        )
+
+    padrao_homologacao = re.compile(
+        r"\b\d{4,6}\s*[-–—]\s*\d{2}\s*[-–—]\s*\d{4,6}\b"
+    )
+
+    requerimentos = []
+    vistos = set()
+    paginas_coletadas = []
+    seguranca_paginas = 0
+
+    while seguranca_paginas < 200:
+        seguranca_paginas += 1
+
+        info_pag = _info_paginacao_fila(driver)
+        pagina_atual = (
+            info_pag.get("pagina")
+            or len(paginas_coletadas) + 1
+        )
+        total_paginas = info_pag.get("total_paginas")
+
+        if pagina_atual in paginas_coletadas:
+            print(
+                "[SCH][FILA][WARN] A paginação não avançou. "
+                f"Página {pagina_atual} já havia sido coletada."
+            )
+            break
+
+        tabela = wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, xpath_tabela)
+            )
+        )
+        linhas = tabela.find_elements(
+            By.XPATH,
+            xpath_linhas,
+        )
+
+        coletados_nesta_pagina = 0
+
+        for idx_pagina, linha in enumerate(linhas, start=1):
+            try:
+                colunas = linha.find_elements(By.XPATH, "./td")
+
+                def valor_coluna(chave):
+                    posicao = indices.get(
+                        chave,
+                        fallback.get(chave, 0),
+                    )
+                    return (
+                        _texto_limpo(colunas[posicao].text)
+                        if (
+                            isinstance(posicao, int)
+                            and len(colunas) > posicao
+                        )
+                        else ""
+                    )
+
+                textos_colunas = [
+                    _texto_limpo(td.text)
+                    for td in colunas
+                ]
+                texto_linha = " | ".join(
+                    [
+                        t
+                        for t in textos_colunas
+                        if t
+                    ]
+                )
+
+                requerimento_coluna = valor_coluna(
+                    "requerimento"
+                )
+
+                requerimento_extraido = (
+                    _extrair_numero_requerimento_de_linha(
+                        requerimento_coluna or texto_linha,
+                        [colunas[indices["requerimento"]]]
+                        if (
+                            isinstance(
+                                indices.get("requerimento"),
+                                int,
+                            )
+                            and len(colunas)
+                            > indices["requerimento"]
+                        )
+                        else None,
+                    )
+                )
+
+                numero_requerimento = (
+                    requerimento_extraido
+                    or requerimento_coluna
+                )
+
+                if not numero_requerimento:
+                    numero_requerimento = (
+                        "sem_numero_"
+                        f"pagina_{pagina_atual}_"
+                        f"linha_{idx_pagina}"
+                    )
+
+                homologacao = valor_coluna("homologacao")
+                certificado = valor_coluna("certificado")
+
+                if not padrao_homologacao.search(
+                    homologacao or ""
+                ):
+                    candidatos_codigo = [
+                        texto
+                        for texto in textos_colunas
+                        if padrao_homologacao.search(
+                            texto or ""
+                        )
+                    ]
+                    candidatos_codigo = list(
+                        dict.fromkeys(candidatos_codigo)
+                    )
+
+                    if len(candidatos_codigo) == 1:
+                        homologacao = candidatos_codigo[0]
+
+                dados = {
+                    "row_index": len(requerimentos) + 1,
+                    "row_index_pagina": idx_pagina,
+                    "pagina_fila": pagina_atual,
+                    "total_paginas_fila": total_paginas,
+                    "requerimento": numero_requerimento,
+                    "homologacao": homologacao,
+                    "certificado": certificado,
+                    "tipo_produto": valor_coluna(
+                        "tipo_produto"
+                    ),
+                    "modelo": valor_coluna("modelo"),
+                    "solicitante": valor_coluna(
+                        "solicitante"
+                    ),
+                    "fabricante": valor_coluna(
+                        "fabricante"
+                    ),
+                    "data_conclusao": valor_coluna(
+                        "data_conclusao"
+                    ),
+                    "texto_linha": texto_linha,
+                    "fila_sch": FILA_SCH_ATUAL,
+                    "cabecalhos_fila": cabecalhos,
+                    "indices_colunas_fila": indices,
+                }
+
+                dados = _garantir_ano_no_requerimento(
+                    dados
+                )
+
+                chave = (
+                    _normalizar_texto_comparacao(
+                        dados.get("requerimento", "")
+                    ),
+                    _normalizar_texto_comparacao(
+                        dados.get("homologacao", "")
+                    ),
+                )
+
+                if chave in vistos:
+                    continue
+
+                vistos.add(chave)
+                requerimentos.append(dados)
+                coletados_nesta_pagina += 1
+
+            except Exception as e:
+                print(
+                    "[SCH][WARN] Falha ao ler "
+                    f"página {pagina_atual}, "
+                    f"linha {idx_pagina}: {e}"
+                )
+
+        paginas_coletadas.append(pagina_atual)
+
+        print(
+            "[SCH][FILA] Página "
+            f"{pagina_atual}"
+            + (
+                f"/{total_paginas}"
+                if total_paginas
+                else ""
+            )
+            + ": "
+            f"{coletados_nesta_pagina} "
+            "requerimento(s) coletado(s)."
+        )
+
+        if (
+            total_paginas is not None
+            and pagina_atual >= total_paginas
+        ):
+            break
+
+        if not _avancar_pagina_fila(driver):
+            break
+
+    # Deixa a fila novamente na primeira página para o processamento.
+    if paginas_coletadas and paginas_coletadas[-1] != 1:
+        if _ir_para_pagina_fila(driver, 1):
+            print(
+                "[SCH][FILA] Coleta concluída. "
+                "Fila reposicionada na página 1."
+            )
+        else:
+            print(
+                "[SCH][FILA][WARN] Coleta concluída, mas "
+                "não foi possível confirmar o retorno à página 1."
+            )
+
+    total_paginas_lidas = len(paginas_coletadas)
+
+    print(
+        f"[SCH] {len(requerimentos)} requerimentos encontrados"
+        + (
+            f" em {total_paginas_lidas} página(s)."
+            if total_paginas_lidas > 1
+            else "."
+        )
+    )
+
     for item in requerimentos:
         print(
             f"[SCH] Linha {item['row_index']}: "
+            f"pagina={item.get('pagina_fila', 1)} | "
             f"requerimento={item.get('requerimento', '')} | "
             f"homologacao={item.get('homologacao', '')} | "
-            f"certificado={item.get('certificado', '')}"
+            f"certificado={item.get('certificado', '')} | "
+            f"tipo_produto={item.get('tipo_produto', '')} | "
+            f"modelo={item.get('modelo', '')}"
         )
 
     return requerimentos
 
 
-
 def _localizar_linha_requerimento_na_fila(driver, req):
-    numero_alvo = _somente_digitos(req.get("requerimento", ""))
+    """
+    Localiza o requerimento na fila respeitando a página em que ele foi
+    coletado. Se a página armazenada não funcionar, percorre as páginas
+    disponíveis pelo número do requerimento.
+    """
+    req = req or {}
+    numero_alvo = _somente_digitos(
+        req.get("requerimento", "")
+    )
 
-    tabela = _aguardar_tabela_fila(driver, timeout=8)
-    linhas = tabela.find_elements(By.XPATH, ".//tbody/tr[td]")
+    pagina_preferida = req.get("pagina_fila")
 
-    if numero_alvo:
-        for linha in linhas:
-            try:
-                celulas = linha.find_elements(By.XPATH, "./td")
-                numero_linha = _extrair_numero_requerimento_de_linha(
-                    linha.text,
-                    celulas,
-                )
+    if pagina_preferida:
+        try:
+            _ir_para_pagina_fila(
+                driver,
+                int(pagina_preferida),
+            )
+        except Exception:
+            pass
 
-                if _somente_digitos(numero_linha) == numero_alvo:
-                    return linha
+    def _procurar_na_pagina_atual():
+        tabela = _aguardar_tabela_fila(
+            driver,
+            timeout=8,
+        )
+        linhas = tabela.find_elements(
+            By.XPATH,
+            ".//tbody/tr[td]",
+        )
 
-            except StaleElementReferenceException:
-                raise
-            except Exception:
+        if numero_alvo:
+            for linha in linhas:
+                try:
+                    celulas = linha.find_elements(
+                        By.XPATH,
+                        "./td",
+                    )
+
+                    numero_linha = (
+                        _extrair_numero_requerimento_de_linha(
+                            linha.text,
+                            celulas,
+                        )
+                    )
+
+                    if (
+                        _somente_digitos(numero_linha)
+                        == numero_alvo
+                    ):
+                        return linha
+
+                except StaleElementReferenceException:
+                    raise
+                except Exception:
+                    continue
+
+        return None
+
+    try:
+        linha = _procurar_na_pagina_atual()
+        if linha is not None:
+            return linha
+    except StaleElementReferenceException:
+        raise
+    except Exception:
+        pass
+
+    # Fallback robusto: percorre as páginas se o item não estiver onde foi
+    # coletado. Isso também cobre mudanças de página provocadas pelo SCH ao
+    # voltar de um requerimento.
+    info = _info_paginacao_fila(driver)
+    total_paginas = info.get("total_paginas") or 1
+
+    for pagina in range(1, total_paginas + 1):
+        try:
+            if not _ir_para_pagina_fila(driver, pagina):
                 continue
 
-    linha_idx = int(req.get("row_index"))
-    return tabela.find_element(By.XPATH, f"(.//tbody/tr[td])[{linha_idx}]")
+            linha = _procurar_na_pagina_atual()
+
+            if linha is not None:
+                return linha
+
+        except StaleElementReferenceException:
+            raise
+        except Exception:
+            continue
+
+    # Último fallback: posição relativa dentro da página originalmente
+    # coletada. Nunca usa o índice global em uma página com menos linhas.
+    if pagina_preferida:
+        try:
+            _ir_para_pagina_fila(
+                driver,
+                int(pagina_preferida),
+            )
+        except Exception:
+            pass
+
+    linha_idx = int(
+        req.get("row_index_pagina")
+        or req.get("row_index")
+        or 1
+    )
+
+    tabela = _aguardar_tabela_fila(
+        driver,
+        timeout=8,
+    )
+
+    return tabela.find_element(
+        By.XPATH,
+        f"(.//tbody/tr[td])[{linha_idx}]",
+    )
 
 
 def abrir_requerimento(driver, wait, req):
@@ -1319,17 +2137,27 @@ def _deduplicar_lista_preservando_ordem(valores):
 
 def _recortar_bloco_produto_sch(texto):
     """
-    Recorta a seção Produto da aba Dados Gerais.
+    Recorta somente a parte útil da seção Produto da aba Dados Gerais.
 
-    Exemplo esperado no SCH:
-    Produto
-    Modelo: L1100    Nome Comercial: L1100BT
-    Modelo: L1120    Nome Comercial: L1120BT
+    O SCH pode renderizar campos seguintes no mesmo bloco textual. Para evitar
+    que "Nome Comercial" absorva "Tipo do Produto" ou o texto de garantia,
+    esses rótulos também encerram o recorte.
     """
     texto = texto or ""
 
     m = re.search(
-        r"(?:^|\n)\s*Produto\s*(?P<bloco>.*?)(?:\n\s*(?:Dados\s+da\s+Especifica[cç][aã]o|Caracter[ií]sticas\s+T[eé]cnicas|Outras\s+Unidades|Exig[eê]ncias|Informa[cç][oõ]es\s+Adicionais)\b|$)",
+        r"(?:^|\n)\s*Produto\s*(?P<bloco>.*?)"
+        r"(?="
+        r"\n\s*(?:"
+        r"Tipo\s+(?:do|de)\s+Produto\b"
+        r"|Garantir[aá]\b"
+        r"|Dados\s+da\s+Especifica[cç][aã]o\b"
+        r"|Caracter[ií]sticas\s+T[eé]cnicas\b"
+        r"|Outras\s+Unidades\b"
+        r"|Exig[eê]ncias\b"
+        r"|Informa[cç][oõ]es\s+Adicionais\b"
+        r")"
+        r"|$)",
         texto,
         flags=re.I | re.S,
     )
@@ -1343,8 +2171,11 @@ def _recortar_bloco_produto_sch(texto):
 def _extrair_produtos_sch_do_texto(texto, req=None):
     """
     Extrai modelo(s) e nome(s) comercial(is) do bloco Produto no SCH.
-    Se Nome Comercial não for encontrado, usa o Modelo como fallback,
-    para nunca deixar o relatório vazio.
+
+    Proteções:
+    - "Nome Comercial" vazio não pode absorver "Tipo do Produto";
+    - texto de garantia não pode virar nome comercial;
+    - se o nome comercial não existir, usa o modelo como fallback.
     """
     req = req or {}
     bloco = _recortar_bloco_produto_sch(texto)
@@ -1352,66 +2183,124 @@ def _extrair_produtos_sch_do_texto(texto, req=None):
     modelos = []
     nomes_comerciais = []
 
+    def _limpar_valor_produto(valor):
+        valor = str(valor or "")
+
+        valor = re.split(
+            r"\s+(?="
+            r"(?:Tipo\s+(?:do|de)\s+Produto|"
+            r"Garantir[aá]|"
+            r"Dados\s+da\s+Especifica[cç][aã]o|"
+            r"Caracter[ií]sticas\s+T[eé]cnicas|"
+            r"Outras\s+Unidades|"
+            r"Exig[eê]ncias|"
+            r"Informa[cç][oõ]es\s+Adicionais)"
+            r"\s*:?)",
+            valor,
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+
+        return _texto_limpo(valor).strip(" :-;")
+
     if bloco:
         texto_bloco = re.sub(r"\r", "\n", bloco)
         texto_bloco = re.sub(r"[ \t]+", " ", texto_bloco)
 
         padrao_pares = re.compile(
-            r"Modelo\s*:?\s*(?P<modelo>.*?)\s+Nome\s+Comercial\s*:?\s*(?P<nome>.*?)(?=(?:\s+Modelo\s*:)|(?:\n)|$)",
+            r"Modelo\s*:?\s*(?P<modelo>.*?)"
+            r"\s+Nome\s+Comercial\s*:?\s*(?P<nome>.*?)"
+            r"(?="
+            r"(?:\s+Modelo\s*:)"
+            r"|(?:\s+Tipo\s+(?:do|de)\s+Produto\s*:)"
+            r"|(?:\s+Garantir[aá]\b)"
+            r"|(?:\n)"
+            r"|$"
+            r")",
             flags=re.I | re.S,
         )
 
         for m in padrao_pares.finditer(texto_bloco):
-            modelo = _texto_limpo(m.group("modelo"))
-            nome = _texto_limpo(m.group("nome"))
+            modelo = _limpar_valor_produto(
+                m.group("modelo")
+            )
+            nome = _limpar_valor_produto(
+                m.group("nome")
+            )
 
             if modelo:
                 modelos.append(modelo)
 
-            if nome:
+            # Rótulos estruturais nunca podem ser nome comercial.
+            nome_norm = _normalizar_texto_comparacao(nome)
+            if (
+                nome
+                and not nome_norm.startswith("tipo do produto")
+                and not nome_norm.startswith("tipo de produto")
+                and not nome_norm.startswith("garantira")
+            ):
                 nomes_comerciais.append(nome)
 
-        # Fallback para caso venha em linhas separadas.
-        if not nomes_comerciais:
-            for linha in texto_bloco.splitlines():
-                linha_limpa = _texto_limpo(linha)
+        # Fallback para layouts em linhas separadas.
+        for linha in texto_bloco.splitlines():
+            linha_limpa = _texto_limpo(linha)
 
-                if not linha_limpa:
-                    continue
+            if not linha_limpa:
+                continue
 
-                m_nome = re.search(
-                    r"Nome\s+Comercial\s*:?\s*(.+)$",
-                    linha_limpa,
-                    flags=re.I,
+            m_nome = re.search(
+                r"Nome\s+Comercial\s*:?\s*(.*)$",
+                linha_limpa,
+                flags=re.I,
+            )
+
+            if m_nome:
+                nome = _limpar_valor_produto(
+                    m_nome.group(1)
                 )
+                if nome:
+                    nomes_comerciais.append(nome)
 
-                if m_nome:
-                    nomes_comerciais.append(_texto_limpo(m_nome.group(1)))
+            m_modelo = re.search(
+                r"Modelo\s*:?\s*(.+?)"
+                r"(?:\s+Nome\s+Comercial\s*:|$)",
+                linha_limpa,
+                flags=re.I,
+            )
 
-                m_modelo = re.search(
-                    r"Modelo\s*:?\s*(.+?)(?:\s+Nome\s+Comercial\s*:|$)",
-                    linha_limpa,
-                    flags=re.I,
+            if m_modelo:
+                modelo = _limpar_valor_produto(
+                    m_modelo.group(1)
                 )
+                if modelo:
+                    modelos.append(modelo)
 
-                if m_modelo:
-                    modelos.append(_texto_limpo(m_modelo.group(1)))
-
-    modelos = _deduplicar_lista_preservando_ordem(modelos)
-    nomes_comerciais = _deduplicar_lista_preservando_ordem(nomes_comerciais)
+    modelos = _deduplicar_lista_preservando_ordem(
+        modelos
+    )
+    nomes_comerciais = (
+        _deduplicar_lista_preservando_ordem(
+            nomes_comerciais
+        )
+    )
 
     modelo_txt = "; ".join(modelos).strip()
-    nome_comercial_txt = "; ".join(nomes_comerciais).strip()
+    nome_comercial_txt = "; ".join(
+        nomes_comerciais
+    ).strip()
 
-    modelo_req = _texto_limpo(req.get("modelo", ""))
+    modelo_req = _texto_limpo(
+        req.get("modelo", "")
+    )
 
     if not modelo_txt:
         modelo_txt = modelo_req
 
-    # Regra importante: Nome Comercial nunca deve ficar vazio.
-    # Se o SCH não trouxer Nome Comercial, usa Modelo.
     if not nome_comercial_txt:
-        nome_comercial_txt = modelo_txt or modelo_req
+        nome_comercial_txt = (
+            modelo_txt
+            or modelo_req
+        )
 
     return {
         "modelo_sch_dados_gerais": modelo_txt,
@@ -8888,117 +9777,116 @@ def _remover_especificacoes_do_bloco_dados_tecnicos(texto):
     return texto_limpo.strip()
 
 
+
+CATEGORIAS_DOCUMENTOS_RETORNO = (
+    "ART",
+    "Certificado de Conformidade Técnica - CCT",
+    "Fotos do produto",
+    "Fotos internas",
+    "Manual do Produto",
+    "Outros (OCD)",
+    "Relatório de Avaliação da Conformidade - RACT",
+    "Relatório de Ensaio",
+    "Contrato Social",
+    "Selo ANATEL",
+    "Cartão CNPJ",
+    "Carta de Representação Comercial",
+)
+
+
+def _categoria_documento_anexo_retorno(texto):
+    bruto = _texto_limpo(texto)
+    if not bruto:
+        return ""
+
+    esquerda = bruto.split("|", 1)[0].strip()
+    norm = _normalizar_texto_retorno(esquerda)
+
+    mapa = {
+        "art": "ART",
+        "certificado de conformidade tecnica - cct": "Certificado de Conformidade Técnica - CCT",
+        "certificado de conformidade tecnica cct": "Certificado de Conformidade Técnica - CCT",
+        "fotos do produto": "Fotos do produto",
+        "foto do produto": "Fotos do produto",
+        "fotos internas": "Fotos internas",
+        "foto interna": "Fotos internas",
+        "manual do produto": "Manual do Produto",
+        "outros (ocd)": "Outros (OCD)",
+        "outros ocd": "Outros (OCD)",
+        "relatorio de avaliacao da conformidade - ract": "Relatório de Avaliação da Conformidade - RACT",
+        "relatorio de avaliacao da conformidade ract": "Relatório de Avaliação da Conformidade - RACT",
+        "relatorio de ensaio": "Relatório de Ensaio",
+        "contrato social": "Contrato Social",
+        "selo anatel": "Selo ANATEL",
+        "cartao cnpj": "Cartão CNPJ",
+        "carta de representacao comercial": "Carta de Representação Comercial",
+    }
+    return mapa.get(norm, "")
+
+
+def _separar_categoria_descricao_documento_retorno(texto):
+    bruto = _texto_limpo(texto)
+    if not bruto:
+        return "", ""
+
+    if "|" in bruto:
+        esquerda, direita = bruto.split("|", 1)
+        categoria = _categoria_documento_anexo_retorno(esquerda)
+        if categoria:
+            return categoria, _texto_limpo(direita)
+
+    categoria = _categoria_documento_anexo_retorno(bruto)
+    if categoria:
+        return categoria, ""
+
+    return "", bruto
+
+
+
+
 def _extrair_documentos_comparar_versoes(texto):
     """
-    Extrai documentos SOMENTE da seção/tabela 'Relação de Arquivos Anexos'.
+    Extrai somente a seção ``Relação de Arquivos Anexos``.
 
-    Não deve capturar texto vermelho de outros blocos, como:
-    - Laboratórios
-    - Responsável Técnico
-    - Garantias
-    - Produto
-    - Dados Técnicos
+    No fallback textual NÃO mantém uma categoria ativa por várias linhas. Essa
+    estratégia anterior podia transformar, por exemplo, um ISO 9001 posterior
+    em ``Carta de Representação Comercial | ISO 9001...``. Quando o par
+    Categoria/Descrição não está explícito na mesma linha, o item é mantido sem
+    inventar vínculo de categoria.
     """
     texto = str(texto or "")
-
     if not texto.strip():
         return []
 
     linhas = [
-        _texto_limpo(linha)
-        for linha in texto.replace("\r", "\n").splitlines()
-        if _texto_limpo(linha)
+        _texto_limpo(l)
+        for l in texto.replace("\r", "\n").splitlines()
+        if _texto_limpo(l)
     ]
 
-    def _eh_inicio_relacao(linha):
-        linha_norm = _normalizar_texto_retorno(linha)
-        return (
-            "relacao de arquivos anexos" in linha_norm
-            or "relação de arquivos anexos" in linha_norm
+    def inicio(l):
+        return "relacao de arquivos anexos" in _normalizar_texto_retorno(l)
+
+    def fim(l):
+        n = _normalizar_texto_retorno(l)
+        finais = (
+            "garantias", "declaracoes", "solicitante declara", "historico",
+            "produto", "dados tecnicos do produto", "laboratorios",
+            "outras unidades fabris", "dados do certificado",
         )
+        return any(n == x or n.startswith(x + ":") for x in finais)
 
-    def _eh_fim_relacao(linha):
-        linha_norm = _normalizar_texto_retorno(linha)
-
-        finais = [
-            "garantias",
-            "declaracoes",
-            "declarações",
-            "solicitante declara",
-            "historico",
-            "histórico",
-            "produto",
-            "dados tecnicos do produto",
-            "dados técnicos do produto",
-            "laboratorios",
-            "laboratórios",
-            "outras unidades fabris",
-            "dados do certificado",
-        ]
-
-        return any(
-            linha_norm == fim or linha_norm.startswith(fim + ":")
-            for fim in finais
-        )
-
-    def _ignorar_linha_relacao(linha):
-        linha_norm = _normalizar_texto_retorno(linha)
-
-        if not linha_norm:
+    def ignorar(l):
+        n = _normalizar_texto_retorno(l)
+        if not n or len(n) <= 2:
             return True
-
-        ignorar_exatos = {
-            "relacao de arquivos anexos",
-            "relação de arquivos anexos",
-            "nome do arquivo",
-            "descricao",
-            "descrição",
+        if n in {
+            "relacao de arquivos anexos", "nome do arquivo", "descricao",
             "nome do arquivo descricao",
-            "nome do arquivo descrição",
-        }
-
-        if linha_norm in ignorar_exatos:
+        }:
             return True
-
-        # Cabeçalhos misturados numa linha só.
-        if "nome do arquivo" in linha_norm and "descr" in linha_norm:
+        if "nome do arquivo" in n and "descr" in n:
             return True
-
-        # Evita que campos de outras seções entrem como documento.
-        bloqueios = [
-            "responsavel tecnico",
-            "responsável técnico",
-            "laboratorio",
-            "laboratório",
-            "email",
-            "telefone",
-            "endereco",
-            "endereço",
-            "cidade",
-            "bairro",
-            "cep",
-            "cnpj",
-            "cpf/cnpj",
-            "solicitante",
-            "fabricante",
-            "garantia",
-            "garantira",
-            "declaro que",
-            "local e data",
-        ]
-
-        if any(b in linha_norm for b in bloqueios):
-            return True
-
-        # Linha composta só por nomes de pessoas, comum no bloco Laboratórios.
-        # Documento real normalmente contém termos/códigos, PDF, ART, CCT, RACT,
-        # fotos, relatório, declaração etc.
-        if "," in linha and not _texto_parece_documento_anexo_retorno(linha):
-            return True
-
-        if len(linha_norm) <= 2:
-            return True
-
         return False
 
     bloco = []
@@ -9006,45 +9894,66 @@ def _extrair_documentos_comparar_versoes(texto):
 
     for linha in linhas:
         if not coletando:
-            if _eh_inicio_relacao(linha):
+            if inicio(linha):
                 coletando = True
             continue
 
-        if _eh_fim_relacao(linha):
+        if fim(linha):
             break
 
-        if _ignorar_linha_relacao(linha):
-            continue
+        if not ignorar(linha):
+            bloco.append(linha)
 
-        bloco.append(linha)
-
-    # Fallback para quando o texto vem todo em uma linha só.
     if not bloco:
         plano = re.sub(r"\s+", " ", texto).strip()
-
         m = re.search(
-            r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos\s*(?P<bloco>.*?)(?=\s+(?:Garantias|Declara[cç][oõ]es|Solicitante\s+declara|Hist[oó]rico|Laborat[oó]rios?)\b|$)",
+            r"Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos\s*(?P<bloco>.*?)"
+            r"(?=\s+(?:Garantias|Declara[cç][oõ]es|Solicitante\s+declara|"
+            r"Hist[oó]rico|Laborat[oó]rios?)\b|$)",
             plano,
             flags=re.I | re.S,
         )
-
         if m:
             trecho = m.group("bloco")
-
-            # Divide antes de categorias comuns da tabela.
-            trecho = re.sub(
-                r"\s+(ART|Certificado\s+de\s+Conformidade\s+T[eé]cnica\s*-\s*CCT|Fotos\s+do\s+produto|Fotos\s+internas|Manual\s+do\s+Produto|Outros\s*\(OCD\)|Relat[oó]rio\s+de\s+Avalia[cç][aã]o\s+da\s+Conformidade\s*-\s*RACT|Relat[oó]rio\s+de\s+Ensaio|Contrato\s+Social|Selo\s+ANATEL|Cart[aã]o\s+CNPJ|Carta\s+de\s+Representa[cç][aã]o\s+Comercial)\b",
-                r"\n\1",
-                trecho,
-                flags=re.I,
+            cats = (
+                r"ART|Certificado\s+de\s+Conformidade\s+T[eé]cnica\s*-\s*CCT|"
+                r"Fotos\s+do\s+produto|Fotos\s+internas|Manual\s+do\s+Produto|"
+                r"Outros\s*\(OCD\)|Relat[oó]rio\s+de\s+Avalia[cç][aã]o\s+da\s+Conformidade\s*-\s*RACT|"
+                r"Relat[oó]rio\s+de\s+Ensaio|Contrato\s+Social|Selo\s+ANATEL|"
+                r"Cart[aã]o\s+CNPJ|Carta\s+de\s+Representa[cç][aã]o\s+Comercial"
             )
+            trecho = re.sub(rf"\s+({cats})\b", r"\n\1", trecho, flags=re.I)
+            bloco = [_texto_limpo(x) for x in trecho.splitlines() if _texto_limpo(x)]
 
-            for linha in trecho.splitlines():
-                linha = _texto_limpo(linha)
-                if linha and not _ignorar_linha_relacao(linha):
-                    bloco.append(linha)
+    docs = []
 
-    return _lista_unica_retorno(bloco)
+    for linha in bloco:
+        categoria, descricao = _separar_categoria_descricao_documento_retorno(linha)
+
+        if categoria and descricao:
+            docs.append(f"{categoria} | {descricao}")
+            continue
+
+        if categoria:
+            docs.append(categoria)
+            continue
+
+        # Mantém descrições/nomes de arquivo sem inventar categoria. Extensões,
+        # ISO e termos documentais são aceitos como evidência textual.
+        n = _normalizar_texto_retorno(linha)
+        if (
+            _texto_parece_documento_anexo_retorno(linha)
+            or re.search(r"\.(pdf|docx?|xlsx?|jpg|jpeg|png)\b", linha, re.I)
+            or "iso 9001" in n
+            or "confidencial" in n
+            or "auditoria" in n
+        ):
+            docs.append(linha)
+
+    return _lista_unica_retorno(docs)
+
+
+
 
 
 def _eh_cor_vermelha_retorno(cor):
@@ -9061,338 +9970,291 @@ def _eh_cor_vermelha_retorno(cor):
 
 def _coletar_visao_comparar_versoes(driver):
     """
-    Coleta textos da tela Comparar Versões.
+    Coleta os dois lados de Comparar Versões.
 
-    Além do texto por lado, captura a tabela real "Relação de Arquivos Anexos"
-    por lado. Isso é importante porque documentos novos/removidos devem vir
-    somente dessa tabela, e não de outros textos vermelhos da página.
+    A Relação de Arquivos Anexos é localizada por estrutura semântica, não só
+    pela posição horizontal. São suportados:
+    - duas tabelas independentes;
+    - uma tabela larga com cabeçalhos repetidos;
+    - uma tabela com blocos marcados como Versão 1/Versão 2;
+    - tabelas internas sem cabeçalho direto, usando a menor tabela relevante.
     """
     script = r"""
-    const vw = Math.max(
-        window.innerWidth || 0,
-        document.documentElement ? document.documentElement.clientWidth : 0,
-        1
-    );
+    const vw = Math.max(window.innerWidth || 0,
+                        document.documentElement ? document.documentElement.clientWidth : 0,
+                        1);
 
     function normText(txt) {
-        return String(txt || '')
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .toLowerCase()
-            .replace(/\s+/g, ' ')
-            .trim();
+        return String(txt || '').normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '').toLowerCase()
+            .replace(/\s+/g, ' ').trim();
     }
-
+    function clean(txt) { return String(txt || '').replace(/\s+/g, ' ').trim(); }
     function visible(el) {
+        if (!el) return false;
         const st = window.getComputedStyle(el);
-        if (!st || st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity || 1) === 0) {
-            return false;
-        }
+        if (!st || st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity || 1) === 0) return false;
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
     }
-
     function isRed(color) {
         if (!color) return false;
         const txt = String(color).toLowerCase();
         const m = txt.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
         if (!m) return txt.includes('red') || txt.includes('#f00') || txt.includes('#ff0000');
-        const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
-        return r >= 150 && g <= 90 && b <= 90;
+        return Number(m[1]) >= 150 && Number(m[2]) <= 90 && Number(m[3]) <= 90;
     }
-
+    function treeIsRed(el) {
+        try {
+            const nodes = [el, ...Array.from(el.querySelectorAll ? el.querySelectorAll('*') : [])];
+            return nodes.some(node => {
+                try {
+                    const st = window.getComputedStyle(node);
+                    return isRed((st && st.color) || node.getAttribute('color') || '');
+                } catch(e) { return false; }
+            });
+        } catch(e) { return false; }
+    }
     function sideOf(el) {
         const r = el.getBoundingClientRect();
-        return (r.left + (r.width / 2)) < (vw / 2) ? 'esquerda' : 'direita';
+        return (r.left + r.width / 2) < (vw / 2) ? 'esquerda' : 'direita';
     }
+    function directRows(table) { try { return Array.from(table.rows || []); } catch(e) { return []; } }
+    function directCells(tr) { try { return Array.from(tr.cells || []); } catch(e) { return []; } }
+    function vals(cells) { return (cells || []).map(c => clean(c.innerText || c.textContent || '')).filter(Boolean); }
 
-    function elementIsRed(el) {
-        try {
-            const st = window.getComputedStyle(el);
-            return isRed((st && st.color) || el.getAttribute('color') || '');
-        } catch (e) {
-            return false;
-        }
+    const sinaisDocs = [
+        'art','certificado de conformidade tecnica','cct','relatorio de avaliacao da conformidade',
+        'ract','relatorio de ensaio','manual','foto','fotos','outros (ocd)','outros ocd',
+        'declaracao','maintenance','contrato social','selo anatel','carta de representacao',
+        'cartao cnpj','iso 9001','confidencialidade'
+    ];
+    function looksDoc(values) {
+        const n = normText((values || []).join(' '));
+        if (!n) return false;
+        return sinaisDocs.some(s => n.includes(s)) || /\.(pdf|docx?|xlsx?|jpg|jpeg|png)\b/i.test(n);
     }
-
-    function rowIsRed(tr) {
-        try {
-            const nodes = [
-                tr,
-                ...Array.from(tr.querySelectorAll('*'))
-            ];
-
-            return nodes.some(el => {
-                try {
-                    const st = window.getComputedStyle(el);
-                    const color =
-                        (st && st.color) ||
-                        el.getAttribute('color') ||
-                        '';
-
-                    return isRed(color);
-                } catch (e) {
-                    return false;
-                }
-            });
-        } catch (e) {
-            return false;
-        }
+    function headerScore(values) {
+        const n = normText((values || []).join(' '));
+        return (n.includes('nome do arquivo') ? 1 : 0) + (n.includes('descr') ? 1 : 0);
     }
-
-    function clean(txt) {
-        return String(txt || '').replace(/\s+/g, ' ').trim();
-    }
-
-
-    function getAttachmentTables() {
-        return Array.from(document.querySelectorAll('table'))
-            .filter(table => {
-                try {
-                    if (!visible(table)) return false;
-
-                    const tableText = clean(
-                        table.innerText ||
-                        table.textContent ||
-                        ''
-                    );
-
-                    const tableNorm = normText(tableText);
-
-                    return (
-                        tableNorm.includes('nome do arquivo') &&
-                        tableNorm.includes('descr')
-                    );
-                } catch (e) {
-                    return false;
-                }
-            })
-            .sort((a, b) => {
-                const ra = a.getBoundingClientRect();
-                const rb = b.getBoundingClientRect();
-
-                return (
-                    (ra.left - rb.left) ||
-                    (ra.top - rb.top)
-                );
-            });
-    }
-
-    function extractAttachmentRows(sideWanted) {
-        const out = [];
-        const tables = getAttachmentTables();
-
-        for (let index = 0; index < tables.length; index++) {
-            const table = tables[index];
-
-            try {
-                let side;
-
-                // Quando as duas tabelas estão no mesmo documento:
-                // primeira = versão anterior; segunda = versão nova.
-                if (tables.length >= 2) {
-                    side = index === 0 ? 'esquerda' : 'direita';
-                } else {
-                    side = sideOf(table);
-                }
-
-                if (side !== sideWanted) continue;
-
-                const trs = Array.from(table.querySelectorAll('tr'));
-
-                for (const tr of trs) {
-                    if (!visible(tr)) continue;
-
-                    const cells = Array.from(
-                        tr.querySelectorAll('th, td')
-                    );
-
-                    const vals = cells
-                        .map(c => clean(
-                            c.innerText ||
-                            c.textContent ||
-                            ''
-                        ))
-                        .filter(Boolean);
-
-                    if (!vals.length) continue;
-
-                    const linhaNorm = normText(vals.join(' '));
-
-                    if (!linhaNorm) continue;
-
-                    if (
-                        linhaNorm === 'nome do arquivo descricao' ||
-                        (
-                            linhaNorm.includes('nome do arquivo') &&
-                            linhaNorm.includes('descr')
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    const nome = vals[0] || '';
-                    const descricao = vals.slice(1).join(' | ') || '';
-                    const texto = descricao
-                        ? `${nome} | ${descricao}`
-                        : nome;
-
-                    if (!texto || normText(texto).length <= 2) {
-                        continue;
-                    }
-
-                    const r = tr.getBoundingClientRect();
-
-                    out.push({
-                        texto: texto,
-                        nome: nome,
-                        descricao: descricao,
-                        red: rowIsRed(tr),
-                        side: side,
-                        top: r.top + window.scrollY,
-                        left: r.left,
-                        width: r.width,
-                        height: r.height,
-                        origem: 'tabela_relacao_arquivos_anexos'
-                    });
-                }
-
-            } catch (e) {}
-        }
-
-        out.sort((a, b) => (a.top - b.top) || (a.left - b.left));
-
-        // Não remover duplicados: uma linha preta pode reaparecer em vermelho.
-        return out;
-    }
-
-    const nodes = Array.from(document.querySelectorAll('td, th, span, font, div, p, li, label, a, b, strong, legend'));
-    const items = [];
-
-    for (const el of nodes) {
-        try {
-            if (!visible(el)) continue;
-
-            let text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!text || text.length > 700) continue;
-
-            const r = el.getBoundingClientRect();
-            const st = window.getComputedStyle(el);
-            const color = st.color || el.getAttribute('color') || '';
-            const side = (r.left + (r.width / 2)) < (vw / 2) ? 'esquerda' : 'direita';
-
-            items.push({
-                texto: text,
-                side: side,
-                left: r.left,
-                top: r.top + window.scrollY,
-                width: r.width,
-                height: r.height,
-                color: color,
-                red: isRed(color),
-                tag: el.tagName
-            });
-        } catch (e) {}
-    }
-
-    items.sort((a, b) => (a.top - b.top) || (a.left - b.left));
-
-    function extractProductBlock(sideWanted) {
-        const arr = items.filter(x => x.side === sideWanted).sort((a, b) => (a.top - b.top) || (a.left - b.left));
-
-        function isTitleProduct(txt) {
-            const n = normText(txt);
-            if (!n) return false;
-            if (n.includes('nome do produto')) return false;
-            if (n.includes('dados tecnicos do produto')) return false;
-            if (n.includes('homologacao de produto')) return false;
-            if (n.includes('produto para telecomunicacoes')) return false;
-            return n === 'produto' || n === 'produto:';
-        }
-
-        function isEndProduct(txt) {
-            const n = normText(txt);
-            return n === 'dados tecnicos do produto' ||
-                   n.startsWith('dados tecnicos do produto') ||
-                   n === 'laboratorios' || n === 'laboratorio' ||
-                   n.startsWith('laboratorios') || n.startsWith('laboratorio') ||
-                   n.startsWith('relacao de arquivos anexos') ||
-                   n.startsWith('garantias') ||
-                   n.startsWith('outras unidades fabris') ||
-                   n.startsWith('dados do certificado');
-        }
-
-        for (let i = 0; i < arr.length; i++) {
-            if (!isTitleProduct(arr[i].texto)) continue;
-
-            const baseTop = arr[i].top;
-            const lines = [arr[i].texto];
-
-            for (let j = i + 1; j < arr.length; j++) {
-                const it = arr[j];
-                if ((it.top - baseTop) > 450) break;
-                if (isEndProduct(it.texto)) break;
-
-                const n = normText(it.texto);
-                if (n.includes('modelo') || n.includes('tipo') || n.includes('categoria') || n.includes('descontinuado')) {
-                    lines.push(it.texto);
-                    continue;
-                }
-
-                if (lines.length > 1 && it.top > baseTop + 180) break;
-            }
-
-            const joined = clean(lines.join('\n'));
-            const normJoined = normText(joined);
-            if (normJoined.includes('modelo') && (normJoined.includes('tipo') || normJoined.includes('categoria'))) {
-                return lines.join('\n');
-            }
-        }
-
-        // Fallback: procurar diretamente uma sequência Modelo/Tipo/Categoria no texto do lado.
-        const sideText = arr.map(x => x.texto).join('\n');
-        const flat = clean(sideText);
-        const m = flat.match(/Produto\s*:?\s*Modelo\s*:.*?(?=\s+(?:Dados\s+T[eé]cnicos\s+do\s+Produto|Laborat[oó]rios?|Rela[cç][aã]o\s+de\s+Arquivos\s+Anexos|Garantias)\b|$)/i);
-        if (m && normText(m[0]).includes('modelo')) {
-            return m[0];
-        }
-
+    function versionMarker(text) {
+        const n = normText(text);
+        if (/\b(versao|versão)\s*1\b/.test(n) || n.includes('versao anterior') || n.includes('anterior')) return 'esquerda';
+        if (/\b(versao|versão)\s*2\b/.test(n) || n.includes('versao nova') || n.includes('versao atual') || n.includes('nova versao')) return 'direita';
         return '';
     }
 
-    function joinSide(side) {
-        const seen = new Set();
-        const lines = [];
-        for (const it of items) {
-            if (it.side !== side) continue;
-            const key = it.texto;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            lines.push(it.texto);
+    function candidateTables() {
+        const all = Array.from(document.querySelectorAll('table')).filter(visible);
+        const labels = Array.from(document.querySelectorAll('span, label, div, td, th, legend, h1, h2, h3, h4'))
+            .filter(visible)
+            .filter(el => {
+                const n = normText(el.innerText || el.textContent || '');
+                return n === 'relacao de arquivos anexos' || n.startsWith('relacao de arquivos anexos:');
+            });
+
+        function nearAttachmentLabel(table) {
+            const rt = table.getBoundingClientRect();
+            return labels.some(label => {
+                const rl = label.getBoundingClientRect();
+                const dy = rt.top - rl.bottom;
+                const overlapX = Math.min(rt.right, rl.right) - Math.max(rt.left, rl.left);
+                const sameHalf = sideOf(table) === sideOf(label);
+                return dy >= -40 && dy <= 900 && (overlapX > 0 || sameHalf);
+            });
         }
+
+        const candidates = all.filter(table => {
+            const n = normText(table.innerText || table.textContent || '');
+            const hasDocs = directRows(table).some(tr => looksDoc(vals(directCells(tr))));
+            if (!hasDocs) return false;
+
+            const hasOwnHeader = n.includes('nome do arquivo') && n.includes('descr');
+            return hasOwnHeader || nearAttachmentLabel(table);
+        });
+
+        // Prefere as tabelas internas/folhas para não duplicar tabelas estruturais externas.
+        return candidates.filter(t => !candidates.some(other => other !== t && t.contains(other)))
+            .sort((a,b) => {
+                const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+                return (ra.top-rb.top) || (ra.left-rb.left);
+            });
+    }
+
+    function makeItem(cells, tr, side, strategy) {
+        const values = vals(cells);
+        if (!values.length || headerScore(values) >= 2 || !looksDoc(values)) return null;
+        const nome = values[0] || '';
+        const descricao = values.slice(1).join(' | ') || '';
+        const texto = descricao ? `${nome} | ${descricao}` : nome;
+        if (!texto || normText(texto).length <= 2) return null;
+        const r=(cells[0] || tr).getBoundingClientRect();
+        return {texto,nome,descricao,red:(cells || []).some(treeIsRed),side,
+                top:r.top+window.scrollY,left:r.left,width:r.width,height:r.height,
+                origem:'tabela_relacao_arquivos_anexos',estrategia:strategy};
+    }
+
+    function extractTables() {
+        const out = {esquerda:[], direita:[], debug:[]};
+        const tables = candidateTables();
+
+        tables.forEach((table, tableIndex) => {
+            const rows=directRows(table);
+            const rect=table.getBoundingClientRect();
+            const dbg={index:tableIndex, rows:rows.length, cellsMax:0, left:Math.round(rect.left),
+                       width:Math.round(rect.width), strategy:'', headers:[]};
+
+            // Busca cabeçalho com ocorrências repetidas de "Nome do Arquivo".
+            let splitIndex = null;
+            for (const tr of rows) {
+                const cells=directCells(tr);
+                dbg.cellsMax=Math.max(dbg.cellsMax,cells.length);
+                const texts=cells.map(c=>clean(c.innerText||c.textContent||''));
+                const indices=[];
+                texts.forEach((t,i)=>{ if(normText(t).includes('nome do arquivo')) indices.push(i); });
+                if (indices.length >= 2) {
+                    splitIndex=indices[1];
+                    dbg.headers=texts;
+                    dbg.strategy='cabecalho_repetido';
+                    break;
+                }
+            }
+
+            // Se há duas tabelas-folha, a ordem DOM/visual é mais confiável que
+            // o centro do viewport (a página pode ser horizontalmente rolável).
+            let tableSide='';
+            if (tables.length >= 2) {
+                tableSide = tableIndex === 0 ? 'esquerda' : 'direita';
+                if (!dbg.strategy) dbg.strategy='duas_tabelas_por_ordem';
+            }
+
+            // Procura marcador de versão dentro/ao redor da própria tabela.
+            let marker='';
+            try {
+                let node=table;
+                for(let i=0;i<4 && node;i++,node=node.parentElement){
+                    const txt=clean(node.innerText||node.textContent||'');
+                    const m=versionMarker(txt);
+                    if(m){ marker=m; break; }
+                }
+            } catch(e) {}
+            if (marker && !tableSide) {
+                tableSide=marker;
+                if (!dbg.strategy) dbg.strategy='marcador_versao';
+            }
+
+            let activeSide=tableSide;
+            for (const tr of rows) {
+                if (!visible(tr)) continue;
+                const cells=directCells(tr).filter(visible);
+                if (!cells.length) continue;
+                const rowText=clean(tr.innerText||tr.textContent||'');
+                const rowMarker=versionMarker(rowText);
+                if (rowMarker && !looksDoc(vals(cells))) {
+                    activeSide=rowMarker;
+                    if (!dbg.strategy) dbg.strategy='marcador_versao_por_linha';
+                    continue;
+                }
+
+                if (splitIndex !== null && cells.length > splitIndex) {
+                    const left=cells.slice(0,splitIndex);
+                    const right=cells.slice(splitIndex);
+                    const li=makeItem(left,tr,'esquerda','cabecalho_repetido');
+                    const ri=makeItem(right,tr,'direita','cabecalho_repetido');
+                    if(li) out.esquerda.push(li);
+                    if(ri) out.direita.push(ri);
+                    continue;
+                }
+
+                // Fallback para tabela larga com número par de células. Só
+                // divide quando ambos os lados têm aparência documental.
+                if (tables.length === 1 && cells.length >= 4 && cells.length % 2 === 0) {
+                    const meio=cells.length/2;
+                    const left=cells.slice(0,meio), right=cells.slice(meio);
+                    if (looksDoc(vals(left)) && looksDoc(vals(right))) {
+                        const li=makeItem(left,tr,'esquerda','metade_semantica');
+                        const ri=makeItem(right,tr,'direita','metade_semantica');
+                        if(li) out.esquerda.push(li);
+                        if(ri) out.direita.push(ri);
+                        dbg.strategy=dbg.strategy || 'metade_semantica';
+                        continue;
+                    }
+                }
+
+                let side=activeSide || tableSide || sideOf(table);
+                const item=makeItem(cells,tr,side,dbg.strategy || 'posicao_tabela');
+                if(item) out[side].push(item);
+            }
+            out.debug.push(dbg);
+        });
+
+        ['esquerda','direita'].forEach(side => {
+            const seen=new Set();
+            out[side]=out[side].sort((a,b)=>(a.top-b.top)||(a.left-b.left)).filter(item=>{
+                const key=normText(item.texto);
+                if(seen.has(key)) return false;
+                seen.add(key); return true;
+            });
+        });
+        return out;
+    }
+
+    const nodes=Array.from(document.querySelectorAll('td, th, span, font, div, p, li, label, a, b, strong, legend'));
+    const items=[];
+    for(const el of nodes){
+        try{
+            if(!visible(el)) continue;
+            const text=clean(el.innerText||el.textContent||'');
+            if(!text || text.length>700) continue;
+            const r=el.getBoundingClientRect(), st=window.getComputedStyle(el), color=st.color||el.getAttribute('color')||'';
+            items.push({texto:text,side:sideOf(el),left:r.left,top:r.top+window.scrollY,width:r.width,height:r.height,
+                        color,red:isRed(color),tag:el.tagName});
+        }catch(e){}
+    }
+    items.sort((a,b)=>(a.top-b.top)||(a.left-b.left));
+
+    function extractProductBlock(sideWanted){
+        const arr=items.filter(x=>x.side===sideWanted).sort((a,b)=>(a.top-b.top)||(a.left-b.left));
+        function isTitle(txt){ const n=normText(txt); return (n==='produto'||n==='produto:'); }
+        function isEnd(txt){ const n=normText(txt); return n.startsWith('dados tecnicos do produto') || n.startsWith('laboratorio') ||
+            n.startsWith('relacao de arquivos anexos') || n.startsWith('garantias') || n.startsWith('outras unidades fabris') ||
+            n.startsWith('dados do certificado'); }
+        for(let i=0;i<arr.length;i++){
+            if(!isTitle(arr[i].texto)) continue;
+            const base=arr[i].top, lines=[arr[i].texto];
+            for(let j=i+1;j<arr.length;j++){
+                const it=arr[j]; if(it.top-base>450 || isEnd(it.texto)) break;
+                const n=normText(it.texto);
+                if(n.includes('modelo')||n.includes('tipo')||n.includes('categoria')||n.includes('descontinuado')) lines.push(it.texto);
+                else if(lines.length>1 && it.top>base+180) break;
+            }
+            const joined=clean(lines.join('\n')), n=normText(joined);
+            if(n.includes('modelo')&&(n.includes('tipo')||n.includes('categoria'))) return lines.join('\n');
+        }
+        return '';
+    }
+    function joinSide(side){
+        const seen=new Set(), lines=[];
+        for(const it of items){ if(it.side!==side) continue; const key=it.texto; if(seen.has(key)) continue; seen.add(key); lines.push(it.texto); }
         return lines.join('\n');
     }
 
-    const docsEsquerda = extractAttachmentRows('esquerda');
-    const docsDireita = extractAttachmentRows('direita');
-
+    const anexos=extractTables();
     return {
-        url: String(window.location.href || ''),
-        title: String(document.title || ''),
-        texto_total: document.body ? (document.body.innerText || document.body.textContent || '') : '',
-        texto_esquerda: joinSide('esquerda'),
-        texto_direita: joinSide('direita'),
-        vermelhos_esquerda: items.filter(x => x.side === 'esquerda' && x.red),
-        vermelhos_direita: items.filter(x => x.side === 'direita' && x.red),
-        documentos_anexos_esquerda: docsEsquerda,
-        documentos_anexos_direita: docsDireita,
-        documentos_anexos_vermelhos_esquerda: docsEsquerda.filter(x => x.red),
-        documentos_anexos_vermelhos_direita: docsDireita.filter(x => x.red),
-        produto_esquerda: extractProductBlock('esquerda'),
-        produto_direita: extractProductBlock('direita')
+        url:String(window.location.href||''), title:String(document.title||''),
+        texto_total:document.body?(document.body.innerText||document.body.textContent||''):'',
+        texto_esquerda:joinSide('esquerda'), texto_direita:joinSide('direita'),
+        vermelhos_esquerda:items.filter(x=>x.side==='esquerda'&&x.red),
+        vermelhos_direita:items.filter(x=>x.side==='direita'&&x.red),
+        documentos_anexos_esquerda:anexos.esquerda,
+        documentos_anexos_direita:anexos.direita,
+        documentos_anexos_vermelhos_esquerda:anexos.esquerda.filter(x=>x.red),
+        documentos_anexos_vermelhos_direita:anexos.direita.filter(x=>x.red),
+        debug_tabelas_anexos:anexos.debug,
+        produto_esquerda:extractProductBlock('esquerda'), produto_direita:extractProductBlock('direita')
     };
     """
-
     try:
         return driver.execute_script(script) or {}
     except Exception:
@@ -9400,162 +10262,87 @@ def _coletar_visao_comparar_versoes(driver):
 
 
 
+
 def _capturar_comparar_versoes(driver, wait=None, timeout=45):
     """
-    Captura a tela Comparar Versões sem exigir leituras consecutivas iguais.
+    Faz uma captura curta após a página real já ter sido confirmada.
 
-    Assim que as tabelas de anexos dos dois lados forem localizadas, a captura
-    é aceita imediatamente. O tempo restante é usado apenas quando a página
-    ainda não disponibilizou uma captura completa.
+    Dez segundos são suficientes para permitir o AJAX final sem repetir por
+    dezenas de segundos uma estrutura que já está estável. A primeira captura
+    com anexos dos dois lados é aceita imediatamente.
     """
-    inicio = time.time()
-    melhor_captura = {}
-    melhor_pontuacao = -1
-    tentativa = 0
+    try:
+        timeout = min(max(float(timeout or 0), 3.0), 10.0)
+    except Exception:
+        timeout = 10.0
 
-    def pontuacao(cap):
-        if not isinstance(cap, dict):
-            return -1
+    inicio=time.time(); melhor={}; melhor_pts=-1; tentativa=0
 
-        docs_esquerda = cap.get("documentos_anexos_esquerda", []) or []
-        docs_direita = cap.get("documentos_anexos_direita", []) or []
-        vermelhos_esquerda = cap.get("documentos_anexos_vermelhos_esquerda", []) or []
-        vermelhos_direita = cap.get("documentos_anexos_vermelhos_direita", []) or []
+    def pts(cap):
+        if not isinstance(cap,dict): return -1
+        e=cap.get('documentos_anexos_esquerda',[]) or []
+        d=cap.get('documentos_anexos_direita',[]) or []
+        return len(e)*1000 + len(d)*1000 + (100000 if e and d else 0)
 
-        texto = " ".join([
-            str(cap.get("texto_total", "")),
-            str(cap.get("texto_esquerda", "")),
-            str(cap.get("texto_direita", "")),
-        ])
-        texto_norm = _normalizar_texto_retorno(texto)
-
-        pontos = 0
-        pontos += len(docs_esquerda) * 100
-        pontos += len(docs_direita) * 100
-        pontos += len(vermelhos_direita) * 10000
-        pontos += len(vermelhos_esquerda) * 5000
-
-        if "relacao de arquivos anexos" in texto_norm:
-            pontos += 100
-        if "dados tecnicos" in texto_norm:
-            pontos += 50
-        if "requerimento para homologacao" in texto_norm:
-            pontos += 25
-
-        return pontos
-
-    while time.time() - inicio < timeout:
+    while time.time()-inicio < timeout:
         tentativa += 1
-        capturas = []
+        capturas=[]
+        try:
+            driver.switch_to.default_content()
+            cap=_coletar_visao_comparar_versoes(driver)
+            if isinstance(cap,dict):
+                cap['_contexto_captura']='documento_principal'; capturas.append(cap)
+        except Exception: pass
 
         try:
             driver.switch_to.default_content()
-            cap = _coletar_visao_comparar_versoes(driver)
-            if isinstance(cap, dict):
-                cap["_contexto_captura"] = "documento_principal"
-                capturas.append(cap)
-        except Exception:
-            pass
-
-        try:
-            entrar_iframe_detalhe_analise(driver, wait)
-            cap = _coletar_visao_comparar_versoes(driver)
-            if isinstance(cap, dict):
-                cap["_contexto_captura"] = "iframe_detalhe"
-                capturas.append(cap)
-        except Exception:
-            pass
-
-        try:
-            driver.switch_to.default_content()
-            quantidade_frames = len(driver.find_elements(By.CSS_SELECTOR, "iframe, frame"))
-
-            for indice in range(quantidade_frames):
+            frames=driver.find_elements(By.CSS_SELECTOR,'iframe, frame')
+            for i in range(len(frames)):
                 try:
                     driver.switch_to.default_content()
-                    frames = driver.find_elements(By.CSS_SELECTOR, "iframe, frame")
+                    atuais=driver.find_elements(By.CSS_SELECTOR,'iframe, frame')
+                    if i>=len(atuais): continue
+                    driver.switch_to.frame(atuais[i])
+                    cap=_coletar_visao_comparar_versoes(driver)
+                    if isinstance(cap,dict):
+                        cap['_contexto_captura']=f'iframe_direto_{i}'; capturas.append(cap)
+                except Exception: continue
+        except Exception: pass
 
-                    if indice >= len(frames):
-                        continue
-
-                    driver.switch_to.frame(frames[indice])
-                    cap = _coletar_visao_comparar_versoes(driver)
-
-                    if isinstance(cap, dict):
-                        cap["_contexto_captura"] = f"iframe_direto_{indice}"
-                        capturas.append(cap)
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        # A primeira captura que contiver as tabelas dos dois lados é aceita.
-        # Não há uma segunda leitura para confirmar estabilidade da página.
         for cap in capturas:
-            pontos = pontuacao(cap)
-
-            if pontos > melhor_pontuacao:
-                melhor_pontuacao = pontos
-                melhor_captura = cap
-
-            docs_esquerda = cap.get("documentos_anexos_esquerda", []) or []
-            docs_direita = cap.get("documentos_anexos_direita", []) or []
-
-            if docs_esquerda and docs_direita:
-                cap["_captura_completa"] = True
-                cap["_tentativas_captura"] = tentativa
-                cap["_tempo_captura_segundos"] = round(time.time() - inicio, 2)
-
-                print(
-                    "[SCH][RETORNO][CAPTURA] "
-                    f"tentativa={tentativa} | "
-                    f"contexto={cap.get('_contexto_captura', '')} | "
-                    f"anexos_esquerda={len(docs_esquerda)} | "
-                    f"anexos_direita={len(docs_direita)} | "
-                    "captura_completa=SIM"
-                )
-
-                try:
-                    driver.switch_to.default_content()
-                except Exception:
-                    pass
-
+            p=pts(cap)
+            if p>melhor_pts: melhor_pts=p; melhor=cap
+            e=cap.get('documentos_anexos_esquerda',[]) or []
+            d=cap.get('documentos_anexos_direita',[]) or []
+            if e and d:
+                cap['_captura_completa']=True
+                cap['_tentativas_captura']=tentativa
+                cap['_tempo_captura_segundos']=round(time.time()-inicio,2)
+                print('[SCH][RETORNO][CAPTURA] '
+                      f"tentativa={tentativa} | contexto={cap.get('_contexto_captura','')} | "
+                      f'anexos_esquerda={len(e)} | anexos_direita={len(d)} | captura_completa=SIM')
+                try: driver.switch_to.default_content()
+                except Exception: pass
                 return cap
 
-        docs_esquerda = melhor_captura.get("documentos_anexos_esquerda", []) or []
-        docs_direita = melhor_captura.get("documentos_anexos_direita", []) or []
-        vermelhos_direita = melhor_captura.get("documentos_anexos_vermelhos_direita", []) or []
-
-        print(
-            "[SCH][RETORNO][CAPTURA] "
-            f"tentativa={tentativa} | "
-            f"contexto={melhor_captura.get('_contexto_captura', '')} | "
-            f"anexos_esquerda={len(docs_esquerda)} | "
-            f"anexos_direita={len(docs_direita)} | "
-            f"anexos_vermelhos_direita={len(vermelhos_direita)} | "
-            "captura_completa=NÃO"
-        )
-
+        e=melhor.get('documentos_anexos_esquerda',[]) or []
+        d=melhor.get('documentos_anexos_direita',[]) or []
+        debug=melhor.get('debug_tabelas_anexos',[]) or []
+        print('[SCH][RETORNO][CAPTURA] '
+              f"tentativa={tentativa} | contexto={melhor.get('_contexto_captura','')} | "
+              f'anexos_esquerda={len(e)} | anexos_direita={len(d)} | '
+              f'tabelas_debug={debug[:3]} | captura_completa=NÃO')
         time.sleep(0.5)
 
-    try:
-        driver.switch_to.default_content()
-    except Exception:
-        pass
+    try: driver.switch_to.default_content()
+    except Exception: pass
+    melhor['_captura_completa']=bool(melhor.get('documentos_anexos_esquerda') and melhor.get('documentos_anexos_direita'))
+    melhor['_tentativas_captura']=tentativa
+    melhor['_tempo_captura_segundos']=round(time.time()-inicio,2)
+    print('[SCH][RETORNO][WARN] Captura documental incompleta após '
+          f"{melhor['_tempo_captura_segundos']}s. A aprovação automática será bloqueada por segurança.")
+    return melhor
 
-    melhor_captura["_captura_completa"] = bool(
-        melhor_captura.get("documentos_anexos_esquerda")
-        and melhor_captura.get("documentos_anexos_direita")
-    )
-    melhor_captura["_tentativas_captura"] = tentativa
-    melhor_captura["_tempo_captura_segundos"] = round(time.time() - inicio, 2)
-
-    print(
-        "[SCH][RETORNO][WARN] A captura da comparação terminou sem localizar "
-        "as tabelas de anexos dos dois lados. Será usada a melhor captura disponível."
-    )
-
-    return melhor_captura
 
 
 def _texto_pagina_com_iframes(driver):
@@ -9697,9 +10484,12 @@ def _pagina_proxy_error_sch(driver):
 
 def _instalar_captura_popup_comparacao_retorno(driver, wait=None):
     """
-    Instala um monitor no contexto do SCH para capturar a URL que o PrimeFaces
-    tenta abrir em window.open/abrirPopup(args). Isso ajuda quando a aba abre
-    como about:blank.
+    Instala um monitor leve para observar o popup real aberto pelo SCH.
+
+    Além da URL, guarda a referência do próprio objeto Window retornado por
+    window.open. Essa referência permite, como fallback, atribuir a URL ao
+    POPUP ORIGINAL a partir da aba do SCH sem executar driver.get() nem
+    window.location.replace() diretamente na aba travada.
     """
     script = """
     (function () {
@@ -9754,50 +10544,92 @@ def _instalar_captura_popup_comparacao_retorno(driver, wait=None):
             args: '',
             windowOpenUrl: '',
             windowOpenTarget: '',
+            abriuWindow: false,
+            popupClosed: null,
             erros: []
         };
+
+        window.__sch_popup_comparacao_ref = null;
 
         if (!window.__sch_window_open_wrapped) {
             window.__sch_original_window_open = window.open;
 
             window.open = function (url, target, features) {
+                var popup = null;
+
                 try {
-                    window.__sch_popup_comparacao.windowOpenUrl = absolutizar(url || '');
-                    window.__sch_popup_comparacao.windowOpenTarget = target || '';
+                    window.__sch_popup_comparacao.windowOpenUrl =
+                        absolutizar(url || '');
+                    window.__sch_popup_comparacao.windowOpenTarget =
+                        target || '';
 
                     if (url) {
-                        window.__sch_popup_comparacao.url = absolutizar(url);
+                        window.__sch_popup_comparacao.url =
+                            absolutizar(url);
                     }
                 } catch (e) {
                     try {
-                        window.__sch_popup_comparacao.erros.push(String(e));
+                        window.__sch_popup_comparacao.erros.push(
+                            String(e)
+                        );
                     } catch (e2) {}
                 }
 
-                return window.__sch_original_window_open.apply(window, arguments);
+                try {
+                    popup = window.__sch_original_window_open.apply(
+                        window,
+                        arguments
+                    );
+                    window.__sch_popup_comparacao_ref = popup;
+                    window.__sch_popup_comparacao.abriuWindow = !!popup;
+
+                    try {
+                        window.__sch_popup_comparacao.popupClosed =
+                            popup ? !!popup.closed : null;
+                    } catch (e) {}
+                } catch (e) {
+                    try {
+                        window.__sch_popup_comparacao.erros.push(
+                            'window.open original: ' + String(e)
+                        );
+                    } catch (e2) {}
+                    throw e;
+                }
+
+                return popup;
             };
 
             window.__sch_window_open_wrapped = true;
         }
 
-        if (typeof window.abrirPopup === 'function' && !window.__sch_abrir_popup_wrapped) {
+        if (
+            typeof window.abrirPopup === 'function'
+            && !window.__sch_abrir_popup_wrapped
+        ) {
             window.__sch_original_abrirPopup = window.abrirPopup;
 
             window.abrirPopup = function (args) {
                 try {
                     var url = pickUrl(args);
-                    window.__sch_popup_comparacao.args = JSON.stringify(args || {});
+                    window.__sch_popup_comparacao.args =
+                        JSON.stringify(args || {});
 
                     if (url) {
-                        window.__sch_popup_comparacao.url = absolutizar(url);
+                        window.__sch_popup_comparacao.url =
+                            absolutizar(url);
                     }
                 } catch (e) {
                     try {
-                        window.__sch_popup_comparacao.erros.push(String(e));
+                        window.__sch_popup_comparacao.erros.push(
+                            String(e)
+                        );
                     } catch (e2) {}
                 }
 
-                return window.__sch_original_abrirPopup.apply(this, arguments);
+                return window.__sch_original_abrirPopup.apply(
+                    this,
+                    arguments
+                );
             };
 
             window.__sch_abrir_popup_wrapped = true;
@@ -9810,13 +10642,21 @@ def _instalar_captura_popup_comparacao_retorno(driver, wait=None):
     for usar_iframe in [True, False]:
         try:
             if usar_iframe:
-                entrar_iframe_detalhe_analise(driver, wait)
+                entrar_iframe_detalhe_analise(
+                    driver,
+                    wait,
+                )
             else:
                 driver.switch_to.default_content()
 
-            info = driver.execute_script(script) or {}
+            info = driver.execute_script(
+                script
+            ) or {}
 
-            if isinstance(info, dict) and info.get("instalado"):
+            if (
+                isinstance(info, dict)
+                and info.get("instalado")
+            ):
                 return True
 
         except Exception:
@@ -9864,6 +10704,218 @@ def _obter_popup_comparacao_capturado(driver, wait=None):
     return melhor
 
 
+
+
+def _target_id_de_window_handle(handle):
+    """
+    ChromeDriver costuma expor handles como CDwindow-<targetId>.
+    """
+    handle = str(handle or "").strip()
+
+    if handle.startswith("CDwindow-"):
+        return handle[len("CDwindow-"):]
+
+    return handle
+
+
+def _listar_targets_pagina_chrome(driver):
+    """
+    Lista targets de página conhecidos pelo Chrome.
+    Usado apenas para diagnosticar/selecionar o popup real do SCH.
+    """
+    try:
+        resposta = driver.execute_cdp_cmd(
+            "Target.getTargets",
+            {},
+        ) or {}
+    except Exception:
+        return []
+
+    saida = []
+
+    for info in resposta.get("targetInfos", []) or []:
+        if str(info.get("type") or "") != "page":
+            continue
+
+        saida.append(
+            {
+                "targetId": str(
+                    info.get("targetId") or ""
+                ),
+                "url": str(info.get("url") or ""),
+                "title": str(
+                    info.get("title") or ""
+                ),
+                "openerId": str(
+                    info.get("openerId") or ""
+                ),
+                "attached": bool(
+                    info.get("attached")
+                ),
+            }
+        )
+
+    return saida
+
+
+def _targets_novos_desde(antes, depois):
+    ids_antes = {
+        str(item.get("targetId") or "")
+        for item in (antes or [])
+    }
+
+    return [
+        item
+        for item in (depois or [])
+        if str(item.get("targetId") or "")
+        not in ids_antes
+    ]
+
+
+def _log_targets_comparacao(prefixo, targets):
+    targets = list(targets or [])
+
+    if not targets:
+        print(
+            f"[SCH][RETORNO][DIAG] {prefixo}: "
+            "nenhum target novo."
+        )
+        return
+
+    for item in targets:
+        print(
+            f"[SCH][RETORNO][DIAG] {prefixo}: "
+            f"target={item.get('targetId', '')[:16]}... | "
+            f"url={item.get('url', '') or 'vazia'} | "
+            f"title={item.get('title', '') or '-'} | "
+            f"opener={item.get('openerId', '')[:16] or '-'}"
+        )
+
+
+def _navegar_popup_real_pelo_opener(
+    driver,
+    wait,
+    aba_origem,
+    url,
+):
+    """
+    Tenta navegar o popup REAL criado pelo clique, mas a partir da aba do SCH.
+
+    Isso é diferente de driver.get()/window.location.replace() na aba vazia:
+    usamos a referência Window retornada pelo window.open original e apenas
+    atribuímos a URL ao objeto filho. A chamada retorna imediatamente.
+    """
+    url = str(url or "").strip()
+
+    if not aba_origem or not url:
+        return False
+
+    try:
+        if aba_origem not in driver.window_handles:
+            return False
+    except Exception:
+        return False
+
+    try:
+        driver.switch_to.window(aba_origem)
+    except Exception:
+        return False
+
+    for usar_iframe in [True, False]:
+        try:
+            if usar_iframe:
+                entrar_iframe_detalhe_analise(
+                    driver,
+                    wait,
+                )
+            else:
+                driver.switch_to.default_content()
+
+            resultado = driver.execute_script(
+                """
+                const popup =
+                    window.__sch_popup_comparacao_ref;
+
+                if (!popup) {
+                    return {
+                        ok: false,
+                        motivo: 'sem_referencia_popup'
+                    };
+                }
+
+                try {
+                    if (popup.closed) {
+                        return {
+                            ok: false,
+                            motivo: 'popup_fechado'
+                        };
+                    }
+                } catch (e) {}
+
+                try {
+                    popup.location.href = arguments[0];
+
+                    return {
+                        ok: true,
+                        motivo: 'location_atribuida_pelo_opener'
+                    };
+                } catch (e) {
+                    return {
+                        ok: false,
+                        motivo: String(e)
+                    };
+                }
+                """,
+                url,
+            ) or {}
+
+            if resultado.get("ok"):
+                print(
+                    "[SCH][RETORNO] URL atribuída ao popup real "
+                    "a partir da aba de origem do SCH."
+                )
+                return True
+
+            motivo = str(
+                resultado.get("motivo") or ""
+            )
+
+            if motivo:
+                print(
+                    "[SCH][RETORNO][DIAG] Fallback pelo opener: "
+                    f"{motivo}"
+                )
+
+        except Exception:
+            continue
+
+    return False
+
+
+def _metadata_botao_comparar_versao(driver, elemento):
+    try:
+        return driver.execute_script(
+            """
+            const el = arguments[0];
+            const form = el.form || el.closest('form');
+
+            return {
+                tag: String(el.tagName || ''),
+                id: String(el.id || ''),
+                type: String(el.type || ''),
+                href: String(el.getAttribute('href') || ''),
+                target: String(el.getAttribute('target') || ''),
+                onclick: String(el.getAttribute('onclick') || ''),
+                formId: form ? String(form.id || '') : '',
+                formAction: form ? String(form.action || '') : '',
+                formTarget: form ? String(form.target || '') : '',
+                formMethod: form ? String(form.method || '') : ''
+            };
+            """,
+            elemento,
+        ) or {}
+    except Exception:
+        return {}
 def _clicar_elemento_por_cdp(driver, elemento):
     """
     Clique mais próximo de um clique real do Chrome/Edge.
@@ -11099,6 +12151,7 @@ def clicar_comparar_versoes(driver, wait, timeout_resultado=240):
         "A aba de comparação abriu, mas a página não carregou dentro do tempo limite."
     )
 
+
 def restaurar_tela_requerimento_apos_comparacao(
     driver,
     wait,
@@ -11266,40 +12319,41 @@ def _montar_alteracao_retorno(campo, anterior, novo):
     }
 
 
+
 def _texto_parece_documento_anexo_retorno(texto):
     texto_norm = _normalizar_texto_retorno(texto)
-
     if not texto_norm:
         return False
 
-    termos_documento = [
-        "art",
-        "cct",
+    if _categoria_documento_anexo_retorno(texto):
+        return True
+
+    termos_fortes = [
         "certificado de conformidade tecnica",
-        "ract",
         "relatorio de avaliacao da conformidade",
         "relatorio de ensaio",
         "manual",
         "foto",
         "fotos",
         "declaracao",
-        "decl",
         "contrato social",
         "selo anatel",
         "carta de representacao",
-        "outros",
-        "ocd",
+        "outros (ocd)",
         "maintenance",
         "maintenance declaration",
         "declaration of maintenance",
         ".pdf",
-        "_nov",
-        "_m1",
-        "_01a",
-        "_2a",
     ]
+    if any(t in texto_norm for t in termos_fortes):
+        return True
 
-    return any(t in texto_norm for t in termos_documento)
+    for sigla in ("art", "cct", "ract"):
+        if re.search(rf"(?<![a-z0-9]){re.escape(sigla)}(?![a-z0-9])", texto_norm):
+            return True
+
+    return False
+
 
 
 def _texto_parece_alteracao_tecnica_retorno(texto):
@@ -11404,6 +12458,91 @@ def _normalizar_dados_tecnicos_para_comparacao_retorno(texto):
 
 
 
+
+
+def _assinatura_dados_tecnicos_retorno(texto):
+    bruto = str(texto or "")
+    if not bruto.strip():
+        return {}
+
+    u = _remover_acentos(bruto).upper()
+    u = re.sub(r"\s+", " ", u)
+
+    def n(v):
+        try:
+            return _normalizar_decimal_tabela(v)
+        except Exception:
+            return str(v or "").strip()
+
+    faixas = set()
+
+    for a, b in re.findall(
+        r"(\d[\d.,]*)\s*(?:A|ATE|[-–—])\s*(\d[\d.,]*)",
+        u,
+    ):
+        na, nb = n(a), n(b)
+        if na and nb:
+            faixas.add((na, nb))
+
+    decimais = set()
+
+    for valor in re.findall(
+        r"(?<![A-Z0-9])(?:\d[\d.]*,\d+|\d+\.\d+)(?![A-Z0-9])",
+        u,
+    ):
+        nv = n(valor)
+        if nv:
+            decimais.add(nv)
+
+    emissoes = set(
+        re.findall(
+            r"\b\d+[KMG]\d+[A-Z]\d+[A-Z]\b",
+            u,
+        )
+    )
+
+    tecnologias = {
+        termo
+        for termo in (
+            "GSM", "GPRS", "EDGE", "WCDMA", "HSDPA", "HSUPA",
+            "LTE", "OFDM", "OFDMA", "DSSS", "FHSS",
+            "SALTO EM FREQUENCIA", "SEQUENCIA DIRETA",
+        )
+        if termo in u
+    }
+
+    mod = u.replace("8-DPSK", "8DPSK").replace("8-PSK", "8PSK")
+    modulacoes = set()
+
+    for termo in (
+        "GMSK", "BPSK", "QPSK", "DBPSK", "DQPSK",
+        "GFSK", "CCK", "8DPSK", "8PSK",
+    ):
+        if re.search(
+            rf"(?<![A-Z0-9]){re.escape(termo)}(?![A-Z0-9])",
+            mod,
+        ):
+            modulacoes.add(termo)
+
+    for grupo in re.findall(
+        r"\b((?:16|64|128|256|254)"
+        r"(?:\s*/\s*(?:16|64|128|256|254))*)"
+        r"\s*-?\s*QAM\b",
+        mod,
+    ):
+        for nivel in re.findall(r"\d+", grupo):
+            modulacoes.add(f"{nivel}QAM")
+
+    return {
+        "faixas": sorted(faixas),
+        "decimais": sorted(decimais),
+        "emissoes": sorted(emissoes),
+        "tecnologias": sorted(tecnologias),
+        "modulacoes": sorted(modulacoes),
+    }
+
+
+
 def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
     dados_antigos = _recortar_secao_retorno(
         texto_antigo,
@@ -11456,6 +12595,29 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         dados_novos_sem_espec
     )
 
+    assinatura_dados_antigos = _assinatura_dados_tecnicos_retorno(
+        dados_antigos_sem_espec
+    )
+    assinatura_dados_novos = _assinatura_dados_tecnicos_retorno(
+        dados_novos_sem_espec
+    )
+
+    if (
+        assinatura_dados_antigos
+        and assinatura_dados_novos
+        and any(assinatura_dados_antigos.values())
+        and any(assinatura_dados_novos.values())
+    ):
+        dados_tecnicos_diferentes = (
+            assinatura_dados_antigos != assinatura_dados_novos
+        )
+        metodo_comparacao_dados = "assinatura_tecnica_semantica"
+    else:
+        dados_tecnicos_diferentes = (
+            norm_dados_antigos != norm_dados_novos
+        )
+        metodo_comparacao_dados = "texto_normalizado_fallback"
+
     norm_espec_antiga = _normalizar_dados_tecnicos_para_comparacao_retorno(
         espec_antiga
     )
@@ -11464,7 +12626,7 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         espec_nova
     )
 
-    if norm_dados_antigos != norm_dados_novos:
+    if dados_tecnicos_diferentes:
         if dados_antigos_sem_espec or dados_novos_sem_espec:
             alteracoes_dados_tecnicos.append(
                 _montar_alteracao_retorno(
@@ -11496,6 +12658,9 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         "especificacoes_novas": espec_nova,
         "normalizado_dados_antigos": norm_dados_antigos,
         "normalizado_dados_novos": norm_dados_novos,
+        "assinatura_dados_antigos": assinatura_dados_antigos,
+        "assinatura_dados_novos": assinatura_dados_novos,
+        "metodo_comparacao_dados_tecnicos": metodo_comparacao_dados,
         "normalizado_especificacoes_antigas": norm_espec_antiga,
         "normalizado_especificacoes_novas": norm_espec_nova,
 
@@ -11537,6 +12702,12 @@ def _lista_docs_capturados_tabela_retorno(valores, somente_vermelhos=False):
         texto = _texto_documento_anexo_capturado_retorno(item)
 
         if not texto:
+            continue
+
+        # Defesa adicional: mesmo que a captura DOM encontre uma tabela
+        # estrutural do SCH, somente linhas com aparência real de documento
+        # podem entrar na comparação documental.
+        if not _texto_parece_documento_anexo_retorno(texto):
             continue
 
         docs.append(texto)
@@ -11627,6 +12798,22 @@ def _comparar_documentos_anexos_retorno(
         if _normalizar_texto_retorno(x)
     }
 
+    categorias_antigas = {
+        _categoria_documento_anexo_retorno(x)
+        for x in documentos_antigos
+        if _categoria_documento_anexo_retorno(x)
+    }
+    categorias_novas = {
+        _categoria_documento_anexo_retorno(x)
+        for x in documentos_novos
+        if _categoria_documento_anexo_retorno(x)
+    }
+    categorias_desaparecidas = {
+        categoria
+        for categoria in categorias_antigas
+        if categoria not in categorias_novas
+    }
+
     vermelhos_docs_direita_na_relacao = []
     for item in vermelhos_direita or []:
         texto = _texto_documento_anexo_capturado_retorno(item)
@@ -11643,30 +12830,60 @@ def _comparar_documentos_anexos_retorno(
 
     tem_tabelas_dom = bool(documentos_antigos_tabela and documentos_novos_tabela)
 
-    # Inclusões podem usar a linha vermelha do lado novo ou, quando a tabela foi
-    # capturada por completo, a diferença entre as listas.
-    docs_adicionados = _lista_unica_retorno(
+    # Se as duas tabelas reais foram capturadas, a diferença entre os seus
+    # conteúdos é a fonte principal para inclusão. A cor vermelha serve como
+    # confirmação visual, mas uma linha vermelha que continua idêntica nos
+    # dois lados NÃO pode virar documento novo/removido.
+    candidatos_add_vermelhos = _lista_unica_retorno(
         adicionados_por_vermelho_tabela
         or vermelhos_docs_direita_na_relacao
-        or adicionados_por_diff
     )
-
-    # Exclusões exigem evidência do lado antigo. O simples desaparecimento de
-    # uma linha em captura textual/possivelmente parcial não basta.
-    docs_removidos = _lista_unica_retorno(
+    candidatos_rem_vermelhos = _lista_unica_retorno(
         removidos_por_vermelho_tabela
         or vermelhos_docs_esquerda_na_relacao
     )
+
+    docs_adicionados = _lista_unica_retorno(
+        adicionados_por_diff
+        if tem_tabelas_dom
+        else (
+            candidatos_add_vermelhos
+            or adicionados_por_diff
+        )
+    )
+
+    # Remoção continua exigindo confirmação no lado antigo, porém agora a linha
+    # vermelha também precisa realmente ter desaparecido da versão nova.
+    docs_removidos = []
+
+    if tem_tabelas_dom and categorias_desaparecidas:
+        docs_removidos = _lista_unica_retorno([
+            x for x in candidatos_rem_vermelhos
+            if (
+                _categoria_documento_anexo_retorno(x)
+                in categorias_desaparecidas
+            )
+        ])
 
     norm_rem_confirmados = {
         _normalizar_texto_retorno(x)
         for x in docs_removidos
         if _normalizar_texto_retorno(x)
     }
-    removidos_inconclusivos = _lista_unica_retorno([
-        x for x in removidos_por_diff
-        if _normalizar_texto_retorno(x) not in norm_rem_confirmados
-    ])
+
+    # "Inconclusivo" só pode nascer de uma linha que já passou pelo filtro de
+    # documento real. Cabeçalhos, tabela de faixas, potência, modulação etc.
+    # nunca chegam aqui.
+    removidos_inconclusivos = []
+
+    if not tem_tabelas_dom and categorias_desaparecidas:
+        removidos_inconclusivos = _lista_unica_retorno([
+            x for x in removidos_por_diff
+            if (
+                _categoria_documento_anexo_retorno(x)
+                in categorias_desaparecidas
+            )
+        ])
 
     norm_add = {
         _normalizar_texto_retorno(x)
@@ -11679,11 +12896,17 @@ def _comparar_documentos_anexos_retorno(
         if _normalizar_texto_retorno(x)
     }
 
+    # Se exatamente o mesmo item apareceu marcado dos dois lados, não houve
+    # inclusão nem remoção documental. A versão anterior transformava esse
+    # cenário em "inconclusivo" e bloqueava a aprovação.
     if norm_add and norm_add == norm_rem:
-        removidos_inconclusivos = _lista_unica_retorno(
-            removidos_inconclusivos + docs_removidos
-        )
+        docs_adicionados = []
         docs_removidos = []
+        removidos_inconclusivos = [
+            x for x in removidos_inconclusivos
+            if _normalizar_texto_retorno(x) not in norm_add
+        ]
+        norm_add = set()
         norm_rem = set()
 
     if docs_removidos:
@@ -11711,7 +12934,7 @@ def _comparar_documentos_anexos_retorno(
         "origem_documentos": (
             "tabela_dom_relacao_arquivos_anexos"
             if tem_tabelas_dom
-            else "texto_recortado_relacao_arquivos_anexos"
+            else "texto_recortado_relacao_arquivos_anexos_pareado"
         ),
         "captura_tabelas_completa": tem_tabelas_dom,
         "qtd_linhas_tabela_antiga": len(documentos_antigos_tabela),
@@ -11922,6 +13145,79 @@ def _normalizar_produto_para_comparacao_retorno(texto):
     return texto
 
 
+
+
+def _assinatura_produto_retorno(texto):
+    bruto = str(texto or "")
+    if not bruto.strip():
+        return {"modelos": [], "tipos": [], "categorias": []}
+
+    bruto = re.sub(
+        r"(?i)(?<!^)(modelo|tipo|categoria)\s*:",
+        r"\n\1:",
+        bruto,
+    )
+
+    marcadores = list(
+        re.finditer(
+            r"(?i)\b(modelo|tipo|categoria)\s*:",
+            bruto,
+        )
+    )
+
+    saida = {
+        "modelos": [],
+        "tipos": [],
+        "categorias": [],
+    }
+
+    def limpar(v):
+        v = str(v or "").replace("(*)", " ")
+        v = _normalizar_texto_retorno(v)
+        v = re.sub(r"[^a-z0-9._\- ]+", " ", v)
+        return re.sub(r"\s+", " ", v).strip()
+
+    for i, m in enumerate(marcadores):
+        campo = m.group(1).lower()
+        inicio = m.end()
+        fim = (
+            marcadores[i + 1].start()
+            if i + 1 < len(marcadores)
+            else len(bruto)
+        )
+        valor = bruto[inicio:fim].strip()
+
+        if not valor:
+            continue
+
+        if campo == "modelo":
+            for parte in re.split(
+                r"\s+(?:e|and)\s+|[;,]",
+                valor,
+                flags=re.I,
+            ):
+                item = limpar(parte)
+                if item:
+                    saida["modelos"].append(item)
+
+        elif campo == "tipo":
+            item = limpar(valor)
+            if item:
+                saida["tipos"].append(item)
+
+        else:
+            item = limpar(valor)
+            if item:
+                saida["categorias"].append(item)
+
+    return {
+        k: sorted(set(v))
+        for k, v in saida.items()
+    }
+
+
+
+
 def _comparar_bloco_produto_retorno(texto_antigo, texto_novo):
     produto_antigo = _recortar_bloco_produto_retorno(texto_antigo)
     produto_novo = _recortar_bloco_produto_retorno(texto_novo)
@@ -11929,39 +13225,46 @@ def _comparar_bloco_produto_retorno(texto_antigo, texto_novo):
     norm_antigo = _normalizar_produto_para_comparacao_retorno(produto_antigo)
     norm_novo = _normalizar_produto_para_comparacao_retorno(produto_novo)
 
+    assinatura_antiga = _assinatura_produto_retorno(produto_antigo)
+    assinatura_nova = _assinatura_produto_retorno(produto_novo)
+
     captura_incompleta = not produto_antigo or not produto_novo
 
-    alterado = captura_incompleta or norm_antigo != norm_novo
+    if (
+        not captura_incompleta
+        and any(assinatura_antiga.values())
+        and any(assinatura_nova.values())
+    ):
+        alterado = assinatura_antiga != assinatura_nova
+        metodo = "modelo_tipo_categoria_semantico"
+    else:
+        alterado = captura_incompleta or norm_antigo != norm_novo
+        metodo = "texto_normalizado_fallback"
 
     alteracoes = []
-
     if alterado:
         if captura_incompleta:
-            alteracoes.append(
-                {
-                    "campo": "Produto",
-                    "anterior": produto_antigo or "Produto não identificado com segurança na versão anterior.",
-                    "novo": produto_novo or "Produto não identificado com segurança na versão nova.",
-                }
-            )
+            alteracoes.append({
+                "campo": "Produto",
+                "anterior": produto_antigo or "Produto não identificado com segurança na versão anterior.",
+                "novo": produto_novo or "Produto não identificado com segurança na versão nova.",
+            })
         else:
-            alteracoes.append(
-                _montar_alteracao_retorno(
-                    "Produto",
-                    produto_antigo,
-                    produto_novo,
-                )
-            )
+            alteracoes.append(_montar_alteracao_retorno("Produto", produto_antigo, produto_novo))
 
     return {
         "produto_antigo": produto_antigo,
         "produto_novo": produto_novo,
         "normalizado_antigo": norm_antigo,
         "normalizado_novo": norm_novo,
+        "assinatura_antiga": assinatura_antiga,
+        "assinatura_nova": assinatura_nova,
+        "metodo_comparacao": metodo,
         "captura_incompleta": captura_incompleta,
         "alterado": alterado,
         "alteracoes": alteracoes,
     }
+
 
 
 def _comparar_bloco_unidade_fabril_retorno(texto_antigo, texto_novo):
@@ -12202,35 +13505,29 @@ def _mapa_tipos_re_informacoes_adicionais():
     }
 
 
+
+
 def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
     """
-    Procura números de tipo de análise RE na aba Informações Adicionais.
+    Escopo atual:
+    1, 5, 6, 10, 12, 6+11 e 6+12.
 
-    Regras atuais para aprovação automática:
-
-    Aceitos individualmente:
-    - 1
-    - 5
-    - 6
-    - 10
-    - 12
-
-    Combinações aceitas:
-    - 6 + 12
-    - 6 + 11
-
-    Observação:
-    - 11 sozinho não é aceito.
-    - 11 só é aceito quando aparecer junto com 6.
+    Regras de identificação:
+    - Prioriza números RE explicitamente escritos, por exemplo:
+      "6. Manutenção tácita" ou "11. Troca de OCD".
+    - Quando o OCD escrever explicitamente "Manutenção Tácita" sem o
+      prefixo "6.", a expressão textual inequívoca é aceita como RE 6.
+    - Não presume RE 6 para justificativas genéricas sem essa expressão.
+    - Não aceita combinações arbitrárias como 6+10+12.
     """
-
     texto = str(texto_info or "")
     mapa = _mapa_tipos_re_informacoes_adicionais()
 
-    aceitos_individuais = {"1", "5", "6", "10", "12"}
-
-    texto_limpo = texto.replace("\u00a0", " ")
-    texto_limpo = re.sub(r"\s+", " ", texto_limpo).strip()
+    texto_limpo = re.sub(
+        r"\s+",
+        " ",
+        texto.replace("\u00a0", " "),
+    ).strip()
 
     padrao = re.compile(
         r"(?<![\d/.-])"
@@ -12242,80 +13539,160 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
 
     numeros = []
 
-    for m in padrao.finditer(texto_limpo):
-        numero = str(m.group(1)).strip()
-
+    for m_num in padrao.finditer(texto_limpo):
+        numero = str(m_num.group(1)).strip()
         if numero not in numeros:
             numeros.append(numero)
 
-    conjunto = set(numeros)
+    # --------------------------------------------------------------
+    # Fallback textual SEGURO para Manutenção Tácita = RE 6
+    # --------------------------------------------------------------
+    # Alguns OCDs registram apenas:
+    #   "Manutenção Tácita."
+    #   "Manutenção Tácita, sem alteração no produto."
+    #
+    # Nesses casos, a descrição é inequívoca e deve ser tratada como RE 6.
+    # Não há inferência quando a expressão não estiver literalmente presente.
+    texto_norm = _normalizar_texto_retorno(texto_limpo)
 
-    numeros_nao_permitidos = []
+    manutencao_tacita_explicita = bool(
+        re.search(r"\bmanutencao\s+tacita\b", texto_norm)
+    )
 
-    for numero in numeros:
-        if numero in aceitos_individuais:
-            continue
+    manutencao_tacita_negada = bool(
+        re.search(
+            r"\b(?:nao|sem)\s+(?:se\s+trata\s+de\s+)?manutencao\s+tacita\b",
+            texto_norm,
+        )
+    )
 
-        # Regra especial:
-        # Tipo 11 só é permitido quando aparecer junto com o tipo 6.
-        if numero == "11" and "6" in conjunto:
-            continue
+    numeros_inferidos_por_texto = []
 
-        numeros_nao_permitidos.append(numero)
+    if (
+        manutencao_tacita_explicita
+        and not manutencao_tacita_negada
+        and "6" not in numeros
+    ):
+        numeros.append("6")
+        numeros_inferidos_por_texto.append("6")
 
-    numeros_permitidos = [
-        numero for numero in numeros
-        if numero not in numeros_nao_permitidos
+    # Mantém ordem canônica para combinações e relatórios.
+    numeros = sorted(
+        list(dict.fromkeys(numeros)),
+        key=lambda valor: int(valor),
+    )
+
+    conjunto = frozenset(numeros)
+
+    combinacoes_permitidas = {
+        frozenset({"1"}),
+        frozenset({"5"}),
+        frozenset({"6"}),
+        frozenset({"10"}),
+        frozenset({"12"}),
+        frozenset({"6", "11"}),
+        frozenset({"6", "12"}),
+    }
+
+    numeros_conhecidos = {
+        "1", "5", "6", "10", "11", "12",
+    }
+
+    numeros_nao_permitidos = [
+        n
+        for n in numeros
+        if n not in numeros_conhecidos
     ]
 
-    def _tipo(numero):
+    combinacao_ok = (
+        bool(numeros)
+        and conjunto in combinacoes_permitidas
+    )
+
+    def tipo(n, permitido=None):
+        if permitido is None:
+            permitido = (
+                combinacao_ok
+                and n not in numeros_nao_permitidos
+            )
+
         return {
-            "numero": numero,
-            "nome": mapa.get(numero, "Tipo de análise não mapeado"),
-            "permitido": numero not in numeros_nao_permitidos,
+            "numero": n,
+            "nome": mapa.get(
+                n,
+                "Tipo de análise não mapeado",
+            ),
+            "permitido": bool(permitido),
+            "inferido_por_texto": n in numeros_inferidos_por_texto,
         }
-
-    combinacao_detectada = " + ".join(numeros) if numeros else ""
-
-    combinacao_ok = False
-
-    if not numeros:
-        combinacao_ok = True
-    elif conjunto.issubset(aceitos_individuais):
-        combinacao_ok = True
-    elif conjunto == {"6", "11"}:
-        combinacao_ok = True
-    elif conjunto == {"6", "12"}:
-        combinacao_ok = True
-    elif conjunto == {"6", "11", "12"}:
-        combinacao_ok = True
 
     return {
         "numeros_detectados": numeros,
-        "tipos_detectados": [_tipo(n) for n in numeros],
-        "numeros_permitidos": numeros_permitidos,
-        "tipos_permitidos": [_tipo(n) for n in numeros_permitidos],
+        "numeros_inferidos_por_texto": numeros_inferidos_por_texto,
+        "manutencao_tacita_textual_detectada": bool(
+            manutencao_tacita_explicita
+            and not manutencao_tacita_negada
+        ),
+        "tipos_detectados": [
+            tipo(n)
+            for n in numeros
+        ],
+        "numeros_permitidos": (
+            numeros
+            if combinacao_ok
+            else []
+        ),
+        "tipos_permitidos": (
+            [tipo(n, True) for n in numeros]
+            if combinacao_ok
+            else []
+        ),
         "numeros_nao_permitidos": numeros_nao_permitidos,
-        "tipos_nao_permitidos": [_tipo(n) for n in numeros_nao_permitidos],
-        "tem_numero_nao_permitido": bool(numeros_nao_permitidos),
-        "combinacao_detectada": combinacao_detectada,
+        "tipos_nao_permitidos": [
+            tipo(n, False)
+            for n in numeros_nao_permitidos
+        ],
+        "tem_numero_nao_permitido": bool(
+            numeros_nao_permitidos
+        ),
+        "combinacao_detectada": (
+            " + ".join(numeros)
+            if numeros
+            else ""
+        ),
         "combinacao_ok": combinacao_ok,
-        "permitidos_esperados": ["1", "5", "6", "10", "12", "6+12", "6+11"],
+        "motivo_combinacao": (
+            "combinacao_permitida"
+            if combinacao_ok
+            else "nenhum_tipo_re_identificado"
+            if not numeros
+            else "combinacao_nao_prevista_no_escopo"
+        ),
+        "origem_deteccao": (
+            "numero_e_descricao_textual"
+            if numeros_inferidos_por_texto and len(numeros) > len(numeros_inferidos_por_texto)
+            else "descricao_textual_inequivoca"
+            if numeros_inferidos_por_texto
+            else "numero_re_explicito"
+            if numeros
+            else "nao_identificado"
+        ),
+        "permitidos_esperados": [
+            "1", "5", "6", "10", "12", "6+11", "6+12",
+        ],
         "nomes_permitidos_esperados": [
             "1. Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
             "5. Inclusão/exclusão de modelo de bateria",
             "6. Manutenção tácita",
             "10. Alteração de dados de entidade com atualização do CH",
             "12. Recertificação",
-            "6 + 12. Manutenção tácita + Recertificação",
             "6 + 11. Manutenção tácita + Troca de OCD",
+            "6 + 12. Manutenção tácita + Recertificação",
         ],
     }
 
 
-
 def _descricao_tipos_re_detectados(analise_numeros_info):
-    """Monta o identificador e a descrição humana dos tipos RE detectados."""
     analise_numeros_info = analise_numeros_info or {}
     tipos = analise_numeros_info.get("tipos_detectados", []) or []
 
@@ -12325,13 +13702,11 @@ def _descricao_tipos_re_detectados(analise_numeros_info):
     for item in tipos:
         if not isinstance(item, dict):
             continue
-
         numero = str(item.get("numero") or "").strip()
         nome = str(item.get("nome") or "").strip()
 
         if numero and numero not in numeros:
             numeros.append(numero)
-
         if numero and nome:
             descricoes.append(f"{numero}. {nome}")
         elif numero:
@@ -12339,9 +13714,9 @@ def _descricao_tipos_re_detectados(analise_numeros_info):
 
     if not numeros:
         return {
-            "tipo_re": "6",
-            "descricao_tipo_re": "6. Manutenção tácita",
-            "origem": "padrao_sem_numero_explicito",
+            "tipo_re": "nao_identificado",
+            "descricao_tipo_re": "Não identificado",
+            "origem": "sem_numero_explicito",
         }
 
     return {
@@ -12349,6 +13724,7 @@ def _descricao_tipos_re_detectados(analise_numeros_info):
         "descricao_tipo_re": " + ".join(descricoes),
         "origem": "informacoes_adicionais",
     }
+
 
 
 
@@ -12894,6 +14270,19 @@ def analisar_retorno_para_estudo(
         resultado["descricao_tipo_re"] = descricao_tipos["descricao_tipo_re"]
         resultado["origem_tipo_re"] = descricao_tipos["origem"]
 
+        if analise_numeros_info.get("numeros_inferidos_por_texto"):
+            print(
+                "[SCH][RETORNO] Tipo RE inferido pela descrição textual "
+                "inequívoca da Justificativa: "
+                + ", ".join(
+                    str(n)
+                    for n in analise_numeros_info.get(
+                        "numeros_inferidos_por_texto",
+                        [],
+                    )
+                )
+            )
+
         if not info_adicionais_retorno.get("capturado"):
             resultado["status_comparacao"] = "bloqueado_sem_informacoes_adicionais"
             resultado["resultado"] = (
@@ -12914,22 +14303,40 @@ def analisar_retorno_para_estudo(
             analise_numeros_info.get("tem_numero_nao_permitido")
             or not analise_numeros_info.get("combinacao_ok", True)
         ):
-            numeros_txt = ", ".join(
-                str(n)
-                for n in analise_numeros_info.get("numeros_nao_permitidos", [])
-            ) or "não especificado"
-            resultado["status_comparacao"] = "fora_escopo_tipo_re"
-            resultado["resultado"] = (
-                "O processo não foi analisado automaticamente porque Informações "
-                "Adicionais indicam tipo de análise RE fora do escopo automático."
-            )
+            numeros_fora = analise_numeros_info.get("numeros_nao_permitidos", []) or []
+            combinacao = str(
+                analise_numeros_info.get("combinacao_detectada") or ""
+            ).strip()
+            motivo_combinacao = str(
+                analise_numeros_info.get("motivo_combinacao") or ""
+            ).strip()
+
+            if numeros_fora:
+                numeros_txt = ", ".join(str(n) for n in numeros_fora)
+                status_bloqueio = "fora_escopo_tipo_re"
+                mensagem_bloqueio = (
+                    "Tipo RE fora do escopo automático identificado antes de "
+                    f"Comparar Versões: {numeros_txt}."
+                )
+            elif motivo_combinacao == "nenhum_tipo_re_identificado":
+                status_bloqueio = "tipo_re_nao_identificado"
+                mensagem_bloqueio = (
+                    "Nenhum tipo RE foi identificado com segurança nas "
+                    "Informações Adicionais antes de Comparar Versões."
+                )
+            else:
+                status_bloqueio = "combinacao_re_nao_prevista"
+                mensagem_bloqueio = (
+                    "Combinação RE não prevista no escopo automático: "
+                    f"{combinacao or 'não identificada'}."
+                )
+
+            resultado["status_comparacao"] = status_bloqueio
+            resultado["resultado"] = mensagem_bloqueio
             resultado["acao_recomendada"] = (
                 "Não enviar para aprovação / Revisar manualmente"
             )
-            resultado["alertas"].append(
-                "Tipo RE fora do escopo automático identificado antes de Comparar "
-                f"Versões: {numeros_txt}."
-            )
+            resultado["alertas"].append(mensagem_bloqueio)
             return resultado
 
         print(
@@ -12994,6 +14401,7 @@ def analisar_retorno_para_estudo(
             "captura_completa": bool(captura.get("_captura_completa")),
             "tentativas_captura": captura.get("_tentativas_captura", 0),
             "tempo_captura_segundos": captura.get("_tempo_captura_segundos", 0),
+            "debug_tabelas_anexos": captura.get("debug_tabelas_anexos", []) or [],
         }
 
         texto_antigo = captura.get("texto_esquerda", "") or ""
@@ -13155,6 +14563,11 @@ def analisar_retorno_para_estudo(
         tem_remocao_inconclusiva = bool(
             resultado["documentos_removidos_inconclusivos"]
         )
+        captura_documental_completa = bool(
+            captura.get("_captura_completa")
+            and documentos.get("captura_tabelas_completa")
+        )
+        resultado["captura_documental_segura"] = captura_documental_completa
 
         tem_alteracao_produto = bool(resultado["produto_alterado"])
         tem_alteracao_unidade_fabril = bool(resultado["unidade_fabril_alterada"])
@@ -13225,6 +14638,13 @@ def analisar_retorno_para_estudo(
                 "O caso foi classificado como inconclusivo e requer revisão manual."
             )
 
+        if not captura_documental_completa:
+            resultado["alertas"].append(
+                "A Relação de Arquivos Anexos não foi capturada dos dois lados "
+                "diretamente do DOM. O fallback textual pode ser usado no relatório, "
+                "mas não é suficiente para aprovação automática."
+            )
+
         if (
             not tem_alteracao_produto
             and not tem_alteracao_tecnica
@@ -13232,6 +14652,7 @@ def analisar_retorno_para_estudo(
             and not tem_documento_removido
             and not tem_remocao_inconclusiva
             and documentos_obrigatorios_ok
+            and captura_documental_completa
             and not resultado.get("info_adicionais_tem_numero_nao_permitido")
         ):
             resultado["status_comparacao"] = "manutencao_tacita_apta"

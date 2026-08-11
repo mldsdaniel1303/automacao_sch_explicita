@@ -27,7 +27,6 @@ from funcoes_sch import (
     preencher_minuta_sar_se_necessario,
     limpar_especificacoes_complementares_minuta_se_necessario,
     tipo_produto_deve_limpar_especificacoes_complementares,
-    tipo_produto_nao_avaliado_automaticamente_retorno,
     enviar_retorno_para_aprovacao_se_apto,
     garantir_sessao_ativa_sch,
     voltar_para_fila,
@@ -42,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.6.3"
+VERSAO_SCRIPT = "0.8.6.6"
 
 
 def _normalizar_texto(valor):
@@ -152,39 +151,96 @@ def _dados_normativos_retorno_para_estudo():
 
 
 
-def _homologacao_tem_ano_26(req):
-    """Identifica homologação no formato XXXXX-26-XXXXX."""
+def _extrair_ano_homologacao(req):
+    """
+    Extrai o ano central do código de homologação XXXXX-AA-XXXXX.
+
+    Prioriza ``req['homologacao']``. Como proteção para versões da fila cujo
+    mapeamento de colunas veio incorreto, também examina ``certificado`` e o
+    texto integral da linha. O primeiro código compatível é usado.
+    """
     if not isinstance(req, dict):
-        return False
+        return None
 
-    homologacao = str(req.get("homologacao") or "").strip()
+    candidatos = [
+        ("homologacao", req.get("homologacao")),
+        ("certificado_fallback", req.get("certificado")),
+        ("texto_linha_fallback", req.get("texto_linha")),
+    ]
 
-    return bool(
-        homologacao
-        and re.search(
-            r"\b\d{4,6}\s*[-–—]\s*26\s*[-–—]\s*\d{4,6}\b",
-            homologacao,
-        )
+    padrao = re.compile(
+        r"\b\d{4,6}\s*[-–—]\s*(\d{2,4})\s*[-–—]\s*\d{4,6}\b"
     )
 
+    for origem, valor in candidatos:
+        texto = str(valor or "").strip()
+        if not texto:
+            continue
+        m = padrao.search(texto)
+        if not m:
+            continue
+        ano_txt = m.group(1)
+        try:
+            ano = int(ano_txt)
+        except (TypeError, ValueError):
+            continue
+        if len(ano_txt) == 2:
+            ano += 2000
+        req.setdefault("origem_ano_homologacao", origem)
+        return ano
 
-def _separar_homologacoes_ano_26(requerimentos):
+    return None
+
+
+
+def _homologacao_ano_2026_ou_superior(req):
+    """Bloqueia homologações cujo ano central seja 2026 ou posterior."""
+    ano = _extrair_ano_homologacao(req)
+    return bool(ano is not None and ano >= 2026)
+
+
+# Compatibilidade com eventuais testes/chamadas antigas.
+def _homologacao_tem_ano_26(req):
+    return _homologacao_ano_2026_ou_superior(req)
+
+
+def _separar_homologacoes_2026_ou_superior(requerimentos):
     processaveis = []
     ignorados = []
 
     for req in requerimentos or []:
-        if _homologacao_tem_ano_26(req):
+        if _homologacao_ano_2026_ou_superior(req):
             item = dict(req)
-            item["motivo"] = "homologacao_ano_26"
+            ano = _extrair_ano_homologacao(req)
+            item["motivo"] = "homologacao_2026_ou_superior"
+            item["ano_homologacao"] = ano
             item["mensagem"] = (
                 "Requerimento ignorado porque a homologação possui "
-                "26 no bloco central."
+                f"ano {ano} no bloco central (2026 ou posterior)."
             )
             ignorados.append(item)
         else:
             processaveis.append(req)
 
     return processaveis, ignorados
+
+
+# Compatibilidade com nome antigo; a regra agora é 2026 ou posterior.
+def _separar_homologacoes_ano_26(requerimentos):
+    return _separar_homologacoes_2026_ou_superior(requerimentos)
+
+
+def _tipo_produto_no_escopo_automatico_retorno(tipo_produto):
+    """
+    Em Retorno Para Estudo existe uma única lista positiva de tipos aceitos.
+
+    A lista oficial é a mesma usada para o tratamento automático da minuta.
+    Qualquer tipo fora dela é ignorado ainda na fila, antes de abrir o
+    requerimento, ler Informações Adicionais, Comparar Versões ou Corrigir Minuta.
+    """
+    return bool(
+        tipo_produto_deve_limpar_especificacoes_complementares(tipo_produto)
+    )
 
 
 def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
@@ -447,6 +503,8 @@ def _montar_ignorados_resumidos(requerimentos_ignorados):
                 {
                     "requerimento": _numero_requerimento(req),
                     "tipo_produto": req.get("tipo_produto", ""),
+                    "homologacao": req.get("homologacao", ""),
+                    "ano_homologacao": req.get("ano_homologacao", ""),
                     "fila_sch": req.get("fila_sch", ""),
                     "motivo": req.get("motivo", "fora_escopo_radiacao_restrita"),
                     "mensagem": req.get("mensagem", ""),
@@ -583,7 +641,7 @@ def _gerar_relatorios_parciais_execucao(
 
     caminho_req_report = ""
 
-    if relatorio_execucao:
+    if relatorio_execucao or ignorados_resumidos:
         try:
             caminho_req_report = gerar_req_report(
                 pasta_saida=pasta_base,
@@ -591,6 +649,7 @@ def _gerar_relatorios_parciais_execucao(
                 versao_script=versao_script,
                 inicio_execucao=inicio_execucao,
                 fim_execucao=fim_execucao,
+                ignorados_fora_escopo=ignorados_resumidos,
             )
         except Exception as e:
             print(
@@ -599,8 +658,8 @@ def _gerar_relatorios_parciais_execucao(
             )
     else:
         print(
-            "[SCH][WARN] Nenhum requerimento processado ainda; "
-            "relatório HTML parcial não foi gerado."
+            "[SCH][WARN] Nenhum requerimento processado nem ignorado foi "
+            "registrado; relatório HTML parcial não foi gerado."
         )
 
     if imprimir:
@@ -678,11 +737,26 @@ def executar_fluxo_sch(
     regras = carregar_regras()
     regras["pausar_antes_anexos"] = pausar_antes_anexos
 
-    categorias_anexos_ativas = list(
-        categorias_anexos
-        or regras.get("categorias_anexos", [])
-        or []
-    )
+    # categorias_anexos=None  -> usa a configuração padrão do sistema.
+    # categorias_anexos=[]    -> opção explícita "Nenhuma": não abre Anexos
+    #                            e não realiza downloads.
+    # categorias_anexos=[...] -> baixa somente as categorias escolhidas.
+    categorias_anexos_informadas = categorias_anexos is not None
+
+    if categorias_anexos_informadas:
+        categorias_anexos_ativas = list(categorias_anexos or [])
+        baixar_anexos_habilitado = bool(categorias_anexos_ativas)
+        modo_download_anexos = (
+            "categorias_selecionadas"
+            if baixar_anexos_habilitado
+            else "nenhuma"
+        )
+    else:
+        categorias_anexos_ativas = list(
+            regras.get("categorias_anexos", []) or []
+        )
+        baixar_anexos_habilitado = True
+        modo_download_anexos = "padrao_sistema"
 
     if categorias_anexos_ativas:
         regras["categorias_anexos"] = categorias_anexos_ativas
@@ -690,8 +764,9 @@ def executar_fluxo_sch(
     if limite_requerimentos:
         regras["limite_requerimentos"] = int(limite_requerimentos)
 
-    # Em Retorno Para Estudo a análise deve comparar versões do requerimento,
-    # então não faz sentido bloquear o processamento por tipo de produto.
+    # O filtro genérico de radiação restrita é usado somente em Em Análise.
+    # Em Retorno Para Estudo existe um filtro próprio e positivo por tipo de
+    # produto, aplicado ainda na fila antes de abrir qualquer requerimento.
     processar_apenas_rr_efetivo = (
         bool(processar_apenas_radiacao_restrita)
         and not fila_retorno
@@ -751,22 +826,23 @@ def executar_fluxo_sch(
 
         requerimentos = list(reversed(requerimentos))
 
-        requerimentos, ignorados_homologacao_26 = (
-            _separar_homologacoes_ano_26(requerimentos)
+        requerimentos, ignorados_homologacao_2026_mais = (
+            _separar_homologacoes_2026_ou_superior(requerimentos)
         )
 
-        if ignorados_homologacao_26:
+        if ignorados_homologacao_2026_mais:
             print(
-                "[SCH] Requerimentos ignorados por homologação com ano 26: "
-                f"{len(ignorados_homologacao_26)}"
+                "[SCH] Requerimentos ignorados por homologação de 2026 ou posterior: "
+                f"{len(ignorados_homologacao_2026_mais)}"
             )
 
-            for item in ignorados_homologacao_26:
+            for item in ignorados_homologacao_2026_mais:
                 print(
                     "[SCH][IGNORADO] "
                     f"Requerimento={_numero_requerimento(item)} | "
                     f"Homologação={item.get('homologacao', '')} | "
-                    "Motivo=ano 26 no bloco central"
+                    f"Motivo=ano {item.get('ano_homologacao', '') or 'não identificado'} "
+                    "no bloco central (2026+)"
                 )
 
         if requerimento_especifico:
@@ -780,10 +856,28 @@ def executar_fluxo_sch(
             ]
 
             if not requerimentos_encontrados:
-                print(
-                    "[SCH][WARN] O requerimento específico não foi "
-                    f"encontrado na fila: {requerimento_especifico}"
+                ignorado_2026 = next(
+                    (
+                        item for item in ignorados_homologacao_2026_mais
+                        if _requerimento_corresponde_ao_alvo(
+                            item, requerimento_especifico
+                        )
+                    ),
+                    None,
                 )
+
+                if ignorado_2026:
+                    print(
+                        "[SCH][IGNORADO] O requerimento específico foi "
+                        "encontrado na fila, mas foi ignorado pela regra de "
+                        "homologação 2026 ou posterior: "
+                        f"{requerimento_especifico}."
+                    )
+                else:
+                    print(
+                        "[SCH][WARN] O requerimento específico não foi "
+                        f"encontrado na fila: {requerimento_especifico}"
+                    )
 
             requerimentos = requerimentos_encontrados
 
@@ -809,7 +903,10 @@ def executar_fluxo_sch(
                     else ""
                 )
 
-                if tipo_produto_nao_avaliado_automaticamente_retorno(
+                # REGRA DO RETORNO PARA ESTUDO:
+                # só entra no requerimento se o tipo estiver na lista positiva
+                # configurada. Qualquer outro tipo é ignorado ainda na fila.
+                if not _tipo_produto_no_escopo_automatico_retorno(
                     tipo_produto
                 ):
                     item = dict(req)
@@ -817,9 +914,10 @@ def executar_fluxo_sch(
                         "tipo_produto_fora_escopo_automatico_retorno"
                     )
                     item["mensagem"] = (
-                        "Requerimento não analisado automaticamente porque o "
-                        "tipo de produto 'Telefone Móvel Celular' está fora "
-                        "do escopo da automação na fila Retorno Para Estudo."
+                        "Requerimento ignorado ainda na fila porque o tipo de "
+                        "produto não pertence à lista de avaliação automática "
+                        "do Retorno Para Estudo. Nenhuma etapa interna do "
+                        "requerimento foi executada."
                     )
                     ignorados_tipo_produto_retorno.append(item)
 
@@ -827,7 +925,7 @@ def executar_fluxo_sch(
                         "[SCH][RETORNO][IGNORADO] "
                         f"Requerimento={_numero_requerimento(item)} | "
                         f"Tipo={tipo_produto or 'não identificado'} | "
-                        "Motivo=tipo de produto fora do escopo automático"
+                        "Motivo=tipo de produto fora da lista positiva do Retorno"
                     )
                     continue
 
@@ -836,7 +934,7 @@ def executar_fluxo_sch(
             requerimentos_processaveis = processaveis_retorno
 
         requerimentos_ignorados = (
-            list(ignorados_homologacao_26)
+            list(ignorados_homologacao_2026_mais)
             + list(requerimentos_ignorados_escopo)
             + list(ignorados_tipo_produto_retorno)
         )
@@ -873,7 +971,17 @@ def executar_fluxo_sch(
         print(f"[SCH] Filtro radiação restrita efetivo: {'sim' if processar_apenas_rr_efetivo else 'não'}")
         print(
             "[SCH] Categorias de anexos configuradas: "
-            f"{', '.join(categorias_anexos_ativas) if categorias_anexos_ativas else 'padrão do sistema'}"
+            + (
+                ", ".join(categorias_anexos_ativas)
+                if categorias_anexos_ativas
+                else "nenhuma"
+                if modo_download_anexos == "nenhuma"
+                else "padrão do sistema"
+            )
+        )
+        print(
+            "[SCH] Download de anexos: "
+            f"{'habilitado' if baixar_anexos_habilitado else 'desabilitado (Nenhuma)'}"
         )
 
         caminho_manifesto = salvar_manifesto_requerimentos(
@@ -958,6 +1066,8 @@ def executar_fluxo_sch(
                 ),
                 "escopo_normativo": _dados_normativos_retorno_para_estudo() if fila_retorno else _dados_normativos_radiacao_restrita(),
                 "categorias_anexos_configuradas": categorias_anexos_ativas,
+                "modo_download_anexos": modo_download_anexos,
+                "download_anexos_habilitado": bool(baixar_anexos_habilitado),
                 "preenchimento_sch": {
                     "minuta": False,
                     "minuta_habilitada": True if fila_retorno else bool(preencher_minuta),
@@ -1059,17 +1169,25 @@ def executar_fluxo_sch(
                     resumo["nome_comercial_sch"] = req.get("nome_comercial", "")
                     resumo["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
 
-                clicar_aba_anexos(driver, wait)
+                if baixar_anexos_habilitado:
+                    clicar_aba_anexos(driver, wait)
 
-                anexos_baixados = baixar_todos_os_anexos_de_todas_as_categorias(
-                    driver=driver,
-                    wait=wait,
-                    req=req,
-                    pasta_saida=pasta_req,
-                    pasta_download=pasta_download,
-                    regras=regras,
-                )
-                resumo["anexos_baixados"] = anexos_baixados or []
+                    anexos_baixados = baixar_todos_os_anexos_de_todas_as_categorias(
+                        driver=driver,
+                        wait=wait,
+                        req=req,
+                        pasta_saida=pasta_req,
+                        pasta_download=pasta_download,
+                        regras=regras,
+                    )
+                    resumo["anexos_baixados"] = anexos_baixados or []
+                else:
+                    anexos_baixados = []
+                    resumo["anexos_baixados"] = []
+                    print(
+                        "[SCH] Download de anexos não executado: "
+                        "opção 'Nenhuma' selecionada."
+                    )
 
                 pdf_cct = localizar_pdf_cct_do_requerimento(pasta_req, regras)
                 resumo["pdf_cct"] = str(pdf_cct) if pdf_cct else ""
@@ -1234,7 +1352,7 @@ def executar_fluxo_sch(
                             "[SCH][RETORNO] Pós-processamento não executado. "
                             f"Status={status_retorno_inicial or 'não informado'} | "
                             "Corrigir Minuta=NÃO | "
-                            "Registro em Acompanhar Processo=NÃO | "
+                            "Registro em Informações Adicionais=NÃO | "
                             "Aprovação=NÃO"
                         )
 
@@ -1448,34 +1566,29 @@ def executar_fluxo_sch(
                             )
 
                     # ======================================================
-                    # REGISTRO DA ANÁLISE EM ACOMPANHAR PROCESSO
+                    # REGISTRO DA ANÁLISE EM INFORMAÇÕES ADICIONAIS
                     #
-                    # A frase indica que o processo FOI AVALIADO pela automação.
-                    # Portanto, ela deve ser registrada sempre que:
-                    # - Comparar Versões foi concluído com análise válida; e
-                    # - a tela original do requerimento foi restaurada.
-                    #
-                    # Isso independe de:
-                    # - o resultado ser apto ou revisão manual;
-                    # - a aprovação automática estar habilitada no terminal.
-                    #
-                    # A confirmação da frase continua sendo obrigatória antes
-                    # de uma APROVAÇÃO AUTOMÁTICA.
+                    # A frase deve ser registrada SOMENTE no caminho de
+                    # aprovação automática, imediatamente antes do envio.
+                    # Requerimentos destinados à revisão manual não recebem
+                    # essa marcação. Se o salvamento não for confirmado, a
+                    # aprovação automática é bloqueada.
                     # ======================================================
                     marcacao_deve_registrar = bool(
-                        comparacao_concluida
+                        executar_envio_retorno_para_estudo
+                        and comparacao_concluida
                         and restauracao_requerimento.get("restaurado")
+                        and retorno_estudo.get("deve_enviar_para_aprovacao")
                     )
 
                     marcacao_obrigatoria_para_envio = bool(
-                        executar_envio_retorno_para_estudo
-                        and retorno_estudo.get("deve_enviar_para_aprovacao")
+                        marcacao_deve_registrar
                     )
 
                     if marcacao_deve_registrar:
                         print(
                             "[SCH][RETORNO] Registrando avaliação da automação "
-                            "em Acompanhar Processo..."
+                            "em Informações Adicionais antes da aprovação..."
                         )
 
                         marcacao_automacao = (
@@ -1495,24 +1608,44 @@ def executar_fluxo_sch(
                             )
                         )
                     else:
-                        motivo_marcacao = (
-                            "tela original do requerimento não restaurada"
-                            if not restauracao_requerimento.get("restaurado")
-                            else "Comparar Versões não concluiu uma análise válida"
-                        )
+                        if not executar_envio_retorno_para_estudo:
+                            motivo_marcacao = (
+                                "aprovação automática desabilitada nesta execução"
+                            )
+                            status_marcacao = (
+                                "nao_executada_aprovacao_automatica_desabilitada"
+                            )
+                        elif not comparacao_concluida:
+                            motivo_marcacao = (
+                                "Comparar Versões não concluiu uma análise válida"
+                            )
+                            status_marcacao = "nao_executada_comparacao_invalida"
+                        elif not restauracao_requerimento.get("restaurado"):
+                            motivo_marcacao = (
+                                "tela original do requerimento não restaurada"
+                            )
+                            status_marcacao = "nao_executada_tela_nao_restaurada"
+                        elif not retorno_estudo.get("deve_enviar_para_aprovacao"):
+                            motivo_marcacao = (
+                                "requerimento não está no caminho de aprovação automática"
+                            )
+                            status_marcacao = "nao_executada_revisao_manual"
+                        else:
+                            motivo_marcacao = "condição de registro não atendida"
+                            status_marcacao = "nao_executada_sem_condicao_segura"
 
                         marcacao_automacao = {
                             "exigida": False,
                             "preenchida": False,
                             "salva": False,
                             "confirmada_apos_salvar": False,
-                            "status": "nao_executada_sem_condicao_segura",
+                            "status": status_marcacao,
                             "motivo": motivo_marcacao,
                         }
 
                         print(
-                            "[SCH][RETORNO] Acompanhar Processo: "
-                            f"NÃO EXECUTADO — {motivo_marcacao}."
+                            "[SCH][RETORNO] Informações Adicionais: "
+                            f"marcação NÃO EXECUTADA — {motivo_marcacao}."
                         )
 
                     retorno_estudo[
@@ -1527,6 +1660,17 @@ def executar_fluxo_sch(
                         )
                     )
 
+                    # Novas chaves com o nome correto do campo.
+                    retorno_estudo[
+                        "registro_automacao_informacoes_adicionais_executado"
+                    ] = bool(marcacao_deve_registrar)
+
+                    retorno_estudo[
+                        "registro_automacao_informacoes_adicionais_confirmado"
+                    ] = bool(marcacao_confirmada)
+
+                    # Mantém aliases antigos para não quebrar relatórios que ainda
+                    # leem as chaves históricas de Acompanhar Processo.
                     retorno_estudo[
                         "registro_automacao_acompanhar_processo_executado"
                     ] = bool(marcacao_deve_registrar)
@@ -1540,14 +1684,11 @@ def executar_fluxo_sch(
                         and not marcacao_confirmada
                     ):
                         retorno_estudo.setdefault("alertas", []).append(
-                            "A análise foi concluída, mas não foi possível "
-                            "salvar e confirmar a frase de registro no campo "
-                            "Acompanhar Processo."
+                            "O requerimento estava apto à aprovação automática, "
+                            "mas não foi possível salvar e confirmar a frase de "
+                            "registro em Informações Adicionais."
                         )
 
-                    # Se a aprovação automática estiver efetivamente habilitada
-                    # e o requerimento estiver apto, a frase é condição
-                    # obrigatória para permitir o envio.
                     if (
                         marcacao_obrigatoria_para_envio
                         and not marcacao_confirmada
@@ -1556,7 +1697,7 @@ def executar_fluxo_sch(
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["acao_recomendada"] = (
                             "Não enviar para aprovação / Revisar registro em "
-                            "Acompanhar Processo"
+                            "Informações Adicionais"
                         )
                         retorno_estudo["status_comparacao"] = (
                             "bloqueado_por_falha_na_marcacao_da_automacao"
@@ -1564,7 +1705,7 @@ def executar_fluxo_sch(
                         retorno_estudo.setdefault("alertas", []).append(
                             "A aprovação automática foi bloqueada porque a frase "
                             "de registro da análise por automação não foi salva e "
-                            "confirmada no campo Acompanhar Processo."
+                            "confirmada em Informações Adicionais."
                         )
 
                     # A análise já encerrou a tela Comparar Versões. Agora o envio
@@ -1692,7 +1833,7 @@ def executar_fluxo_sch(
                         f"Resultado={retorno_estudo.get('status_comparacao')} | "
                         f"Comparar Versões={'SIM' if retorno_estudo.get('comparacao_executada') else 'NÃO'} | "
                         f"Tratamento da minuta={'SIM' if tratamento_confirmado else 'NÃO'} | "
-                        f"Registro em Acompanhar Processo="
+                        f"Registro em Informações Adicionais="
                         f"{'SIM' if marcacao_automacao.get('confirmada_apos_salvar') else 'NÃO'} | "
                         f"Ação={retorno_estudo.get('acao_recomendada')}"
                     )

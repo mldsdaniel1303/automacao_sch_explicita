@@ -1398,6 +1398,29 @@ def _html_documentos_validacao_retorno(itens, vazio="Nenhum."):
 
 
 
+def _rotulo_marcacao_campo_retorno(marcacao, chave):
+    """Mostra N/A quando a etapa de marcação não chegou a ser executada."""
+    marcacao = marcacao or {}
+    status = str(marcacao.get("status") or "").strip().lower()
+
+    executada = bool(
+        marcacao.get("exigida")
+        or marcacao.get("preenchida")
+        or marcacao.get("salva")
+        or marcacao.get("confirmada_apos_salvar")
+        or (
+            status
+            and not status.startswith("nao_executada")
+            and not status.startswith("não_executada")
+        )
+    )
+
+    if not executada:
+        return "NÃO APLICÁVEL / NÃO EXECUTADO"
+
+    return _sim_nao_retorno(marcacao.get(chave))
+
+
 def _html_tipos_re_informacoes_adicionais_retorno(analise):
     analise = analise or {}
 
@@ -1405,48 +1428,71 @@ def _html_tipos_re_informacoes_adicionais_retorno(analise):
     tipos_detectados = analise.get("tipos_detectados", []) or []
     tipos_nao_permitidos = analise.get("tipos_nao_permitidos", []) or []
     nomes_permitidos = analise.get("nomes_permitidos_esperados", []) or []
+    combinacao_ok = analise.get("combinacao_ok") is True
+    combinacao_detectada = str(analise.get("combinacao_detectada") or "").strip()
+    motivo_combinacao = str(analise.get("motivo_combinacao") or "").strip()
 
     numeros_txt = ", ".join(str(n) for n in numeros_detectados) or "Nenhum número identificado"
-    permitidos_txt = "; ".join(str(n) for n in nomes_permitidos) or "1, 5, 6, 10 e 12"
+    permitidos_codigos = analise.get("permitidos_esperados", []) or []
+    permitidos_txt = (
+        "; ".join(str(n) for n in nomes_permitidos)
+        or ", ".join(str(n) for n in permitidos_codigos)
+        or "Não informado pela análise"
+    )
 
-    classe = "alerta" if tipos_nao_permitidos else "ok"
+    classe = "ok" if combinacao_ok and not tipos_nao_permitidos else "alerta"
 
     linhas = [
         "<h3>Cruzamento com Informações Adicionais</h3>",
         f"<div class='{classe}'>",
         "<p><b>Números de tipo RE detectados:</b> " + escape(numeros_txt) + "</p>",
-        "<p><b>Tipos aceitos neste fluxo:</b> " + escape(permitidos_txt) + "</p>",
-        "<p><b>Existe número fora do escopo?</b> " + _sim_nao_retorno(bool(tipos_nao_permitidos)) + "</p>",
+        "<p><b>Combinação detectada:</b> " + escape(combinacao_detectada or "Não identificada") + "</p>",
+        "<p><b>Combinação prevista no escopo automático?</b> " + _sim_nao_retorno(combinacao_ok) + "</p>",
+        "<p><b>Motivo da validação da combinação:</b> " + escape(motivo_combinacao or "Não informado") + "</p>",
+        "<p><b>Tipos/combinações aceitos neste fluxo:</b> " + escape(permitidos_txt) + "</p>",
+        "<p><b>Existe número individual fora do escopo?</b> " + _sim_nao_retorno(bool(tipos_nao_permitidos)) + "</p>",
         "</div>",
     ]
 
     if tipos_detectados:
         linhas.append(
-            "<table>"
-            "<thead><tr><th>Número</th><th>Tipo identificado</th><th>Permitido?</th></tr></thead>"
-            "<tbody>"
+            "<table><thead><tr><th>Número</th><th>Tipo identificado</th><th>Permitido nesta combinação?</th></tr></thead><tbody>"
         )
-
         for item in tipos_detectados:
-            numero = item.get("numero", "")
-            nome = item.get("nome", "")
-            permitido = item.get("permitido", False)
             linhas.append(
                 "<tr>"
-                f"<td>{escape(str(numero))}</td>"
-                f"<td>{escape(str(nome))}</td>"
-                f"<td>{_sim_nao_retorno(permitido)}</td>"
+                f"<td>{escape(str(item.get('numero','')))}</td>"
+                f"<td>{escape(str(item.get('nome','')))}</td>"
+                f"<td>{_sim_nao_retorno(item.get('permitido',False))}</td>"
                 "</tr>"
             )
-
         linhas.append("</tbody></table>")
     else:
         linhas.append(
-            "<p class='muted'>Nenhum número de tipo RE foi identificado na aba Informações Adicionais. "
-            "Nesse caso, a automação mantém a validação padrão de manutenção tácita.</p>"
+            "<p class='muted'>Nenhum número de tipo RE foi identificado com segurança "
+            "na Justificativa do OCD em Informações Adicionais. O relatório não presume "
+            "automaticamente o tipo 6.</p>"
         )
 
     return "".join(linhas)
+
+
+
+
+def _tipos_aceitos_retorno_txt(retorno):
+    retorno = retorno or {}
+    analise = retorno.get("analise_numeros_informacoes_adicionais") or {}
+
+    nomes = analise.get("nomes_permitidos_esperados", []) or []
+    codigos = analise.get("permitidos_esperados", []) or []
+
+    if nomes:
+        return "; ".join(str(item) for item in nomes)
+
+    if codigos:
+        return ", ".join(str(item) for item in codigos)
+
+    return "Não informado pela análise"
 
 
 def _descricao_tipos_re_retorno(retorno):
@@ -1477,7 +1523,7 @@ def _descricao_tipos_re_retorno(retorno):
     return (
         retorno.get("descricao_tipo_re")
         or retorno.get("tipo_re")
-        or "6. Manutenção tácita"
+        or "Não identificado"
     )
 
 
@@ -1614,6 +1660,7 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Confiança da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('confianca_remocao') or 'Não informada'))}</td></tr>
                 <tr><td>Método da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('metodo_remocao') or 'Não informado'))}</td></tr>
                 <tr><td>Tabelas dos dois lados localizadas?</td><td>{_sim_nao_retorno(tempos_comparar.get('captura_completa'))}</td></tr>
+                <tr><td>Captura documental segura para decisão automática?</td><td>{_sim_nao_retorno(retorno.get('captura_documental_segura'))}</td></tr>
                 <tr><td>Tempo do Comparar Versões</td><td>{escape(str(tempos_comparar.get('total_segundos', 'Não informado')))} segundo(s)</td></tr>
                 <tr><td>Marcação da automação exigida?</td><td>{_sim_nao_retorno(marcacao_automacao.get('exigida'))}</td></tr>
                 <tr><td>Marcação salva e confirmada?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva') and marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
@@ -1638,10 +1685,12 @@ def _html_retorno_para_estudo_bloco(resultado):
             <b>não houver alteração em Dados Técnicos do Produto</b>,
             <b>houver documento novo anexado</b>,
             <b>não houver documento removido confirmado nem diferença documental inconclusiva</b>,
+            <b>a Relação de Arquivos Anexos tiver sido capturada com segurança dos dois lados</b>,
             <b>os documentos obrigatórios do(s) tipo(s) RE citado(s) forem identificados</b>,
             a aba <b>Informações Adicionais</b> não citar número de análise fora do escopo
             permitido e, quando houver aprovação automática, a marcação da análise por
-            automação for salva e confirmada. Tipos aceitos neste fluxo: <b>1, 5, 6, 10 e 12</b>.
+            automação for salva e confirmada. Tipos/combinações aceitos informados pela análise:
+            <b>{escape(_tipos_aceitos_retorno_txt(retorno))}</b>.
             A alteração de Unidade Fabril é registrada no relatório para conferência.
         </p>
 
@@ -1686,20 +1735,20 @@ def _html_retorno_para_estudo_bloco(resultado):
             "Nenhuma diferença documental inconclusiva identificada.",
         )}
 
-        <h3>Registro da análise por automação - Acompanhar Processo</h3>
+        <h3>Registro da análise por automação - Informações Adicionais &gt; Acompanhar Processo</h3>
         <table>
             <thead><tr><th>Item</th><th>Valor</th></tr></thead>
             <tbody>
                 <tr><td>Status</td><td>{escape(str(marcacao_automacao.get('status') or 'Não exigida/não executada'))}</td></tr>
                 <tr><td>Campo de destino</td><td>{escape(str(marcacao_automacao.get('campo_destino') or 'Acompanhar Processo'))}</td></tr>
-                <tr><td>Justificativa do OCD preservada?</td><td>{_sim_nao_retorno(marcacao_automacao.get('justificativa_preservada'))}</td></tr>
-                <tr><td>Justificativa capturada antes do registro?</td><td>{_sim_nao_retorno(marcacao_automacao.get('texto_original_capturado_antes_do_registro'))}</td></tr>
-                <tr><td>Tipo RE analisado antes do registro?</td><td>{_sim_nao_retorno(marcacao_automacao.get('tipo_re_analisado_antes_do_registro'))}</td></tr>
-                <tr><td>Desejo acompanhar este processo marcado?</td><td>{_sim_nao_retorno(marcacao_automacao.get('acompanhar_processo_marcado'))}</td></tr>
-                <tr><td>Conteúdo anterior de Acompanhar Processo</td><td>{escape(str(marcacao_automacao.get('conteudo_anterior') or 'Vazio/não informado'))}</td></tr>
+                <tr><td>Justificativa do OCD preservada?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'justificativa_preservada')}</td></tr>
+                <tr><td>Justificativa capturada antes do registro?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'texto_original_capturado_antes_do_registro')}</td></tr>
+                <tr><td>Tipo RE analisado antes do registro?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'tipo_re_analisado_antes_do_registro')}</td></tr>
+                <tr><td>Desejo acompanhar este processo marcado?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'acompanhar_processo_marcado')}</td></tr>
+                <tr><td>Conteúdo anterior do campo Acompanhar Processo</td><td>{escape(str(marcacao_automacao.get('conteudo_anterior') or 'Vazio/não informado'))}</td></tr>
                 <tr><td>Frase registrada</td><td>{escape(str(marcacao_automacao.get('frase') or 'Não informada'))}</td></tr>
-                <tr><td>Salva?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva'))}</td></tr>
-                <tr><td>Confirmada após salvar?</td><td>{_sim_nao_retorno(marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
+                <tr><td>Salva?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'salva')}</td></tr>
+                <tr><td>Confirmada após salvar?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'confirmada_apos_salvar')}</td></tr>
             </tbody>
         </table>
 
@@ -1960,6 +2009,16 @@ def _motivo_principal_retorno(resultado):
         return f"Erro: {_texto_curto_resumo_retorno(erro, 160)}"
 
     if not _comparacao_retorno_executada(retorno):
+        analise_re = retorno.get("analise_numeros_informacoes_adicionais") or {}
+        if analise_re and analise_re.get("combinacao_ok") is False:
+            combinacao = str(analise_re.get("combinacao_detectada") or "").strip()
+            motivo_combo = str(analise_re.get("motivo_combinacao") or "").strip()
+            if motivo_combo == "nenhum_tipo_re_identificado":
+                return "Tipo RE não identificado com segurança"
+            if combinacao:
+                return f"Combinação RE não prevista: {combinacao}"
+            return "Combinação RE não prevista no escopo automático"
+
         if _bool_resumo_retorno(
             retorno.get("info_adicionais_tem_numero_nao_permitido")
         ):
@@ -1975,6 +2034,9 @@ def _motivo_principal_retorno(resultado):
             return "Comparar Versões não executado: " + status
 
         return "Comparar Versões não executado"
+
+    if retorno.get("captura_documental_segura") is False:
+        return "Captura documental incompleta; aprovação automática bloqueada"
 
     if _bool_resumo_retorno(retorno.get("produto_alterado")):
         return "Produto alterado"
@@ -2202,7 +2264,13 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
 
 
 
-def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_execucao, fim_execucao):
+def _html_consolidado_retorno_para_estudo(
+    resultados,
+    versao_script,
+    inicio_execucao,
+    fim_execucao,
+    ignorados_fora_escopo=None,
+):
     """
     Gera o relatório consolidado da fila Retorno Para Estudo.
 
@@ -2216,6 +2284,7 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
     from html import escape
 
     resultados = resultados or []
+    ignorados_fora_escopo = ignorados_fora_escopo or []
 
     def _safe_txt(valor):
         return escape(str(valor or ""))
@@ -2393,6 +2462,16 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
             return f"Erro: {str(erro)[:180]}"
 
         if not _comparacao_retorno_executada(retorno):
+            analise_re = retorno.get("analise_numeros_informacoes_adicionais") or {}
+            if analise_re and analise_re.get("combinacao_ok") is False:
+                combinacao = str(analise_re.get("combinacao_detectada") or "").strip()
+                motivo_combo = str(analise_re.get("motivo_combinacao") or "").strip()
+                if motivo_combo == "nenhum_tipo_re_identificado":
+                    return "Tipo RE não identificado com segurança"
+                if combinacao:
+                    return "Combinação RE não prevista: " + combinacao
+                return "Combinação RE não prevista no escopo automático"
+
             if _bool(
                 retorno.get("info_adicionais_tem_numero_nao_permitido")
             ):
@@ -2410,6 +2489,9 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
                 return "Comparar Versões não executado: " + status
 
             return "Comparar Versões não executado"
+
+        if retorno.get("captura_documental_segura") is False:
+            return "Captura documental incompleta; aprovação automática bloqueada"
 
         if _bool(retorno.get("produto_alterado")):
             return "Produto alterado"
@@ -2475,6 +2557,7 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
         return "-"
 
     total = len(resultados)
+    qtd_ignorados_fora_escopo = len(ignorados_fora_escopo)
     qtd_aprovado = 0
     qtd_apto = 0
     qtd_revisar = 0
@@ -2537,6 +2620,36 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
             f"<td>{_safe_txt(_numeros_re(resultado))}</td>"
             f"<td>{_safe_txt(envio_txt)}</td>"
             f"<td>{_safe_txt(_motivo_principal(resultado))}</td>"
+            "</tr>"
+        )
+
+    linhas_ignorados = []
+
+    for idx, item in enumerate(ignorados_fora_escopo, start=1):
+        item = item if isinstance(item, dict) else {"requerimento": str(item)}
+
+        requerimento = item.get("requerimento", "") or "Não identificado"
+        tipo_produto = item.get("tipo_produto", "") or "Não identificado"
+        homologacao = item.get("homologacao", "") or "Não informada"
+        motivo = item.get("motivo", "") or "fora_do_escopo"
+        mensagem = item.get("mensagem", "") or ""
+
+        motivo_humano = {
+            "tipo_produto_fora_escopo_automatico_retorno": (
+                "Tipo de produto fora da lista de avaliação automática do Retorno Para Estudo"
+            ),
+            "homologacao_2026_ou_superior": "Homologação de 2026 ou posterior",
+            "fora_escopo_radiacao_restrita": "Fora do escopo configurado para esta execução",
+        }.get(motivo, motivo)
+
+        linhas_ignorados.append(
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td><b>{_safe_txt(requerimento)}</b></td>"
+            f"<td>{_safe_txt(tipo_produto)}</td>"
+            f"<td>{_safe_txt(homologacao)}</td>"
+            f"<td>{_safe_txt(motivo_humano)}</td>"
+            f"<td>{_safe_txt(mensagem)}</td>"
             "</tr>"
         )
 
@@ -2610,7 +2723,7 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
 
         .kpis {{
             display: grid;
-            grid-template-columns: repeat(6, minmax(140px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 12px;
             margin: 16px 0 22px 0;
         }}
@@ -2749,9 +2862,14 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
                 <div class="numero">{qtd_erro}</div>
                 <div class="rotulo">Erros de análise</div>
             </div>
+
+            <div class="kpi">
+                <div class="numero">{qtd_ignorados_fora_escopo}</div>
+                <div class="rotulo">Ignorados antes da análise</div>
+            </div>
         </div>
 
-        <h3>Resultado por requerimento</h3>
+        <h3>Resultado por requerimento analisado</h3>
 
         <table>
             <thead>
@@ -2775,6 +2893,22 @@ def _html_consolidado_retorno_para_estudo(resultados, versao_script, inicio_exec
                 {''.join(linhas_resumo)}
             </tbody>
         </table>
+
+        <h3>Requerimentos ignorados antes da análise automática</h3>
+
+        {
+            (
+                "<table>"
+                "<thead><tr>"
+                "<th>#</th><th>Requerimento</th><th>Tipo do produto</th>"
+                "<th>Homologação</th><th>Motivo</th><th>Detalhe</th>"
+                "</tr></thead><tbody>"
+                + "".join(linhas_ignorados)
+                + "</tbody></table>"
+            )
+            if linhas_ignorados
+            else "<div class='ok'>Nenhum requerimento foi ignorado antes da análise automática.</div>"
+        }
 
         <div class="observacao">
             A aprovação automática depende dos critérios configurados para Retorno Para Estudo:
@@ -2864,13 +2998,38 @@ def _html_requerimento(resultado):
     </html>
     """
 
-def _html_consolidado(resultados, versao_script, inicio_execucao, fim_execucao):
-    if resultados and all(_resultado_eh_retorno_para_estudo(r) for r in resultados):
+def _html_consolidado(
+    resultados,
+    versao_script,
+    inicio_execucao,
+    fim_execucao,
+    ignorados_fora_escopo=None,
+):
+    ignorados_fora_escopo = ignorados_fora_escopo or []
+
+    retorno_pelos_resultados = bool(
+        resultados
+        and all(_resultado_eh_retorno_para_estudo(r) for r in resultados)
+    )
+    retorno_pelos_ignorados = bool(
+        ignorados_fora_escopo
+        and all(
+            "retorno" in str(
+                (item or {}).get("fila_sch", "")
+                if isinstance(item, dict)
+                else ""
+            ).lower()
+            for item in ignorados_fora_escopo
+        )
+    )
+
+    if retorno_pelos_resultados or (not resultados and retorno_pelos_ignorados):
         return _html_consolidado_retorno_para_estudo(
             resultados=resultados,
             versao_script=versao_script,
             inicio_execucao=inicio_execucao,
             fim_execucao=fim_execucao,
+            ignorados_fora_escopo=ignorados_fora_escopo,
         )
 
     total = len(resultados)
@@ -2966,7 +3125,14 @@ def _salvar_texto(caminho, conteudo):
     caminho.write_text(conteudo, encoding="utf-8")
 
 
-def gerar_req_report(pasta_saida, resultados, versao_script, inicio_execucao, fim_execucao):
+def gerar_req_report(
+    pasta_saida,
+    resultados,
+    versao_script,
+    inicio_execucao,
+    fim_execucao,
+    ignorados_fora_escopo=None,
+):
     pasta_saida = Path(pasta_saida)
     pasta_req_report = pasta_saida / "req_report"
     pasta_req_report.mkdir(parents=True, exist_ok=True)
@@ -2976,6 +3142,7 @@ def gerar_req_report(pasta_saida, resultados, versao_script, inicio_execucao, fi
         versao_script=versao_script,
         inicio_execucao=inicio_execucao,
         fim_execucao=fim_execucao,
+        ignorados_fora_escopo=ignorados_fora_escopo,
     )
     _salvar_texto(pasta_req_report / "relatorio_execucao.html", html_consolidado)
 

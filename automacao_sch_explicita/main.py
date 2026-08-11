@@ -259,12 +259,13 @@ def escolher_categorias_anexos():
     print("1. Todas as categorias")
     print("2. Somente CCT e RACT")
     print("3. Escolher categorias manualmente")
+    print("4. Não baixar nenhum documento")
     print("0. Voltar")
 
     while True:
         opcao = perguntar_opcao(
-            "\nOpção [0-3]: ",
-            {"0", "1", "2", "3"},
+            "\nOpção [0-4]: ",
+            {"0", "1", "2", "3", "4"},
         )
 
         if opcao == "0":
@@ -282,6 +283,13 @@ def escolher_categorias_anexos():
             ]
             descricao = "Somente CCT e RACT"
             break
+
+        if opcao == "4":
+            return {
+                "categorias_anexos": [],
+                "descricao_categorias": "Nenhum documento",
+                "pausar_antes_anexos": False,
+            }
 
         print("\nCategorias disponíveis:")
 
@@ -592,8 +600,11 @@ def exibir_resumo_fluxo_completo(opcoes):
     titulo_secao("DOCUMENTOS")
     print(f"Seleção: {opcoes['descricao_categorias']}")
 
-    for categoria in opcoes["categorias_anexos"]:
-        print(f"- {categoria}")
+    if opcoes["categorias_anexos"]:
+        for categoria in opcoes["categorias_anexos"]:
+            print(f"- {categoria}")
+    else:
+        print("- Nenhum documento será baixado")
 
     print(
         "Pausa antes dos documentos: "
