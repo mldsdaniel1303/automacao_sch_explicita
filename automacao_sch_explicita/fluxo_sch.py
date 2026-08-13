@@ -41,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.6.6"
+VERSAO_SCRIPT = "0.8.7.0"
 
 
 def _normalizar_texto(valor):
@@ -139,13 +139,14 @@ def _dados_normativos_retorno_para_estudo():
     return {
         "tipo_fluxo": "Retorno Para Estudo",
         "objetivo": (
-            "Comparar a versão anterior e a nova versão do requerimento, "
-            "identificando alterações em Dados Técnicos, Especificações Complementares "
-            "e na relação de documentos anexados."
+            "Comparar a versão anterior e a nova versão do requerimento uma única vez "
+            "e avaliar separadamente cada tipo RE identificado na Justificativa do OCD."
         ),
         "regra_decisao": [
-            "Sem alteração técnica relevante e somente documentos adicionados: Enviar para aprovação.",
-            "Alteração em Dados Técnicos, Especificações Complementares, documentos removidos ou caso inconclusivo: Revisar manualmente.",
+            "Os RE 1, 5, 6, 10, 11 e 12 possuem analisadores individuais.",
+            "Quando houver múltiplos RE, cada número é julgado por sua própria regra; não existem combos fixos.",
+            "A validação documental considera somente documentos incluídos e as exigências próprias de cada RE.",
+            "O requerimento só pode seguir automaticamente quando todas as análises individuais estiverem aptas.",
         ],
     }
 
@@ -1226,6 +1227,9 @@ def executar_fluxo_sch(
                     ).strip()
 
                     comparacao_concluida = status_retorno_inicial in {
+                        "analises_re_individuais_aptas",
+                        "analises_re_individuais_nao_aptas",
+                        # Compatibilidade com resultados antigos.
                         "manutencao_tacita_apta",
                         "manutencao_tacita_nao_apta",
                     }
@@ -1296,7 +1300,6 @@ def executar_fluxo_sch(
                             "unidade_fabril_alterada",
                             "documentos_novos_detectados",
                             "documentos_obrigatorios_ok",
-                            "documentos_removidos_detectados",
                         ):
                             retorno_estudo[campo_nao_analisado] = None
 

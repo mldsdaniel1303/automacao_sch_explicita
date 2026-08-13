@@ -13509,19 +13509,19 @@ def _mapa_tipos_re_informacoes_adicionais():
 
 def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
     """
-    Escopo atual:
-    1, 5, 6, 10, 12, 6+11 e 6+12.
+    Identifica os tipos de análise RE solicitados pelo OCD.
 
-    Regras de identificação:
-    - Prioriza números RE explicitamente escritos, por exemplo:
-      "6. Manutenção tácita" ou "11. Troca de OCD".
-    - Quando o OCD escrever explicitamente "Manutenção Tácita" sem o
-      prefixo "6.", a expressão textual inequívoca é aceita como RE 6.
-    - Não presume RE 6 para justificativas genéricas sem essa expressão.
-    - Não aceita combinações arbitrárias como 6+10+12.
+    Arquitetura do Retorno Para Estudo:
+    - 1, 5, 6, 10, 11 e 12 possuem analisadores individuais.
+    - Não existe whitelist de combinações. Se o texto trouxer 6 + 10 + 12,
+      os três números são aceitos e cada um será julgado separadamente.
+    - Um número fora desse conjunto bloqueia a automação antes de Comparar Versões.
+    - "Manutenção Tácita" escrita sem o prefixo "6." continua sendo aceita
+      como RE 6 quando a expressão for inequívoca e não estiver negada.
     """
     texto = str(texto_info or "")
     mapa = _mapa_tipos_re_informacoes_adicionais()
+    tipos_com_analisador = {"1", "5", "6", "10", "11", "12"}
 
     texto_limpo = re.sub(
         r"\s+",
@@ -13538,27 +13538,16 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
     )
 
     numeros = []
-
     for m_num in padrao.finditer(texto_limpo):
         numero = str(m_num.group(1)).strip()
         if numero not in numeros:
             numeros.append(numero)
 
-    # --------------------------------------------------------------
-    # Fallback textual SEGURO para Manutenção Tácita = RE 6
-    # --------------------------------------------------------------
-    # Alguns OCDs registram apenas:
-    #   "Manutenção Tácita."
-    #   "Manutenção Tácita, sem alteração no produto."
-    #
-    # Nesses casos, a descrição é inequívoca e deve ser tratada como RE 6.
-    # Não há inferência quando a expressão não estiver literalmente presente.
     texto_norm = _normalizar_texto_retorno(texto_limpo)
 
     manutencao_tacita_explicita = bool(
         re.search(r"\bmanutencao\s+tacita\b", texto_norm)
     )
-
     manutencao_tacita_negada = bool(
         re.search(
             r"\b(?:nao|sem)\s+(?:se\s+trata\s+de\s+)?manutencao\s+tacita\b",
@@ -13567,7 +13556,6 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
     )
 
     numeros_inferidos_por_texto = []
-
     if (
         manutencao_tacita_explicita
         and not manutencao_tacita_negada
@@ -13576,56 +13564,41 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
         numeros.append("6")
         numeros_inferidos_por_texto.append("6")
 
-    # Mantém ordem canônica para combinações e relatórios.
     numeros = sorted(
         list(dict.fromkeys(numeros)),
         key=lambda valor: int(valor),
     )
 
-    conjunto = frozenset(numeros)
-
-    combinacoes_permitidas = {
-        frozenset({"1"}),
-        frozenset({"5"}),
-        frozenset({"6"}),
-        frozenset({"10"}),
-        frozenset({"12"}),
-        frozenset({"6", "11"}),
-        frozenset({"6", "12"}),
-    }
-
-    numeros_conhecidos = {
-        "1", "5", "6", "10", "11", "12",
-    }
-
+    numeros_permitidos = [
+        n for n in numeros
+        if n in tipos_com_analisador
+    ]
     numeros_nao_permitidos = [
-        n
-        for n in numeros
-        if n not in numeros_conhecidos
+        n for n in numeros
+        if n not in tipos_com_analisador
     ]
 
-    combinacao_ok = (
-        bool(numeros)
-        and conjunto in combinacoes_permitidas
+    analise_individual_ok = bool(
+        numeros
+        and not numeros_nao_permitidos
+        and len(numeros_permitidos) == len(numeros)
     )
 
     def tipo(n, permitido=None):
         if permitido is None:
-            permitido = (
-                combinacao_ok
-                and n not in numeros_nao_permitidos
-            )
+            permitido = n in tipos_com_analisador
 
         return {
             "numero": n,
-            "nome": mapa.get(
-                n,
-                "Tipo de análise não mapeado",
-            ),
+            "nome": mapa.get(n, "Tipo de análise não mapeado"),
             "permitido": bool(permitido),
+            "possui_analisador_individual": bool(n in tipos_com_analisador),
             "inferido_por_texto": n in numeros_inferidos_por_texto,
         }
 
+    # As chaves combinacao_* são mantidas apenas por compatibilidade com
+    # relatórios/JSON anteriores. Agora "combinacao_ok" significa somente que
+    # todos os números detectados possuem analisador individual.
     return {
         "numeros_detectados": numeros,
         "numeros_inferidos_por_texto": numeros_inferidos_por_texto,
@@ -13633,61 +13606,43 @@ def _analisar_numeros_tipo_re_informacoes_adicionais(texto_info):
             manutencao_tacita_explicita
             and not manutencao_tacita_negada
         ),
-        "tipos_detectados": [
-            tipo(n)
-            for n in numeros
-        ],
-        "numeros_permitidos": (
-            numeros
-            if combinacao_ok
-            else []
-        ),
-        "tipos_permitidos": (
-            [tipo(n, True) for n in numeros]
-            if combinacao_ok
-            else []
-        ),
+        "tipos_detectados": [tipo(n) for n in numeros],
+        "numeros_permitidos": numeros_permitidos,
+        "tipos_permitidos": [tipo(n, True) for n in numeros_permitidos],
         "numeros_nao_permitidos": numeros_nao_permitidos,
         "tipos_nao_permitidos": [
-            tipo(n, False)
-            for n in numeros_nao_permitidos
+            tipo(n, False) for n in numeros_nao_permitidos
         ],
-        "tem_numero_nao_permitido": bool(
-            numeros_nao_permitidos
-        ),
-        "combinacao_detectada": (
-            " + ".join(numeros)
-            if numeros
-            else ""
-        ),
-        "combinacao_ok": combinacao_ok,
+        "tem_numero_nao_permitido": bool(numeros_nao_permitidos),
+        "modo_analise": "individual_por_tipo_re",
+        "todos_possuem_analisador_individual": analise_individual_ok,
+        "combinacao_detectada": " + ".join(numeros) if numeros else "",
+        "combinacao_ok": analise_individual_ok,
         "motivo_combinacao": (
-            "combinacao_permitida"
-            if combinacao_ok
+            "todos_tipos_re_possuem_analisador_individual"
+            if analise_individual_ok
             else "nenhum_tipo_re_identificado"
             if not numeros
-            else "combinacao_nao_prevista_no_escopo"
+            else "tipo_re_sem_analisador_individual"
         ),
         "origem_deteccao": (
             "numero_e_descricao_textual"
-            if numeros_inferidos_por_texto and len(numeros) > len(numeros_inferidos_por_texto)
+            if numeros_inferidos_por_texto
+            and len(numeros) > len(numeros_inferidos_por_texto)
             else "descricao_textual_inequivoca"
             if numeros_inferidos_por_texto
             else "numero_re_explicito"
             if numeros
             else "nao_identificado"
         ),
-        "permitidos_esperados": [
-            "1", "5", "6", "10", "12", "6+11", "6+12",
-        ],
+        "permitidos_esperados": ["1", "5", "6", "10", "11", "12"],
         "nomes_permitidos_esperados": [
             "1. Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
             "5. Inclusão/exclusão de modelo de bateria",
             "6. Manutenção tácita",
             "10. Alteração de dados de entidade com atualização do CH",
+            "11. Troca de OCD",
             "12. Recertificação",
-            "6 + 11. Manutenção tácita + Troca de OCD",
-            "6 + 12. Manutenção tácita + Recertificação",
         ],
     }
 
@@ -13740,222 +13695,397 @@ def _regra_doc_retorno(chave, nome, aliases, obrigatorio=True, tipos=None):
 
 def _regras_documentos_por_tipo_re_retorno():
     """
-    Mapa resumido da planilha RE_DOCS para os tipos tratados neste fluxo.
+    Base documental do Retorno Para Estudo por tipo RE.
 
-    Importante:
-    - A automação usa os obrigatórios principais para bloqueio.
-    - Itens marcados como "se aplicável" ficam como condicionais/informativos.
+    Regras gerais:
+    - Cada RE é validado separadamente.
+    - Somente INCLUSÃO de documentos é considerada.
+    - Exclusão/remoção de documentos não participa da decisão, pois o OCD
+      não consegue excluir anexos do processo.
+    - Itens "se aplicável" são condicionais/informativos.
+    - No RE 6/12, "Relatórios de ensaios por falha no processo anterior"
+      NÃO é obrigatório e sua ausência não bloqueia aprovação.
     """
-    base_cct = _regra_doc_retorno(
+
+    def regra(chave, nome, aliases, obrigatorio=True):
+        return _regra_doc_retorno(
+            chave,
+            nome,
+            aliases,
+            obrigatorio=obrigatorio,
+        )
+
+    cct = regra(
         "cct",
         "CCT",
-        ["CCT", "Certificado de Conformidade Técnica", "Certificado de Conformidade Tecnica"],
+        [
+            "CCT",
+            "Certificado de Conformidade Técnica",
+            "Certificado de Conformidade Tecnica",
+        ],
     )
-    base_ract = _regra_doc_retorno(
+    ract = regra(
         "ract",
         "RACT",
-        ["RACT", "Relatório de Avaliação da Conformidade", "Relatorio de Avaliacao da Conformidade"],
+        [
+            "RACT",
+            "Relatório de Avaliação da Conformidade",
+            "Relatorio de Avaliacao da Conformidade",
+        ],
     )
-    base_art = _regra_doc_retorno(
+    art = regra(
         "art",
         "ART",
-        ["ART", "Anotação de Responsabilidade Técnica", "Anotacao de Responsabilidade Tecnica"],
+        [
+            "ART",
+            "Anotação de Responsabilidade Técnica",
+            "Anotacao de Responsabilidade Tecnica",
+        ],
+    )
+
+    iso = regra(
+        "iso_ou_auditoria_ocd",
+        "Cópia da ISO ou relatório de auditoria do OCD",
+        [
+            "ISO",
+            "auditoria",
+            "relatório de auditoria",
+            "relatorio de auditoria",
+            "OCD",
+        ],
+    )
+    traducao = regra(
+        "traducao_juramentada",
+        "Tradução juramentada",
+        [
+            "Tradução juramentada",
+            "Traducao juramentada",
+            "tradução",
+            "traducao",
+        ],
+        obrigatorio=False,
+    )
+    outros = regra(
+        "outros",
+        "Outros",
+        ["Outros", "Outro", "Outros (OCD)"],
+        obrigatorio=False,
+    )
+
+    fotos_externas = regra(
+        "fotos_externas",
+        "Fotos externas com selo Anatel atualizadas",
+        [
+            "Fotos externas",
+            "Foto externa",
+            "Fotos do produto",
+            "Foto do produto",
+            "FOTOS EXTERNAS",
+            "selo anatel",
+        ],
+    )
+    fotos_internas = regra(
+        "fotos_internas",
+        "Fotos internas atualizadas",
+        [
+            "Fotos internas",
+            "Foto interna",
+            "FOTOS INTERNAS",
+            "internas",
+        ],
+    )
+    selo_anatel = regra(
+        "selo_anatel",
+        "Fotos do selo Anatel",
+        [
+            "Selo ANATEL",
+            "Selo Anatel",
+            "foto do selo",
+            "fotos do selo",
+            "selo",
+        ],
+    )
+
+    declaracao_manutencao = regra(
+        "declaracao_manutencao",
+        "Declaração de manutenção",
+        [
+            "Declaração de manutenção",
+            "Declaracao de manutencao",
+            "Decl. de manutenção",
+            "Decl de manutencao",
+            "Declaração manutenção",
+            "Declaracao manutencao",
+            "DECL. DE ALTERAÇÃO",
+            "DECL DE ALTERACAO",
+            "Declaração de alteração",
+            "Declaracao de alteracao",
+            "manutenção",
+            "manutencao",
+            "Maintenance",
+            "Maintenance Declaration",
+            "Declaration of Maintenance",
+            "Maintenance Statement",
+        ],
+    )
+
+    rastreabilidade = regra(
+        "declaracao_rastreabilidade",
+        "Declaração de rastreabilidade",
+        [
+            "Declaração de rastreabilidade",
+            "Declaracao de rastreabilidade",
+            "rastreabilidade",
+            "controle de rast",
+        ],
+        obrigatorio=False,
     )
 
     manutencao_obrigatorios = [
-        base_cct,
-        base_ract,
-        _regra_doc_retorno(
-            "fotos_externas",
-            "Fotos externas com selo Anatel atualizadas",
-            [
-                "Fotos externas",
-                "Foto externa",
-                "Fotos do produto",
-                "Foto do produto",
-                "FOTOS EXTERNAS",
-                "selo anatel",
-            ],
-        ),
-        _regra_doc_retorno(
-            "fotos_internas",
-            "Fotos internas atualizadas",
-            ["Fotos internas", "Foto interna", "FOTOS INTERNAS", "internas"],
-        ),
-        _regra_doc_retorno(
-            "declaracao_manutencao",
-            "Declaração de manutenção",
-            [
-                "Declaração de manutenção",
-                "Declaracao de manutencao",
-                "Decl. de manutenção",
-                "Decl de manutencao",
-                "Declaração manutenção",
-                "Declaracao manutencao",
-                "DECL. DE ALTERAÇÃO",
-                "DECL DE ALTERACAO",
-                "Declaração de alteração",
-                "Declaracao de alteracao",
-                "manutenção",
-                "manutencao",
-                "Maintenance",
-                "Maintenance Declaration",
-                "Declaration of Maintenance",
-                "Maintenance Statement",
-            ],
-        ),
-        base_art,
+        cct,
+        ract,
+        fotos_externas,
+        fotos_internas,
+        declaracao_manutencao,
+        art,
     ]
-
     manutencao_condicionais = [
-        _regra_doc_retorno(
+        regra(
             "iso_ou_auditoria_ocd",
-            "Cópia da ISO ou relatório de auditoria do OCD",
-            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            "Cópia da ISO ou relatório de auditoria do OCD, se aplicável",
+            iso["aliases"],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "traducao_juramentada",
-            "Tradução juramentada",
-            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
-            obrigatorio=False,
-        ),
-        _regra_doc_retorno(
+        traducao,
+        regra(
             "ensaios_seguranca_eletrica",
-            "Relatórios de ensaios de segurança elétrica",
-            ["segurança elétrica", "seguranca eletrica", "ensaio de segurança elétrica", "ensaio de seguranca eletrica"],
+            "Relatórios de ensaios de segurança elétrica, se aplicável",
+            [
+                "segurança elétrica",
+                "seguranca eletrica",
+                "ensaio de segurança elétrica",
+                "ensaio de seguranca eletrica",
+            ],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
+        regra(
             "alteracao_laboratorio",
-            "Alteração de laboratório",
-            ["Alteração de laboratório", "Alteracao de laboratorio", "laboratório", "laboratorio"],
+            "Alteração de laboratório, se aplicável",
+            [
+                "Alteração de laboratório",
+                "Alteracao de laboratorio",
+                "laboratório",
+                "laboratorio",
+            ],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "declaracao_rastreabilidade",
-            "Declaração de rastreabilidade",
-            ["Declaração de rastreabilidade", "Declaracao de rastreabilidade", "rastreabilidade", "controle de rast"],
-            obrigatorio=False,
-        ),
-        _regra_doc_retorno(
-            "outros",
-            "Outros",
-            ["Outros", "Outro", "Outros (OCD)"],
-            obrigatorio=False,
-        ),
+        rastreabilidade,
+        outros,
     ]
 
-    tipo_1_obrigatorios = [base_cct, base_ract, base_art]
+    tipo_1_obrigatorios = [
+        iso,
+        cct,
+        ract,
+        art,
+    ]
     tipo_1_condicionais = [
-        _regra_doc_retorno(
-            "iso_ou_auditoria_ocd",
-            "Cópia da ISO ou relatório de auditoria do OCD",
-            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+        traducao,
+        regra(
+            "declaracao_escopo_iso",
+            "Declaração do organismo sobre o escopo da ISO, se necessária",
+            [
+                "escopo da ISO",
+                "escopo iso",
+                "declaração do organismo",
+                "declaracao do organismo",
+            ],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "traducao_juramentada",
-            "Tradução juramentada",
-            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
-            obrigatorio=False,
-        ),
-        _regra_doc_retorno(
-            "outros",
-            "Outros",
-            ["Outros", "Outro", "Outros (OCD)"],
-            obrigatorio=False,
-        ),
+        outros,
     ]
 
     tipo_5_obrigatorios = [
-        _regra_doc_retorno(
+        regra(
             "fotos_externas",
             "Fotos externas atualizadas",
-            [
-                "Fotos externas",
-                "Foto externa",
-                "Fotos do produto",
-                "Foto do produto",
-                "FOTOS EXTERNAS",
-            ],
+            fotos_externas["aliases"],
         ),
-        base_cct,
-        base_ract,
-        base_art,
+        cct,
+        ract,
+        art,
     ]
-
     tipo_5_condicionais = [
-        _regra_doc_retorno(
+        regra(
             "iso_ou_auditoria_ocd",
             "Cópia da ISO ou relatório de auditoria do OCD, se aplicável",
-            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            iso["aliases"],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "traducao_juramentada",
-            "Tradução juramentada, se aplicável",
-            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
-            obrigatorio=False,
-        ),
-        _regra_doc_retorno(
-            "outros",
-            "Outros",
-            ["Outros", "Outro", "Outros (OCD)"],
-            obrigatorio=False,
-        ),
+        traducao,
+        outros,
     ]
 
-    tipo_10_obrigatorios = [base_cct, base_ract, base_art]
+    tipo_10_obrigatorios = [cct, ract, art]
     tipo_10_condicionais = [
-        _regra_doc_retorno(
+        regra(
             "fotos_externas",
             "Fotos externas atualizadas / fotos do selo, se aplicável",
-            ["Fotos externas", "Foto externa", "Fotos do produto", "Foto do produto", "selo anatel"],
+            fotos_externas["aliases"],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
+        regra(
             "manual_especificacao_tecnica",
             "Manual/especificação técnica, se aplicável",
-            ["Manual", "Manual do Produto", "Especificação Técnica", "Especificacao Tecnica", "ESPECIFICAÇÃO TÉCNICA"],
+            [
+                "Manual",
+                "Manual do Produto",
+                "Especificação Técnica",
+                "Especificacao Tecnica",
+                "ESPECIFICAÇÃO TÉCNICA",
+            ],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
+        regra(
             "declaracao_alteracao_dados_fabricante",
             "Declaração de alteração dos dados do fabricante, se aplicável",
-            ["Declaração de alteração", "Declaracao de alteracao", "DECL. DE ALTERAÇÃO", "alteração dos dados do fabricante"],
+            [
+                "Declaração de alteração",
+                "Declaracao de alteracao",
+                "DECL. DE ALTERAÇÃO",
+                "alteração dos dados do fabricante",
+            ],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
+        regra(
             "contrato_social_atualizado",
             "Contrato social atualizado, se aplicável",
             ["Contrato Social", "contrato social atualizado"],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "carta_representacao_comercial",
-            "Carta de representação comercial, se aplicável",
-            ["Carta de Representação Comercial", "Carta de Representacao Comercial", "representação comercial"],
-            obrigatorio=False,
-        ),
-        _regra_doc_retorno(
+        regra(
             "iso_ou_auditoria_ocd",
             "Cópia da ISO ou relatório de auditoria do OCD, se aplicável",
-            ["ISO", "auditoria", "relatório de auditoria", "relatorio de auditoria", "OCD"],
+            iso["aliases"],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "traducao_juramentada",
-            "Tradução juramentada, se aplicável",
-            ["Tradução juramentada", "Traducao juramentada", "tradução", "traducao"],
+        traducao,
+        regra(
+            "carta_representacao_comercial",
+            "Carta de representação comercial, se aplicável",
+            [
+                "Carta de Representação Comercial",
+                "Carta de Representacao Comercial",
+                "representação comercial",
+            ],
             obrigatorio=False,
         ),
-        _regra_doc_retorno(
-            "outros",
-            "Outros",
-            ["Outros", "Outro", "Outros (OCD)"],
+        regra(
+            "atualizacao_sei_vinculo_ocd",
+            "Atualização no SEI/vínculo ao OCD, se aplicável",
+            ["SEI", "vínculo ao OCD", "vinculo ao OCD"],
             obrigatorio=False,
         ),
+        outros,
+    ]
+
+    tipo_11_obrigatorios = [
+        regra(
+            "declaracao_troca_ocd",
+            "Declaração de troca de OCD",
+            [
+                "Declaração de troca de OCD",
+                "Declaracao de troca de OCD",
+                "troca de OCD",
+                "mudança de OCD",
+                "mudanca de OCD",
+            ],
+        ),
+        regra(
+            "cct_novo_ocd",
+            "CCT do novo OCD",
+            cct["aliases"],
+        ),
+        regra(
+            "ract_novo_ocd",
+            "RACT do novo OCD",
+            ract["aliases"],
+        ),
+        regra(
+            "fotos_externas",
+            "Fotos externas atualizadas",
+            fotos_externas["aliases"],
+        ),
+        fotos_internas,
+        selo_anatel,
+        regra(
+            "relatorios_ensaio",
+            "Relatórios de ensaio",
+            [
+                "Relatório de Ensaio",
+                "Relatorio de Ensaio",
+                "Relatórios de Ensaios",
+                "Relatorios de Ensaios",
+                "test report",
+            ],
+        ),
+        regra(
+            "declaracao_rastreabilidade",
+            "Declaração de rastreabilidade",
+            rastreabilidade["aliases"],
+        ),
+        art,
+    ]
+    tipo_11_condicionais = [
+        regra(
+            "manual_especificacao_tecnica",
+            "Manual/especificação técnica, se aplicável",
+            [
+                "Manual",
+                "Manual do Produto",
+                "Especificação Técnica",
+                "Especificacao Tecnica",
+            ],
+            obrigatorio=False,
+        ),
+        regra(
+            "iso_ou_auditoria_ocd",
+            "Cópia da ISO ou relatório de auditoria do OCD, se aplicável",
+            iso["aliases"],
+            obrigatorio=False,
+        ),
+        traducao,
+        regra(
+            "esquema_eletrico_ou_declaracao",
+            "Esquema elétrico ou declaração de não disponibilização, se aplicável",
+            [
+                "Esquema elétrico",
+                "Esquema eletrico",
+                "diagrama elétrico",
+                "diagrama eletrico",
+                "não disponibilização",
+                "nao disponibilizacao",
+            ],
+            obrigatorio=False,
+        ),
+        regra(
+            "declaracoes_diversas",
+            "Declarações diversas, se aplicável",
+            ["Declaração", "Declaracao", "declarações", "declaracoes"],
+            obrigatorio=False,
+        ),
+        regra(
+            "registro_ocorrencia_formulario_alteracao",
+            "Registro de ocorrência/formulário de alteração, se aplicável",
+            [
+                "Registro de ocorrência",
+                "Registro de ocorrencia",
+                "formulário de alteração",
+                "formulario de alteracao",
+            ],
+            obrigatorio=False,
+        ),
+        outros,
     ]
 
     return {
@@ -13967,7 +14097,7 @@ def _regras_documentos_por_tipo_re_retorno():
         },
         "5": {
             "numero": "5",
-            "nome": "Inclusão/exclusão de modelo de bateria no CCT do celular, sem alteração do CH",
+            "nome": "Inclusão/exclusão de modelo de bateria",
             "obrigatorios": tipo_5_obrigatorios,
             "condicionais": tipo_5_condicionais,
         },
@@ -13983,6 +14113,12 @@ def _regras_documentos_por_tipo_re_retorno():
             "obrigatorios": tipo_10_obrigatorios,
             "condicionais": tipo_10_condicionais,
         },
+        "11": {
+            "numero": "11",
+            "nome": "Troca de OCD",
+            "obrigatorios": tipo_11_obrigatorios,
+            "condicionais": tipo_11_condicionais,
+        },
         "12": {
             "numero": "12",
             "nome": "Recertificação (documentos idem manutenção tácita)",
@@ -13993,15 +14129,21 @@ def _regras_documentos_por_tipo_re_retorno():
 
 
 def _tipos_re_para_validacao_documentos(analise_numeros_info):
+    """
+    Retorna apenas os RE que possuem analisador individual.
+
+    Não existe fallback cego para RE 6. Se a Justificativa trouxer somente
+    "Manutenção Tácita", o parser já transforma a expressão em RE 6.
+    """
     analise_numeros_info = analise_numeros_info or {}
     permitidos = analise_numeros_info.get("numeros_permitidos", []) or []
+    escopo = {"1", "5", "6", "10", "11", "12"}
 
-    # Se não houver número explícito na justificativa, mantém o comportamento antigo:
-    # tratar como manutenção tácita.
-    if not permitidos:
-        return ["6"]
-
-    return [str(n) for n in permitidos if str(n) in {"1", "5", "6", "10", "12"}]
+    return [
+        str(n)
+        for n in permitidos
+        if str(n) in escopo
+    ]
 
 
 def _validar_documentos_obrigatorios_por_tipos_re(documentos_adicionados, tipos_re=None):
@@ -14102,6 +14244,293 @@ def _validar_documentos_obrigatorios_manutencao_tacita(documentos_adicionados):
         tipos_re=["6"],
     )
 
+def _perfis_analise_individual_retorno():
+    """
+    Define o que cada número RE julga de forma independente.
+
+    O Comparar Versões é capturado uma única vez, mas cada perfil usa somente
+    os critérios que pertencem ao seu tipo. As regras podem ser refinadas sem
+    voltar a criar combinações fixas entre números RE.
+    """
+    return {
+        "1": {
+            "nome": "Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
+            "produto": "bloqueia",
+            "dados_tecnicos": "bloqueia",
+            "unidade_fabril": "esperada",
+            "descricao": (
+                "A alteração de Unidade Fabril é o objeto do RE 1. "
+                "Produto e Dados Técnicos não devem sofrer alteração."
+            ),
+        },
+        "5": {
+            "nome": "Inclusão/exclusão de modelo de bateria",
+            "produto": "bloqueia",
+            "dados_tecnicos": "bloqueia",
+            "unidade_fabril": "bloqueia",
+            "descricao": (
+                "O RE 5 é julgado pela documentação própria de inclusão/exclusão "
+                "de bateria e pela ausência de alterações estranhas ao seu escopo."
+            ),
+        },
+        "6": {
+            "nome": "Manutenção tácita",
+            "produto": "bloqueia",
+            "dados_tecnicos": "bloqueia",
+            "unidade_fabril": "informativa",
+            "descricao": (
+                "Na Manutenção Tácita, Produto e Dados Técnicos não devem mudar. "
+                "Alteração de Unidade Fabril é registrada para conferência, sem ser "
+                "usada isoladamente como bloqueio automático."
+            ),
+        },
+        "10": {
+            "nome": "Alteração de dados de entidade com atualização do CH",
+            "produto": "bloqueia",
+            "dados_tecnicos": "bloqueia",
+            "unidade_fabril": "revisar",
+            "descricao": (
+                "O RE 10 é julgado como alteração de dados de entidade. "
+                "Mudanças em Produto ou Dados Técnicos são estranhas a esse escopo; "
+                "mudança de Unidade Fabril exige revisão para confirmar se decorre "
+                "da alteração de entidade."
+            ),
+        },
+        "11": {
+            "nome": "Troca de OCD",
+            "produto": "bloqueia",
+            "dados_tecnicos": "bloqueia",
+            "unidade_fabril": "revisar",
+            "descricao": (
+                "O RE 11 é julgado sozinho como Troca de OCD, com sua própria "
+                "documentação. Alterações de Produto/Dados Técnicos não pertencem "
+                "a esse tipo; Unidade Fabril alterada exige conferência."
+            ),
+        },
+        "12": {
+            "nome": "Recertificação",
+            "produto": "bloqueia",
+            "dados_tecnicos": "bloqueia",
+            "unidade_fabril": "revisar",
+            "descricao": (
+                "O RE 12 é julgado sozinho como Recertificação e usa a base "
+                "documental da Manutenção Tácita. Alterações fora desse escopo "
+                "impedem conclusão automática."
+            ),
+        },
+    }
+
+
+def _validar_documentos_individualmente_retorno(documentos_adicionados, tipos_re):
+    """
+    Valida a INCLUSÃO documental de cada RE separadamente.
+    """
+    saida = {}
+
+    for tipo_re in tipos_re or []:
+        tipo_re = str(tipo_re)
+        validacao = _validar_documentos_obrigatorios_por_tipos_re(
+            documentos_adicionados=documentos_adicionados,
+            tipos_re=[tipo_re],
+        )
+        saida[tipo_re] = validacao
+
+    return saida
+
+
+def _analisar_tipo_re_individual_retorno(
+    tipo_re,
+    comparacao_produto,
+    comparacao_tecnica,
+    comparacao_unidade_fabril,
+    validacao_documentos,
+    captura_documental_segura,
+):
+    """
+    Executa o julgamento de UM único número RE.
+    """
+    tipo_re = str(tipo_re)
+    perfis = _perfis_analise_individual_retorno()
+    perfil = perfis.get(tipo_re)
+
+    if not perfil:
+        return {
+            "numero": tipo_re,
+            "nome": "Tipo RE sem analisador",
+            "status": "REVISAR",
+            "apto": False,
+            "motivos": [f"RE {tipo_re} não possui analisador individual implementado."],
+            "criterios": [],
+            "documentos": validacao_documentos or {},
+        }
+
+    produto_alterado = bool((comparacao_produto or {}).get("alterado"))
+    dados_tecnicos_alterados = bool(
+        (comparacao_tecnica or {}).get("alteracoes", []) or []
+    )
+    unidade_fabril_alterada = bool(
+        (comparacao_unidade_fabril or {}).get("alterada")
+    )
+
+    validacao_documentos = validacao_documentos or {}
+    docs_ok = bool(validacao_documentos.get("obrigatorios_ok"))
+
+    bloqueios = []
+    revisoes = []
+    observacoes = []
+    criterios = []
+
+    def aplicar_politica(nome_campo, alterado, politica):
+        criterios.append(
+            {
+                "criterio": nome_campo,
+                "politica": politica,
+                "alterado": bool(alterado),
+            }
+        )
+
+        if politica == "bloqueia" and alterado:
+            bloqueios.append(
+                f"Houve alteração em {nome_campo}, o que não é permitido para o RE {tipo_re}."
+            )
+        elif politica == "revisar" and alterado:
+            revisoes.append(
+                f"Houve alteração em {nome_campo}; o RE {tipo_re} exige conferência manual desse ponto."
+            )
+        elif politica == "esperada":
+            if alterado:
+                observacoes.append(
+                    f"Alteração em {nome_campo} identificada, conforme o objeto do RE {tipo_re}."
+                )
+            else:
+                revisoes.append(
+                    f"Não foi identificada alteração em {nome_campo}, embora esse seja o objeto do RE {tipo_re}."
+                )
+        elif politica == "informativa" and alterado:
+            observacoes.append(
+                f"Alteração em {nome_campo} registrada apenas para conferência no RE {tipo_re}."
+            )
+
+    aplicar_politica(
+        "Produto",
+        produto_alterado,
+        perfil.get("produto", "ignora"),
+    )
+    aplicar_politica(
+        "Dados Técnicos do Produto",
+        dados_tecnicos_alterados,
+        perfil.get("dados_tecnicos", "ignora"),
+    )
+    aplicar_politica(
+        "Outras Unidades Fabris",
+        unidade_fabril_alterada,
+        perfil.get("unidade_fabril", "ignora"),
+    )
+
+    if not captura_documental_segura:
+        revisoes.append(
+            "A Relação de Arquivos Anexos não foi capturada com segurança suficiente "
+            "para validar as inclusões documentais."
+        )
+
+    if not docs_ok:
+        faltantes = [
+            item.get("nome", "")
+            for item in validacao_documentos.get(
+                "obrigatorios_faltantes",
+                [],
+            )
+            if isinstance(item, dict) and item.get("nome")
+        ]
+        bloqueios.append(
+            "Documentos obrigatórios do RE "
+            f"{tipo_re} não identificados: "
+            + (", ".join(faltantes) if faltantes else "não especificado")
+            + "."
+        )
+
+    if bloqueios:
+        status = "NÃO APTO"
+    elif revisoes:
+        status = "REVISAR"
+    else:
+        status = "APTO"
+
+    motivos = bloqueios + revisoes + observacoes
+
+    if status == "APTO" and not motivos:
+        motivos = ["Critérios individuais atendidos."]
+
+    return {
+        "numero": tipo_re,
+        "nome": perfil.get("nome", ""),
+        "status": status,
+        "apto": status == "APTO",
+        "descricao_regra": perfil.get("descricao", ""),
+        "criterios": criterios,
+        "motivos": motivos,
+        "bloqueios": bloqueios,
+        "revisoes": revisoes,
+        "observacoes": observacoes,
+        "documentos_ok": docs_ok,
+        "documentos": validacao_documentos,
+    }
+
+
+def _consolidar_analises_individuais_retorno(analises_por_tipo_re):
+    """
+    Consolida sem misturar as regras: o requerimento só é APTO quando TODOS
+    os RE detectados foram analisados e ficaram APTO individualmente.
+    """
+    analises_por_tipo_re = analises_por_tipo_re or {}
+
+    if not analises_por_tipo_re:
+        return {
+            "status": "REVISAR",
+            "todos_aptos": False,
+            "total": 0,
+            "aptos": 0,
+            "nao_aptos": 0,
+            "revisar": 0,
+            "motivo": "Nenhum analisador RE individual foi executado.",
+        }
+
+    valores = list(analises_por_tipo_re.values())
+    aptos = sum(1 for item in valores if item.get("status") == "APTO")
+    nao_aptos = sum(1 for item in valores if item.get("status") == "NÃO APTO")
+    revisar = sum(1 for item in valores if item.get("status") == "REVISAR")
+
+    todos_aptos = aptos == len(valores)
+
+    if todos_aptos:
+        status = "APTO"
+        motivo = "Todos os tipos RE foram avaliados individualmente e estão aptos."
+    elif nao_aptos:
+        status = "NÃO APTO"
+        motivo = "Um ou mais tipos RE foram considerados não aptos."
+    else:
+        status = "REVISAR"
+        motivo = "Um ou mais tipos RE exigem revisão manual."
+
+    return {
+        "status": status,
+        "todos_aptos": todos_aptos,
+        "total": len(valores),
+        "aptos": aptos,
+        "nao_aptos": nao_aptos,
+        "revisar": revisar,
+        "motivo": motivo,
+        "tipos": [
+            {
+                "numero": item.get("numero", ""),
+                "nome": item.get("nome", ""),
+                "status": item.get("status", ""),
+            }
+            for item in valores
+        ],
+    }
+
+
 def analisar_retorno_para_estudo(
     driver,
     wait,
@@ -14110,37 +14539,17 @@ def analisar_retorno_para_estudo(
     executar_envio=False,
 ):
     """
-    Analisa Retorno Para Estudo tipo 6: manutenção tácita.
+    Analisa Retorno Para Estudo com julgamento INDIVIDUAL por tipo RE.
 
-    Regra aplicada:
+    Os RE 1, 5, 6, 10, 11 e 12 possuem analisadores próprios. Se a
+    Justificativa trouxer mais de um número, Comparar Versões é capturado uma
+    única vez e os mesmos dados são entregues separadamente a cada analisador.
 
-    - Se Produto NÃO mudou
-      E Dados Técnicos do Produto NÃO mudaram
-      E houve documento novo anexado
-      E não houve documento removido
-      E os documentos obrigatórios da manutenção tácita foram identificados
-      => Pode enviar para aprovação.
+    Não existe whitelist de combos. A aprovação só é recomendada quando todos
+    os RE detectados estiverem APTO individualmente.
 
-    - Se Produto mudou
-      => Não enviar para aprovação.
-
-    - Se houve alteração real em Dados Técnicos do Produto
-      => Não enviar para aprovação.
-
-    - Se nenhum documento novo foi identificado
-      => Não enviar para aprovação.
-
-    - Se houve documento removido
-      => Não enviar para aprovação.
-
-    - Unidade Fabril é comparada e registrada em relatório. Nesta versão,
-      alteração de Unidade Fabril gera alerta, mas não bloqueia automaticamente.
-
-    Observação importante:
-    Texto vermelho em Dados Técnicos do Produto NÃO é considerado alteração
-    automaticamente. O vermelho pode ocorrer quando o OCD reescreve o mesmo
-    conteúdo com formatação diferente. A decisão técnica é feita pela comparação
-    normalizada do bloco.
+    Na validação documental, somente inclusões são consideradas. Remoções não
+    participam da decisão automática.
     """
 
     req = req or {}
@@ -14164,7 +14573,8 @@ def analisar_retorno_para_estudo(
             "Dados Técnicos do Produto",
             "Outras Unidades Fabris",
             "Relação de Arquivos Anexos",
-            "Documentos obrigatórios conforme tipo RE citado",
+            "Documentos obrigatórios conforme cada tipo RE",
+            "Análise individual por número RE",
             "Informações Adicionais / justificativa do Retorno Para Estudo",
         ],
 
@@ -14185,6 +14595,9 @@ def analisar_retorno_para_estudo(
         "documentos_obrigatorios_faltantes": [],
         "documentos_condicionais_encontrados": [],
         "tipos_re_documentos_usados": [],
+        "validacoes_documentais_por_tipo_re": {},
+        "analises_por_tipo_re": {},
+        "consolidacao_analises_re": {},
 
         "informacoes_adicionais_retorno": {},
         "analise_numeros_informacoes_adicionais": {},
@@ -14299,36 +14712,26 @@ def analisar_retorno_para_estudo(
             )
             return resultado
 
-        if (
-            analise_numeros_info.get("tem_numero_nao_permitido")
-            or not analise_numeros_info.get("combinacao_ok", True)
-        ):
-            numeros_fora = analise_numeros_info.get("numeros_nao_permitidos", []) or []
-            combinacao = str(
-                analise_numeros_info.get("combinacao_detectada") or ""
-            ).strip()
-            motivo_combinacao = str(
-                analise_numeros_info.get("motivo_combinacao") or ""
-            ).strip()
+        numeros_permitidos = (
+            analise_numeros_info.get("numeros_permitidos", []) or []
+        )
+        numeros_fora = (
+            analise_numeros_info.get("numeros_nao_permitidos", []) or []
+        )
 
+        if numeros_fora or not numeros_permitidos:
             if numeros_fora:
                 numeros_txt = ", ".join(str(n) for n in numeros_fora)
                 status_bloqueio = "fora_escopo_tipo_re"
                 mensagem_bloqueio = (
-                    "Tipo RE fora do escopo automático identificado antes de "
+                    "Tipo RE sem analisador automático identificado antes de "
                     f"Comparar Versões: {numeros_txt}."
                 )
-            elif motivo_combinacao == "nenhum_tipo_re_identificado":
+            else:
                 status_bloqueio = "tipo_re_nao_identificado"
                 mensagem_bloqueio = (
                     "Nenhum tipo RE foi identificado com segurança nas "
                     "Informações Adicionais antes de Comparar Versões."
-                )
-            else:
-                status_bloqueio = "combinacao_re_nao_prevista"
-                mensagem_bloqueio = (
-                    "Combinação RE não prevista no escopo automático: "
-                    f"{combinacao or 'não identificada'}."
                 )
 
             resultado["status_comparacao"] = status_bloqueio
@@ -14526,154 +14929,168 @@ def analisar_retorno_para_estudo(
             analise_numeros_info
         )
 
-        validacao_documentos = _validar_documentos_obrigatorios_por_tipos_re(
-            documentos_adicionados=resultado["documentos_adicionados"],
-            tipos_re=tipos_re_para_validacao,
+        # --------------------------------------------------------------
+        # VALIDAÇÃO DOCUMENTAL INDIVIDUAL
+        # --------------------------------------------------------------
+        validacoes_documentais_por_tipo_re = (
+            _validar_documentos_individualmente_retorno(
+                documentos_adicionados=resultado["documentos_adicionados"],
+                tipos_re=tipos_re_para_validacao,
+            )
+        )
+        resultado["validacoes_documentais_por_tipo_re"] = (
+            validacoes_documentais_por_tipo_re
         )
 
-        resultado["produto_alterado"] = bool(comparacao_produto.get("alterado"))
-        resultado["alteracoes_produto"] = comparacao_produto.get("alteracoes", [])
+        # Mantém também os campos agregados para compatibilidade com o
+        # gerador de relatório e históricos de resumo.json.
+        validacao_documentos_agregada = (
+            _validar_documentos_obrigatorios_por_tipos_re(
+                documentos_adicionados=resultado["documentos_adicionados"],
+                tipos_re=tipos_re_para_validacao,
+            )
+        )
+
+        resultado["produto_alterado"] = bool(
+            comparacao_produto.get("alterado")
+        )
+        resultado["alteracoes_produto"] = (
+            comparacao_produto.get("alteracoes", []) or []
+        )
 
         resultado["unidade_fabril_alterada"] = bool(
             comparacao_unidade_fabril.get("alterada")
         )
-        resultado["alteracoes_unidade_fabril"] = comparacao_unidade_fabril.get("alteracoes", [])
+        resultado["alteracoes_unidade_fabril"] = (
+            comparacao_unidade_fabril.get("alteracoes", []) or []
+        )
 
         resultado["documentos_obrigatorios_ok"] = bool(
-            validacao_documentos.get("obrigatorios_ok")
+            validacao_documentos_agregada.get("obrigatorios_ok")
         )
         resultado["documentos_obrigatorios_encontrados"] = (
-            validacao_documentos.get("obrigatorios_encontrados", [])
+            validacao_documentos_agregada.get(
+                "obrigatorios_encontrados",
+                [],
+            )
         )
         resultado["documentos_obrigatorios_faltantes"] = (
-            validacao_documentos.get("obrigatorios_faltantes", [])
+            validacao_documentos_agregada.get(
+                "obrigatorios_faltantes",
+                [],
+            )
         )
         resultado["documentos_condicionais_encontrados"] = (
-            validacao_documentos.get("condicionais_encontrados", [])
+            validacao_documentos_agregada.get(
+                "condicionais_encontrados",
+                [],
+            )
         )
         resultado["tipos_re_documentos_usados"] = (
-            validacao_documentos.get("tipos_re_usados", [])
+            validacao_documentos_agregada.get(
+                "tipos_re_usados",
+                [],
+            )
         )
 
-
-
-        tem_alteracao_tecnica = bool(resultado["alteracoes_dados_tecnicos"])
-        tem_documento_adicionado = bool(resultado["documentos_adicionados"])
-        tem_documento_removido = bool(resultado["documentos_removidos"])
-        tem_remocao_inconclusiva = bool(
-            resultado["documentos_removidos_inconclusivos"]
+        tem_alteracao_tecnica = bool(
+            resultado["alteracoes_dados_tecnicos"]
         )
+        tem_documento_adicionado = bool(
+            resultado["documentos_adicionados"]
+        )
+
+        # Remoções continuam disponíveis como diagnóstico bruto, porém não
+        # participam da decisão nem geram alerta, pois o OCD não pode excluir
+        # anexos do processo.
         captura_documental_completa = bool(
             captura.get("_captura_completa")
             and documentos.get("captura_tabelas_completa")
         )
-        resultado["captura_documental_segura"] = captura_documental_completa
+        resultado["captura_documental_segura"] = (
+            captura_documental_completa
+        )
+        resultado["dados_tecnicos_alterados"] = (
+            tem_alteracao_tecnica
+        )
+        resultado["documentos_novos_detectados"] = (
+            tem_documento_adicionado
+        )
 
-        tem_alteracao_produto = bool(resultado["produto_alterado"])
-        tem_alteracao_unidade_fabril = bool(resultado["unidade_fabril_alterada"])
-        documentos_obrigatorios_ok = bool(resultado["documentos_obrigatorios_ok"])
+        # --------------------------------------------------------------
+        # JULGAMENTO INDIVIDUAL DE CADA RE
+        # --------------------------------------------------------------
+        analises_por_tipo_re = {}
 
-        resultado["dados_tecnicos_alterados"] = tem_alteracao_tecnica
-        resultado["documentos_novos_detectados"] = tem_documento_adicionado
-
-        if tem_alteracao_produto:
-            resultado["alertas"].append(
-                "Houve alteração no bloco Produto. Manutenção tácita não deve alterar produto."
-            )
-        if tem_alteracao_unidade_fabril:
-            resultado["alertas"].append(
-                "Houve alteração em Outras Unidades Fabris. A alteração foi registrada para conferência."
-            )
-        if not documentos_obrigatorios_ok:
-            faltantes_txt = ", ".join(
-                item.get("nome", "")
-                for item in resultado["documentos_obrigatorios_faltantes"]
-                if item.get("nome")
+        for tipo_re in tipos_re_para_validacao:
+            analise_individual = _analisar_tipo_re_individual_retorno(
+                tipo_re=tipo_re,
+                comparacao_produto=comparacao_produto,
+                comparacao_tecnica=comparacao_tecnica,
+                comparacao_unidade_fabril=comparacao_unidade_fabril,
+                validacao_documentos=(
+                    validacoes_documentais_por_tipo_re.get(
+                        str(tipo_re),
+                        {},
+                    )
+                ),
+                captura_documental_segura=captura_documental_completa,
             )
 
-            resultado["alertas"].append(
-                "Documentos obrigatórios conforme o(s) tipo(s) RE citado(s) não identificados: "
-                f"{faltantes_txt or 'não especificado'}."
+            analises_por_tipo_re[str(tipo_re)] = (
+                analise_individual
             )
 
-        if resultado.get("info_adicionais_tem_numero_nao_permitido"):
-            numeros_txt = ", ".join(
-                str(n) for n in resultado.get("numeros_tipo_re_nao_permitidos", [])
+            print(
+                "[SCH][RETORNO]"
+                f"[RE {tipo_re}] Resultado individual: "
+                f"{analise_individual.get('status', 'REVISAR')} | "
+                f"{analise_individual.get('nome', '')}"
             )
-            permitidos_txt = ", ".join(
-                resultado.get("analise_numeros_informacoes_adicionais", {}).get(
-                    "permitidos_esperados",
-                    ["1", "5", "6", "10", "12", "6+12", "6+11"],
+
+            # Apenas bloqueios/revisões do analisador individual viram
+            # alertas globais. Observações informativas continuam dentro do RE.
+            for alerta_individual in (
+                list(analise_individual.get("bloqueios", []) or [])
+                + list(analise_individual.get("revisoes", []) or [])
+            ):
+                resultado["alertas"].append(
+                    f"RE {tipo_re}: {alerta_individual}"
                 )
+
+        resultado["analises_por_tipo_re"] = analises_por_tipo_re
+
+        consolidacao = _consolidar_analises_individuais_retorno(
+            analises_por_tipo_re
+        )
+        resultado["consolidacao_analises_re"] = consolidacao
+
+        todos_aptos = bool(consolidacao.get("todos_aptos"))
+
+        if todos_aptos:
+            resultado["status_comparacao"] = (
+                "analises_re_individuais_aptas"
             )
-
-            resultado["alertas"].append(
-                "Informações Adicionais citam tipo(s) de análise RE fora do escopo esperado: "
-                f"{numeros_txt or 'não especificado'}. "
-                f"Tipos aceitos neste fluxo: {permitidos_txt}. Revisão manual recomendada."
-            )
-
-    
-
-        if tem_alteracao_tecnica:
-            resultado["alertas"].append(
-                "Houve alteração real em Dados Técnicos do Produto. "
-                "Manutenção tácita não deve alterar dados técnicos."
-            )
-
-        if not tem_documento_adicionado:
-            resultado["alertas"].append(
-                "Nenhum documento novo foi identificado na Relação de Arquivos Anexos."
-            )
-
-        if tem_documento_removido:
-            resultado["alertas"].append(
-                "Foi identificada remoção confirmada de documento no lado antigo "
-                "da Relação de Arquivos Anexos."
-            )
-
-        if tem_remocao_inconclusiva:
-            resultado["alertas"].append(
-                "Há diferença documental sem confirmação visual de remoção. "
-                "O caso foi classificado como inconclusivo e requer revisão manual."
-            )
-
-        if not captura_documental_completa:
-            resultado["alertas"].append(
-                "A Relação de Arquivos Anexos não foi capturada dos dois lados "
-                "diretamente do DOM. O fallback textual pode ser usado no relatório, "
-                "mas não é suficiente para aprovação automática."
-            )
-
-        if (
-            not tem_alteracao_produto
-            and not tem_alteracao_tecnica
-            and tem_documento_adicionado
-            and not tem_documento_removido
-            and not tem_remocao_inconclusiva
-            and documentos_obrigatorios_ok
-            and captura_documental_completa
-            and not resultado.get("info_adicionais_tem_numero_nao_permitido")
-        ):
-            resultado["status_comparacao"] = "manutencao_tacita_apta"
             resultado["resultado"] = (
-                "Análise de Retorno Para Estudo concluída: não houve alteração em Produto "
-                "nem em Dados Técnicos do Produto, houve documento novo, não houve remoção confirmada "
-                "nem diferença documental inconclusiva, "
-                "os documentos obrigatórios do(s) tipo(s) RE citado(s) foram identificados e "
-                "as Informações Adicionais não citaram número de análise fora do escopo permitido."
+                "Análise de Retorno Para Estudo concluída. "
+                "Todos os tipos RE identificados foram avaliados "
+                "separadamente e ficaram APTO."
             )
             resultado["acao_recomendada"] = "Enviar para aprovação"
             resultado["pode_enviar_para_aprovacao"] = True
             resultado["deve_enviar_para_aprovacao"] = True
-
         else:
-            resultado["status_comparacao"] = "manutencao_tacita_nao_apta"
-            resultado["resultado"] = (
-                "Análise de manutenção tácita concluída: o processo não deve ser "
-                "enviado para aprovação automaticamente."
+            resultado["status_comparacao"] = (
+                "analises_re_individuais_nao_aptas"
             )
-            resultado["acao_recomendada"] = "Não enviar para aprovação / Revisar manualmente"
+            resultado["resultado"] = (
+                "Análise de Retorno Para Estudo concluída. "
+                "Um ou mais tipos RE não ficaram APTO em sua "
+                "análise individual."
+            )
+            resultado["acao_recomendada"] = (
+                "Não enviar para aprovação / Revisar manualmente"
+            )
             resultado["pode_enviar_para_aprovacao"] = False
             resultado["deve_enviar_para_aprovacao"] = False
 
@@ -14756,7 +15173,7 @@ def analisar_retorno_para_estudo(
         else:
             resultado["status_comparacao"] = "erro"
             resultado["resultado"] = (
-                "Não foi possível concluir automaticamente a análise de manutenção tácita."
+                "Não foi possível concluir automaticamente a análise individual dos tipos RE."
             )
         resultado["acao_recomendada"] = "Não enviar para aprovação / Revisar manualmente"
         resultado["pode_enviar_para_aprovacao"] = False

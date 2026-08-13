@@ -1357,6 +1357,35 @@ def _html_alertas_retorno(alertas):
 
 
 
+
+def _html_resumo_dados_tecnicos_retorno(comparacao_executada, dados_tecnicos_alterados):
+    """
+    Exibe somente o resultado da comparação de Dados Técnicos no relatório.
+    Os dados brutos permanecem no resultado/JSON para diagnóstico, mas não são
+    despejados no HTML como um bloco de texto corrido.
+    """
+    if not comparacao_executada:
+        return (
+            "<div class='alerta'>"
+            "<b>NÃO ANALISADO.</b> O Comparar Versões não foi executado com sucesso "
+            "para este item."
+            "</div>"
+        )
+
+    if _bool_retorno(dados_tecnicos_alterados):
+        return (
+            "<div class='alerta'>"
+            "<b>Houve alteração em Dados Técnicos do Produto.</b>"
+            "</div>"
+        )
+
+    return (
+        "<div class='ok'>"
+        "Nenhuma alteração em Dados Técnicos do Produto identificada."
+        "</div>"
+    )
+
+
 def _html_documentos_validacao_retorno(itens, vazio="Nenhum."):
     """
     Monta lista/tabela simples para documentos obrigatórios/condicionais
@@ -1428,53 +1457,172 @@ def _html_tipos_re_informacoes_adicionais_retorno(analise):
     tipos_detectados = analise.get("tipos_detectados", []) or []
     tipos_nao_permitidos = analise.get("tipos_nao_permitidos", []) or []
     nomes_permitidos = analise.get("nomes_permitidos_esperados", []) or []
-    combinacao_ok = analise.get("combinacao_ok") is True
-    combinacao_detectada = str(analise.get("combinacao_detectada") or "").strip()
-    motivo_combinacao = str(analise.get("motivo_combinacao") or "").strip()
-
-    numeros_txt = ", ".join(str(n) for n in numeros_detectados) or "Nenhum número identificado"
     permitidos_codigos = analise.get("permitidos_esperados", []) or []
+
+    numeros_txt = (
+        ", ".join(str(n) for n in numeros_detectados)
+        or "Nenhum número identificado"
+    )
     permitidos_txt = (
         "; ".join(str(n) for n in nomes_permitidos)
         or ", ".join(str(n) for n in permitidos_codigos)
         or "Não informado pela análise"
     )
 
-    classe = "ok" if combinacao_ok and not tipos_nao_permitidos else "alerta"
+    todos_com_analisador = bool(
+        numeros_detectados
+        and not tipos_nao_permitidos
+        and all(
+            item.get(
+                "possui_analisador_individual",
+                item.get("permitido", False),
+            )
+            for item in tipos_detectados
+            if isinstance(item, dict)
+        )
+    )
+
+    classe = "ok" if todos_com_analisador else "alerta"
 
     linhas = [
         "<h3>Cruzamento com Informações Adicionais</h3>",
         f"<div class='{classe}'>",
-        "<p><b>Números de tipo RE detectados:</b> " + escape(numeros_txt) + "</p>",
-        "<p><b>Combinação detectada:</b> " + escape(combinacao_detectada or "Não identificada") + "</p>",
-        "<p><b>Combinação prevista no escopo automático?</b> " + _sim_nao_retorno(combinacao_ok) + "</p>",
-        "<p><b>Motivo da validação da combinação:</b> " + escape(motivo_combinacao or "Não informado") + "</p>",
-        "<p><b>Tipos/combinações aceitos neste fluxo:</b> " + escape(permitidos_txt) + "</p>",
-        "<p><b>Existe número individual fora do escopo?</b> " + _sim_nao_retorno(bool(tipos_nao_permitidos)) + "</p>",
+        "<p><b>Números de tipo RE detectados:</b> "
+        + escape(numeros_txt)
+        + "</p>",
+        "<p><b>Modo de análise:</b> cada número RE é avaliado separadamente.</p>",
+        "<p><b>Tipos com analisador individual:</b> "
+        + escape(permitidos_txt)
+        + "</p>",
+        "<p><b>Existe número sem analisador automático?</b> "
+        + _sim_nao_retorno(bool(tipos_nao_permitidos))
+        + "</p>",
         "</div>",
     ]
 
     if tipos_detectados:
         linhas.append(
-            "<table><thead><tr><th>Número</th><th>Tipo identificado</th><th>Permitido nesta combinação?</th></tr></thead><tbody>"
+            "<table><thead><tr>"
+            "<th>Número</th><th>Tipo identificado</th>"
+            "<th>Possui analisador individual?</th>"
+            "</tr></thead><tbody>"
         )
+
         for item in tipos_detectados:
+            if not isinstance(item, dict):
+                continue
+
+            possui = item.get(
+                "possui_analisador_individual",
+                item.get("permitido", False),
+            )
+
             linhas.append(
                 "<tr>"
                 f"<td>{escape(str(item.get('numero','')))}</td>"
                 f"<td>{escape(str(item.get('nome','')))}</td>"
-                f"<td>{_sim_nao_retorno(item.get('permitido',False))}</td>"
+                f"<td>{_sim_nao_retorno(possui)}</td>"
                 "</tr>"
             )
+
         linhas.append("</tbody></table>")
     else:
         linhas.append(
-            "<p class='muted'>Nenhum número de tipo RE foi identificado com segurança "
-            "na Justificativa do OCD em Informações Adicionais. O relatório não presume "
-            "automaticamente o tipo 6.</p>"
+            "<p class='muted'>Nenhum número de tipo RE foi identificado com "
+            "segurança na Justificativa do OCD em Informações Adicionais. "
+            "O relatório não presume automaticamente o tipo 6.</p>"
         )
 
     return "".join(linhas)
+
+def _html_analises_individuais_retorno(retorno):
+    """
+    Mostra o julgamento de cada RE sem misturar critérios entre números.
+    """
+    retorno = retorno or {}
+    analises = retorno.get("analises_por_tipo_re") or {}
+
+    if not analises:
+        if _comparacao_retorno_executada(retorno):
+            return (
+                "<div class='alerta'>A comparação foi executada, mas não há "
+                "resultados individuais por tipo RE neste registro.</div>"
+            )
+        return (
+            "<div class='muted'>As análises individuais não foram executadas "
+            "porque o Comparar Versões não foi concluído.</div>"
+        )
+
+    linhas = [
+        "<table>",
+        "<thead><tr>"
+        "<th>RE</th><th>Tipo</th><th>Resultado individual</th>"
+        "<th>Documentos obrigatórios</th><th>Motivo</th>"
+        "</tr></thead><tbody>",
+    ]
+
+    def ordem(item):
+        try:
+            return int(str(item[0]))
+        except Exception:
+            return 999
+
+    for numero, analise in sorted(analises.items(), key=ordem):
+        analise = analise or {}
+        status = str(analise.get("status") or "REVISAR")
+        documentos = analise.get("documentos") or {}
+        docs_ok = analise.get("documentos_ok")
+
+        if docs_ok is None:
+            docs_ok = documentos.get("obrigatorios_ok")
+
+        motivos = analise.get("motivos") or []
+        motivo_txt = " ".join(
+            str(item).strip()
+            for item in motivos
+            if str(item).strip()
+        ) or "Critérios individuais atendidos."
+
+        faltantes = documentos.get("obrigatorios_faltantes") or []
+        nomes_faltantes = [
+            str(item.get("nome") or "").strip()
+            for item in faltantes
+            if isinstance(item, dict) and str(item.get("nome") or "").strip()
+        ]
+
+        if nomes_faltantes:
+            motivo_txt += (
+                " Documentos faltantes: "
+                + ", ".join(nomes_faltantes)
+                + "."
+            )
+
+        linhas.append(
+            "<tr>"
+            f"<td><b>{escape(str(numero))}</b></td>"
+            f"<td>{escape(str(analise.get('nome') or 'Não informado'))}</td>"
+            f"<td><b>{escape(status)}</b></td>"
+            f"<td>{_rotulo_documentos_ok_retorno(docs_ok)}</td>"
+            f"<td>{escape(motivo_txt)}</td>"
+            "</tr>"
+        )
+
+    linhas.append("</tbody></table>")
+
+    consolidacao = retorno.get("consolidacao_analises_re") or {}
+    if consolidacao:
+        status_final = str(consolidacao.get("status") or "REVISAR")
+        classe = "ok" if status_final == "APTO" else "alerta"
+        linhas.append(
+            f"<div class='{classe}'>"
+            "<b>Resultado consolidado dos RE:</b> "
+            f"{escape(status_final)}. "
+            f"{escape(str(consolidacao.get('motivo') or ''))}"
+            "</div>"
+        )
+
+    return "".join(linhas)
+
 
 
 
@@ -1540,7 +1688,8 @@ def _html_retorno_para_estudo_bloco(resultado):
         "Dados Técnicos do Produto",
         "Outras Unidades Fabris",
         "Relação de Arquivos Anexos",
-        "Documentos obrigatórios da manutenção tácita",
+        "Documentos obrigatórios conforme cada tipo RE",
+        "Análise individual por número RE",
         "Informações Adicionais / justificativa do Retorno Para Estudo",
     ]
 
@@ -1552,11 +1701,6 @@ def _html_retorno_para_estudo_bloco(resultado):
     documentos_novos_detectados = retorno.get("documentos_novos_detectados") if comparacao_executada else None
 
     docs_adicionados = retorno.get("documentos_adicionados") or []
-    docs_removidos = retorno.get("documentos_removidos") or []
-    docs_removidos_inconclusivos = (
-        retorno.get("documentos_removidos_inconclusivos") or []
-    )
-    diagnostico_documentos = retorno.get("diagnostico_documentos") or {}
     marcacao_automacao = (
         retorno.get("marcacao_automacao_informacoes_adicionais") or {}
     )
@@ -1599,7 +1743,6 @@ def _html_retorno_para_estudo_bloco(resultado):
     )
 
     alteracoes_produto = retorno.get("alteracoes_produto") or []
-    alteracoes_dados = retorno.get("alteracoes_dados_tecnicos") or []
     alteracoes_especificacoes = retorno.get("alteracoes_especificacoes_complementares") or []
     alteracoes_unidade_fabril = retorno.get("alteracoes_unidade_fabril") or []
 
@@ -1655,10 +1798,6 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Dados Técnicos do Produto alterados?</td><td>{_rotulo_tri_retorno(dados_tecnicos_alterados)}</td></tr>
                 <tr><td>Unidade fabril alterada?</td><td>{_rotulo_tri_retorno(unidade_fabril_alterada)}</td></tr>
                 <tr><td>Documento novo identificado?</td><td>{_rotulo_tri_retorno(documentos_novos_detectados)}</td></tr>
-                <tr><td>Documento removido confirmado?</td><td>{_rotulo_tri_retorno(bool(docs_removidos) if comparacao_executada else None)}</td></tr>
-                <tr><td>Diferença documental inconclusiva?</td><td>{_sim_nao_retorno(bool(docs_removidos_inconclusivos))}</td></tr>
-                <tr><td>Confiança da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('confianca_remocao') or 'Não informada'))}</td></tr>
-                <tr><td>Método da detecção de remoção</td><td>{escape(str(diagnostico_documentos.get('metodo_remocao') or 'Não informado'))}</td></tr>
                 <tr><td>Tabelas dos dois lados localizadas?</td><td>{_sim_nao_retorno(tempos_comparar.get('captura_completa'))}</td></tr>
                 <tr><td>Captura documental segura para decisão automática?</td><td>{_sim_nao_retorno(retorno.get('captura_documental_segura'))}</td></tr>
                 <tr><td>Tempo do Comparar Versões</td><td>{escape(str(tempos_comparar.get('total_segundos', 'Não informado')))} segundo(s)</td></tr>
@@ -1680,21 +1819,19 @@ def _html_retorno_para_estudo_bloco(resultado):
 
         <h3>Regra aplicada</h3>
         <p>
-            A automação recomenda envio para aprovação somente quando
-            <b>não houver alteração em Produto</b>,
-            <b>não houver alteração em Dados Técnicos do Produto</b>,
-            <b>houver documento novo anexado</b>,
-            <b>não houver documento removido confirmado nem diferença documental inconclusiva</b>,
-            <b>a Relação de Arquivos Anexos tiver sido capturada com segurança dos dois lados</b>,
-            <b>os documentos obrigatórios do(s) tipo(s) RE citado(s) forem identificados</b>,
-            a aba <b>Informações Adicionais</b> não citar número de análise fora do escopo
-            permitido e, quando houver aprovação automática, a marcação da análise por
-            automação for salva e confirmada. Tipos/combinações aceitos informados pela análise:
-            <b>{escape(_tipos_aceitos_retorno_txt(retorno))}</b>.
-            A alteração de Unidade Fabril é registrada no relatório para conferência.
+            Cada número RE identificado é <b>avaliado separadamente</b>, com seus
+            próprios critérios técnicos e documentais. O Comparar Versões é capturado
+            uma única vez, mas os RE <b>1, 5, 6, 10, 11 e 12</b> recebem julgamentos
+            independentes. A validação documental considera somente
+            <b>documentos incluídos</b>; exclusão de anexos não participa da decisão.
+            O requerimento só pode seguir para aprovação quando
+            <b>todos os RE identificados estiverem APTO individualmente</b>.
         </p>
 
         {_html_tipos_re_informacoes_adicionais_retorno(analise_numeros_info)}
+
+        <h3>Análise individual por tipo RE</h3>
+        {_html_analises_individuais_retorno(retorno)}
 
         <h3>Tipos RE usados para validação documental</h3>
         {_html_documentos_validacao_retorno(tipos_re_documentos_usados, "Nenhum tipo RE usado na validação documental.")}
@@ -1706,7 +1843,7 @@ def _html_retorno_para_estudo_bloco(resultado):
         {_html_lista_retorno(alteracoes_produto, "Nenhuma alteração em Produto identificada.")}
 
         <h3>Alterações em Dados Técnicos do Produto</h3>
-        {_html_lista_retorno(alteracoes_dados, "Nenhuma alteração técnica relevante identificada.")}
+        {_html_resumo_dados_tecnicos_retorno(comparacao_executada, dados_tecnicos_alterados)}
 
         <h3>Alterações em Especificações Complementares</h3>
         {_html_lista_retorno(alteracoes_especificacoes, "Nenhuma alteração identificada.")}
@@ -1725,15 +1862,6 @@ def _html_retorno_para_estudo_bloco(resultado):
 
         <h3>Documentos adicionados</h3>
         {_html_lista_retorno(docs_adicionados, "Nenhum documento adicionado identificado.")}
-
-        <h3>Documentos removidos confirmados</h3>
-        {_html_lista_retorno(docs_removidos, "Nenhum documento removido confirmado.")}
-
-        <h3>Diferenças documentais inconclusivas</h3>
-        {_html_lista_retorno(
-            docs_removidos_inconclusivos,
-            "Nenhuma diferença documental inconclusiva identificada.",
-        )}
 
         <h3>Registro da análise por automação - Informações Adicionais &gt; Acompanhar Processo</h3>
         <table>
@@ -1853,18 +1981,20 @@ def _sim_nao_resumo_retorno(valor):
 def _comparacao_retorno_executada(retorno):
     """
     True somente quando Comparar Versões realmente produziu uma comparação.
-
-    O fluxo 0.8.6 grava 'comparacao_executada' explicitamente. Os fallbacks
-    abaixo mantêm compatibilidade com resultados antigos.
     """
     retorno = retorno or {}
 
     if "comparacao_executada" in retorno:
         return retorno.get("comparacao_executada") is True
 
-    status = str(retorno.get("status_comparacao") or "").strip().lower()
+    status = str(
+        retorno.get("status_comparacao") or ""
+    ).strip().lower()
 
     if status in {
+        "analises_re_individuais_aptas",
+        "analises_re_individuais_nao_aptas",
+        # Compatibilidade com resultados antigos.
         "manutencao_tacita_apta",
         "manutencao_tacita_nao_apta",
         "bloqueado_por_falha_no_tratamento_da_minuta",
@@ -1879,7 +2009,6 @@ def _comparacao_retorno_executada(retorno):
         "unidade_fabril_alterada",
         "documentos_novos_detectados",
         "documentos_obrigatorios_ok",
-        "documentos_removidos_detectados",
     )
 
     return any(
@@ -2009,91 +2138,117 @@ def _motivo_principal_retorno(resultado):
         return f"Erro: {_texto_curto_resumo_retorno(erro, 160)}"
 
     if not _comparacao_retorno_executada(retorno):
-        analise_re = retorno.get("analise_numeros_informacoes_adicionais") or {}
-        if analise_re and analise_re.get("combinacao_ok") is False:
-            combinacao = str(analise_re.get("combinacao_detectada") or "").strip()
-            motivo_combo = str(analise_re.get("motivo_combinacao") or "").strip()
-            if motivo_combo == "nenhum_tipo_re_identificado":
-                return "Tipo RE não identificado com segurança"
-            if combinacao:
-                return f"Combinação RE não prevista: {combinacao}"
-            return "Combinação RE não prevista no escopo automático"
+        analise_re = (
+            retorno.get("analise_numeros_informacoes_adicionais") or {}
+        )
 
-        if _bool_resumo_retorno(
-            retorno.get("info_adicionais_tem_numero_nao_permitido")
-        ):
-            numeros = _lista_resumo_retorno(
-                retorno.get("numeros_tipo_re_nao_permitidos")
+        numeros_fora = _lista_resumo_retorno(
+            retorno.get("numeros_tipo_re_nao_permitidos")
+            or analise_re.get("numeros_nao_permitidos")
+        )
+        if numeros_fora:
+            return (
+                "Tipo RE sem analisador automático: "
+                + ", ".join(str(n) for n in numeros_fora)
             )
-            if numeros:
-                return "Número RE fora do escopo: " + ", ".join(numeros)
-            return "Número RE fora do escopo"
 
-        status = str(retorno.get("status_comparacao") or "").strip()
+        if not _lista_resumo_retorno(
+            retorno.get("numeros_tipo_re_detectados")
+            or analise_re.get("numeros_detectados")
+        ):
+            return "Tipo RE não identificado com segurança"
+
+        status = str(
+            retorno.get("status_comparacao") or ""
+        ).strip()
         if status:
             return "Comparar Versões não executado: " + status
 
         return "Comparar Versões não executado"
 
-    if retorno.get("captura_documental_segura") is False:
-        return "Captura documental incompleta; aprovação automática bloqueada"
+    analises = retorno.get("analises_por_tipo_re") or {}
+    consolidacao = retorno.get("consolidacao_analises_re") or {}
 
-    if _bool_resumo_retorno(retorno.get("produto_alterado")):
-        return "Produto alterado"
+    if analises:
+        for numero, analise in analises.items():
+            analise = analise or {}
+            if analise.get("status") == "APTO":
+                continue
 
-    if _bool_resumo_retorno(retorno.get("dados_tecnicos_alterados")):
-        return "Dados técnicos alterados"
+            motivos = analise.get("motivos") or []
+            motivo = (
+                str(motivos[0]).strip()
+                if motivos
+                else f"Resultado individual: {analise.get('status', 'REVISAR')}"
+            )
+            return _texto_curto_resumo_retorno(
+                f"RE {numero}: {motivo}",
+                160,
+            )
 
-    if _bool_resumo_retorno(retorno.get("unidade_fabril_alterada")):
-        return "Unidade fabril alterada"
+        if consolidacao.get("todos_aptos") is True:
+            return "Todos os RE aptos individualmente"
 
-    if _bool_resumo_retorno(retorno.get("documentos_removidos_detectados")):
-        return "Documento removido"
-
-    documentos_removidos = _lista_resumo_retorno(retorno.get("documentos_removidos"))
-    if documentos_removidos:
-        return "Documento removido confirmado"
-
-    removidos_inconclusivos = _lista_resumo_retorno(
-        retorno.get("documentos_removidos_inconclusivos")
+    marcacao = (
+        retorno.get(
+            "marcacao_automacao_informacoes_adicionais"
+        )
+        or {}
     )
-    if removidos_inconclusivos:
-        return "Diferença documental inconclusiva"
-
-    marcacao = retorno.get("marcacao_automacao_informacoes_adicionais") or {}
     if marcacao.get("exigida") and not (
-        marcacao.get("salva") and marcacao.get("confirmada_apos_salvar")
+        marcacao.get("salva")
+        and marcacao.get("confirmada_apos_salvar")
     ):
         return "Marcação da automação não confirmada"
 
-    if _bool_resumo_retorno(retorno.get("info_adicionais_tem_numero_nao_permitido")):
-        numeros = _lista_resumo_retorno(retorno.get("numeros_tipo_re_nao_permitidos"))
-        if numeros:
-            return "Número RE fora do escopo: " + ", ".join(numeros)
-        return "Número RE fora do escopo"
+    # Compatibilidade com resultados antigos, anteriores à análise individual.
+    if retorno.get("captura_documental_segura") is False:
+        return (
+            "Captura documental incompleta; "
+            "aprovação automática bloqueada"
+        )
 
-    faltantes = _lista_resumo_retorno(retorno.get("documentos_obrigatorios_faltantes"))
+    faltantes = _lista_resumo_retorno(
+        retorno.get("documentos_obrigatorios_faltantes")
+    )
     if faltantes:
         nomes = []
-
         for item in faltantes[:3]:
             if isinstance(item, dict):
-                nomes.append(str(item.get("nome") or item.get("documento") or item))
+                nomes.append(
+                    str(
+                        item.get("nome")
+                        or item.get("documento")
+                        or item
+                    )
+                )
             else:
                 nomes.append(str(item))
 
-        extra = "" if len(faltantes) <= 3 else f" +{len(faltantes) - 3}"
-        return "Documento obrigatório faltante: " + ", ".join(nomes) + extra
+        extra = (
+            ""
+            if len(faltantes) <= 3
+            else f" +{len(faltantes) - 3}"
+        )
+        return (
+            "Documento obrigatório faltante: "
+            + ", ".join(nomes)
+            + extra
+        )
 
-    if not _bool_resumo_retorno(retorno.get("documentos_novos_detectados")):
-        return "Nenhum documento novo identificado"
-
-    if _bool_resumo_retorno(retorno.get("pode_enviar_para_aprovacao")):
+    if _bool_resumo_retorno(
+        retorno.get("pode_enviar_para_aprovacao")
+    ):
         return "Critérios atendidos"
 
-    alertas = _lista_resumo_retorno(retorno.get("alertas"))
+    alertas = _lista_resumo_retorno(
+        retorno.get("alertas")
+    )
     if alertas:
-        return _texto_curto_resumo_retorno(alertas[0], 160)
+        return _texto_curto_resumo_retorno(
+            alertas[0],
+            160,
+        )
 
     return "-"
 
@@ -2178,12 +2333,6 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
         unidade_valor = retorno.get("unidade_fabril_alterada") if comparacao_executada else None
         docs_novos_valor = retorno.get("documentos_novos_detectados") if comparacao_executada else None
         docs_ok_valor = retorno.get("documentos_obrigatorios_ok") if comparacao_executada else None
-        removido_valor = (
-            bool(_lista_resumo_retorno(retorno.get("documentos_removidos")))
-            if comparacao_executada
-            else None
-        )
-
         envio = retorno.get("envio_para_aprovacao") or {}
         envio_txt = "SIM" if _bool_resumo_retorno(envio.get("executado")) else "NÃO"
 
@@ -2200,7 +2349,6 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
             f"<td>{_rotulo_alteracao_retorno(unidade_valor, feminino=True)}</td>"
             f"<td>{_rotulo_tri_retorno(docs_novos_valor)}</td>"
             f"<td>{_rotulo_documentos_ok_retorno(docs_ok_valor)}</td>"
-            f"<td>{_rotulo_tri_retorno(removido_valor)}</td>"
             f"<td>{escape(_numeros_re_resumo(resultado))}</td>"
             f"<td>{escape(envio_txt)}</td>"
             f"<td>{escape(motivo)}</td>"
@@ -2248,7 +2396,6 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
                     <th>Unidade fabril</th>
                     <th>Docs novos</th>
                     <th>Docs obrigatórios</th>
-                    <th>Doc removido</th>
                     <th>Números RE</th>
                     <th>Enviado?</th>
                     <th>Motivo principal</th>
@@ -2462,72 +2609,80 @@ def _html_consolidado_retorno_para_estudo(
             return f"Erro: {str(erro)[:180]}"
 
         if not _comparacao_retorno_executada(retorno):
-            analise_re = retorno.get("analise_numeros_informacoes_adicionais") or {}
-            if analise_re and analise_re.get("combinacao_ok") is False:
-                combinacao = str(analise_re.get("combinacao_detectada") or "").strip()
-                motivo_combo = str(analise_re.get("motivo_combinacao") or "").strip()
-                if motivo_combo == "nenhum_tipo_re_identificado":
-                    return "Tipo RE não identificado com segurança"
-                if combinacao:
-                    return "Combinação RE não prevista: " + combinacao
-                return "Combinação RE não prevista no escopo automático"
-
-            if _bool(
-                retorno.get("info_adicionais_tem_numero_nao_permitido")
-            ):
-                numeros = _lista(
-                    retorno.get("numeros_tipo_re_nao_permitidos")
+            analise_re = (
+                retorno.get("analise_numeros_informacoes_adicionais")
+                or {}
+            )
+            numeros_fora = _lista(
+                retorno.get("numeros_tipo_re_nao_permitidos")
+                or analise_re.get("numeros_nao_permitidos")
+            )
+            if numeros_fora:
+                return (
+                    "Tipo RE sem analisador automático: "
+                    + ", ".join(str(n) for n in numeros_fora)
                 )
-                if numeros:
-                    return "Número RE fora do escopo: " + ", ".join(
-                        str(n) for n in numeros
-                    )
-                return "Número RE fora do escopo"
 
-            status = str(retorno.get("status_comparacao") or "").strip()
+            numeros_detectados = _lista(
+                retorno.get("numeros_tipo_re_detectados")
+                or analise_re.get("numeros_detectados")
+            )
+            if not numeros_detectados:
+                return "Tipo RE não identificado com segurança"
+
+            status = str(
+                retorno.get("status_comparacao") or ""
+            ).strip()
             if status:
                 return "Comparar Versões não executado: " + status
 
             return "Comparar Versões não executado"
 
-        if retorno.get("captura_documental_segura") is False:
-            return "Captura documental incompleta; aprovação automática bloqueada"
+        analises = retorno.get("analises_por_tipo_re") or {}
+        consolidacao = retorno.get("consolidacao_analises_re") or {}
 
-        if _bool(retorno.get("produto_alterado")):
-            return "Produto alterado"
+        if analises:
+            for numero, analise in analises.items():
+                analise = analise or {}
+                if analise.get("status") == "APTO":
+                    continue
 
-        if _bool(retorno.get("dados_tecnicos_alterados")):
-            return "Dados técnicos alterados"
+                motivos = analise.get("motivos") or []
+                motivo = (
+                    str(motivos[0]).strip()
+                    if motivos
+                    else "Resultado individual: "
+                    + str(analise.get("status") or "REVISAR")
+                )
+                return f"RE {numero}: {motivo}"[:180]
 
-        if _bool(retorno.get("unidade_fabril_alterada")):
-            return "Unidade fabril alterada"
+            if consolidacao.get("todos_aptos") is True:
+                return "Todos os RE aptos individualmente"
 
-        documentos_removidos = _lista(retorno.get("documentos_removidos"))
-        if _bool(retorno.get("documentos_removidos_detectados")) or documentos_removidos:
-            return "Documento removido confirmado"
-
-        removidos_inconclusivos = _lista(
-            retorno.get("documentos_removidos_inconclusivos")
+        marcacao = (
+            retorno.get(
+                "marcacao_automacao_informacoes_adicionais"
+            )
+            or {}
         )
-        if removidos_inconclusivos:
-            return "Diferença documental inconclusiva"
-
-        marcacao = retorno.get("marcacao_automacao_informacoes_adicionais") or {}
         if marcacao.get("exigida") and not (
-            marcacao.get("salva") and marcacao.get("confirmada_apos_salvar")
+            marcacao.get("salva")
+            and marcacao.get("confirmada_apos_salvar")
         ):
             return "Marcação da automação não confirmada"
 
-        if _bool(retorno.get("info_adicionais_tem_numero_nao_permitido")):
-            numeros = _lista(retorno.get("numeros_tipo_re_nao_permitidos"))
-            if numeros:
-                return "Número RE fora do escopo: " + ", ".join(str(n) for n in numeros)
-            return "Número RE fora do escopo"
+        # Compatibilidade com resultados antigos.
+        if retorno.get("captura_documental_segura") is False:
+            return (
+                "Captura documental incompleta; "
+                "aprovação automática bloqueada"
+            )
 
-        faltantes = _lista(retorno.get("documentos_obrigatorios_faltantes"))
+        faltantes = _lista(
+            retorno.get("documentos_obrigatorios_faltantes")
+        )
         if faltantes:
             nomes = []
-
             for item in faltantes[:3]:
                 if isinstance(item, dict):
                     nomes.append(
@@ -2541,11 +2696,16 @@ def _html_consolidado_retorno_para_estudo(
                 else:
                     nomes.append(str(item))
 
-            extra = "" if len(faltantes) <= 3 else f" +{len(faltantes) - 3}"
-            return "Documento obrigatório faltante: " + ", ".join(nomes) + extra
-
-        if not _bool(retorno.get("documentos_novos_detectados")):
-            return "Nenhum documento novo identificado"
+            extra = (
+                ""
+                if len(faltantes) <= 3
+                else f" +{len(faltantes) - 3}"
+            )
+            return (
+                "Documento obrigatório faltante: "
+                + ", ".join(nomes)
+                + extra
+            )
 
         if _bool(retorno.get("pode_enviar_para_aprovacao")):
             return "Critérios atendidos"
@@ -2592,16 +2752,6 @@ def _html_consolidado_retorno_para_estudo(
         docs_novos_valor = retorno.get("documentos_novos_detectados") if comparacao_executada else None
         docs_ok_valor = retorno.get("documentos_obrigatorios_ok") if comparacao_executada else None
 
-        documentos_removidos = _lista(retorno.get("documentos_removidos"))
-        doc_removido_valor = (
-            (
-                _bool(retorno.get("documentos_removidos_detectados"))
-                or bool(documentos_removidos)
-            )
-            if comparacao_executada
-            else None
-        )
-
         envio = retorno.get("envio_para_aprovacao") or {}
         envio_txt = "SIM" if _bool(envio.get("executado")) else "NÃO"
 
@@ -2616,7 +2766,6 @@ def _html_consolidado_retorno_para_estudo(
             f"<td>{_rotulo_alteracao_retorno(unidade_valor, feminino=True)}</td>"
             f"<td>{_rotulo_tri_retorno(docs_novos_valor)}</td>"
             f"<td>{_rotulo_documentos_ok_retorno(docs_ok_valor)}</td>"
-            f"<td>{_rotulo_tri_retorno(doc_removido_valor)}</td>"
             f"<td>{_safe_txt(_numeros_re(resultado))}</td>"
             f"<td>{_safe_txt(envio_txt)}</td>"
             f"<td>{_safe_txt(_motivo_principal(resultado))}</td>"
@@ -2883,7 +3032,6 @@ def _html_consolidado_retorno_para_estudo(
                     <th>Unidade fabril</th>
                     <th>Docs novos</th>
                     <th>Docs obrigatórios</th>
-                    <th>Doc removido</th>
                     <th>Números RE</th>
                     <th>Enviado?</th>
                     <th>Motivo principal</th>
@@ -2912,9 +3060,8 @@ def _html_consolidado_retorno_para_estudo(
 
         <div class="observacao">
             A aprovação automática depende dos critérios configurados para Retorno Para Estudo:
-            produto sem alteração, dados técnicos sem alteração real, documentos novos anexados,
-            ausência de documentos removidos, documentos obrigatórios atendidos e justificativa
-            dentro dos tipos RE aceitos.
+            produto e dados técnicos conforme as regras do tipo RE, documentos incluídos quando
+            exigidos, documentos obrigatórios atendidos e justificativa dentro dos tipos RE aceitos.
         </div>
     </section>
 
