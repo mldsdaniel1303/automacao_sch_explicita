@@ -1802,7 +1802,7 @@ def _html_retorno_para_estudo_bloco(resultado):
                 <tr><td>Captura documental segura para decisão automática?</td><td>{_sim_nao_retorno(retorno.get('captura_documental_segura'))}</td></tr>
                 <tr><td>Tempo do Comparar Versões</td><td>{escape(str(tempos_comparar.get('total_segundos', 'Não informado')))} segundo(s)</td></tr>
                 <tr><td>Marcação da automação exigida?</td><td>{_sim_nao_retorno(marcacao_automacao.get('exigida'))}</td></tr>
-                <tr><td>Marcação salva e confirmada?</td><td>{_sim_nao_retorno(marcacao_automacao.get('salva') and marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
+                <tr><td>Registro em Acompanhar Processo salvo e confirmado?</td><td>{_sim_nao_retorno(marcacao_automacao.get('acompanhar_processo_marcado') and marcacao_automacao.get('preenchida') and marcacao_automacao.get('salva') and marcacao_automacao.get('confirmada_apos_salvar'))}</td></tr>
                 <tr><td>Documentos obrigatórios OK?</td><td>{_rotulo_documentos_ok_retorno(documentos_obrigatorios_ok)}</td></tr>
                 <tr><td>Números RE detectados nas Informações Adicionais</td><td>{escape(', '.join(str(n) for n in numeros_tipo_re_detectados) or 'Nenhum')}</td></tr>
                 <tr><td>Números RE fora do escopo?</td><td>{_sim_nao_retorno(info_adicionais_tem_numero_nao_permitido)}</td></tr>
@@ -1863,20 +1863,22 @@ def _html_retorno_para_estudo_bloco(resultado):
         <h3>Documentos adicionados</h3>
         {_html_lista_retorno(docs_adicionados, "Nenhum documento adicionado identificado.")}
 
-        <h3>Registro da análise por automação - Informações Adicionais &gt; Acompanhar Processo</h3>
+        <h3>Registro da análise por automação - Acompanhar Processo</h3>
         <table>
             <thead><tr><th>Item</th><th>Valor</th></tr></thead>
             <tbody>
                 <tr><td>Status</td><td>{escape(str(marcacao_automacao.get('status') or 'Não exigida/não executada'))}</td></tr>
                 <tr><td>Campo de destino</td><td>{escape(str(marcacao_automacao.get('campo_destino') or 'Acompanhar Processo'))}</td></tr>
                 <tr><td>Justificativa do OCD preservada?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'justificativa_preservada')}</td></tr>
+                <tr><td>Informações Adicionais &gt; Descrição preservada?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'descricao_informacoes_adicionais_preservada')}</td></tr>
+                <tr><td>Destinatários alterados?</td><td>{'SIM' if marcacao_automacao.get('destinatarios_alterados') else 'NÃO'}</td></tr>
                 <tr><td>Justificativa capturada antes do registro?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'texto_original_capturado_antes_do_registro')}</td></tr>
                 <tr><td>Tipo RE analisado antes do registro?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'tipo_re_analisado_antes_do_registro')}</td></tr>
                 <tr><td>Desejo acompanhar este processo marcado?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'acompanhar_processo_marcado')}</td></tr>
-                <tr><td>Conteúdo anterior do campo Acompanhar Processo</td><td>{escape(str(marcacao_automacao.get('conteudo_anterior') or 'Vazio/não informado'))}</td></tr>
+                <tr><td>Conteúdo anterior de Acompanhar Processo</td><td>{escape(str(marcacao_automacao.get('conteudo_anterior') or 'Vazio/não informado'))}</td></tr>
                 <tr><td>Frase registrada</td><td>{escape(str(marcacao_automacao.get('frase') or 'Não informada'))}</td></tr>
                 <tr><td>Salva?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'salva')}</td></tr>
-                <tr><td>Confirmada após salvar?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'confirmada_apos_salvar')}</td></tr>
+                <tr><td>Confirmada após salvar e reabrir a aba?</td><td>{_rotulo_marcacao_campo_retorno(marcacao_automacao, 'confirmada_apos_salvar')}</td></tr>
             </tbody>
         </table>
 
@@ -2186,9 +2188,6 @@ def _motivo_principal_retorno(resultado):
                 160,
             )
 
-        if consolidacao.get("todos_aptos") is True:
-            return "Todos os RE aptos individualmente"
-
     marcacao = (
         retorno.get(
             "marcacao_automacao_informacoes_adicionais"
@@ -2196,10 +2195,18 @@ def _motivo_principal_retorno(resultado):
         or {}
     )
     if marcacao.get("exigida") and not (
-        marcacao.get("salva")
+        marcacao.get("acompanhar_processo_marcado")
+        and marcacao.get("preenchida")
+        and marcacao.get("salva")
         and marcacao.get("confirmada_apos_salvar")
     ):
-        return "Marcação da automação não confirmada"
+        return (
+            "Registro da análise automática não confirmado em "
+            "Acompanhar Processo"
+        )
+
+    if analises and consolidacao.get("todos_aptos") is True:
+        return "Todos os RE aptos individualmente"
 
     # Compatibilidade com resultados antigos, anteriores à análise individual.
     if retorno.get("captura_documental_segura") is False:
@@ -2656,9 +2663,6 @@ def _html_consolidado_retorno_para_estudo(
                 )
                 return f"RE {numero}: {motivo}"[:180]
 
-            if consolidacao.get("todos_aptos") is True:
-                return "Todos os RE aptos individualmente"
-
         marcacao = (
             retorno.get(
                 "marcacao_automacao_informacoes_adicionais"
@@ -2666,10 +2670,18 @@ def _html_consolidado_retorno_para_estudo(
             or {}
         )
         if marcacao.get("exigida") and not (
-            marcacao.get("salva")
+            marcacao.get("acompanhar_processo_marcado")
+            and marcacao.get("preenchida")
+            and marcacao.get("salva")
             and marcacao.get("confirmada_apos_salvar")
         ):
-            return "Marcação da automação não confirmada"
+            return (
+                "Registro da análise automática não confirmado em "
+                "Acompanhar Processo"
+            )
+
+        if analises and consolidacao.get("todos_aptos") is True:
+            return "Todos os RE aptos individualmente"
 
         # Compatibilidade com resultados antigos.
         if retorno.get("captura_documental_segura") is False:

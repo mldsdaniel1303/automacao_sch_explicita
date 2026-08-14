@@ -41,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.7.0"
+VERSAO_SCRIPT = "0.8.7.4"
 
 
 def _normalizar_texto(valor):
@@ -1569,7 +1569,7 @@ def executar_fluxo_sch(
                             )
 
                     # ======================================================
-                    # REGISTRO DA ANÁLISE EM INFORMAÇÕES ADICIONAIS
+                    # REGISTRO DA ANÁLISE EM ACOMPANHAR PROCESSO
                     #
                     # A frase deve ser registrada SOMENTE no caminho de
                     # aprovação automática, imediatamente antes do envio.
@@ -1591,7 +1591,7 @@ def executar_fluxo_sch(
                     if marcacao_deve_registrar:
                         print(
                             "[SCH][RETORNO] Registrando avaliação da automação "
-                            "em Informações Adicionais antes da aprovação..."
+                            "em Acompanhar Processo antes da aprovação..."
                         )
 
                         marcacao_automacao = (
@@ -1657,6 +1657,10 @@ def executar_fluxo_sch(
 
                     marcacao_confirmada = bool(
                         marcacao_deve_registrar
+                        and marcacao_automacao.get(
+                            "acompanhar_processo_marcado"
+                        )
+                        and marcacao_automacao.get("preenchida")
                         and marcacao_automacao.get("salva")
                         and marcacao_automacao.get(
                             "confirmada_apos_salvar"
@@ -1708,7 +1712,7 @@ def executar_fluxo_sch(
                         retorno_estudo.setdefault("alertas", []).append(
                             "A aprovação automática foi bloqueada porque a frase "
                             "de registro da análise por automação não foi salva e "
-                            "confirmada em Informações Adicionais."
+                            "confirmada em Informações Adicionais > Descrição."
                         )
 
                     # A análise já encerrou a tela Comparar Versões. Agora o envio
