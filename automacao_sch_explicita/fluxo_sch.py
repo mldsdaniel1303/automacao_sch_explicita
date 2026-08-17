@@ -41,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.7.4"
+VERSAO_SCRIPT = "0.8.7.6"
 
 
 def _normalizar_texto(valor):
@@ -827,24 +827,40 @@ def executar_fluxo_sch(
 
         requerimentos = list(reversed(requerimentos))
 
-        requerimentos, ignorados_homologacao_2026_mais = (
-            _separar_homologacoes_2026_ou_superior(requerimentos)
-        )
+        # ==========================================================
+        # REGRA DE HOMOLOGAÇÃO 2026+
+        #
+        # Esta regra pertence EXCLUSIVAMENTE à fila Retorno Para Estudo.
+        # Na fila Em Análise, requerimentos/homologações de 2026 ou posterior
+        # devem seguir o processamento normal.
+        # ==========================================================
+        ignorados_homologacao_2026_mais = []
 
-        if ignorados_homologacao_2026_mais:
-            print(
-                "[SCH] Requerimentos ignorados por homologação de 2026 ou posterior: "
-                f"{len(ignorados_homologacao_2026_mais)}"
+        if fila_retorno:
+            requerimentos, ignorados_homologacao_2026_mais = (
+                _separar_homologacoes_2026_ou_superior(requerimentos)
             )
 
-            for item in ignorados_homologacao_2026_mais:
+            if ignorados_homologacao_2026_mais:
                 print(
-                    "[SCH][IGNORADO] "
-                    f"Requerimento={_numero_requerimento(item)} | "
-                    f"Homologação={item.get('homologacao', '')} | "
-                    f"Motivo=ano {item.get('ano_homologacao', '') or 'não identificado'} "
-                    "no bloco central (2026+)"
+                    "[SCH][RETORNO] Requerimentos ignorados por homologação "
+                    "de 2026 ou posterior: "
+                    f"{len(ignorados_homologacao_2026_mais)}"
                 )
+
+                for item in ignorados_homologacao_2026_mais:
+                    print(
+                        "[SCH][RETORNO][IGNORADO] "
+                        f"Requerimento={_numero_requerimento(item)} | "
+                        f"Homologação={item.get('homologacao', '')} | "
+                        f"Motivo=ano {item.get('ano_homologacao', '') or 'não identificado'} "
+                        "no bloco central (2026+)"
+                    )
+        else:
+            print(
+                "[SCH][EM ANÁLISE] Filtro de homologação 2026+ não aplicado "
+                "nesta fila. Requerimentos de 2026 ou posterior serão processados normalmente."
+            )
 
         if requerimento_especifico:
             requerimentos_encontrados = [

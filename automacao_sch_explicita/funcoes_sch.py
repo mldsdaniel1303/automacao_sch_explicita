@@ -10864,6 +10864,84 @@ def _coletar_visao_comparar_versoes(driver):
         return out;
     }
 
+
+    function technicalHeaderScore(values) {
+        const n = normText((values || []).join(' '));
+        let score = 0;
+        if (n.includes('faixa de frequencias')) score++;
+        if (n.includes('potencia maxima')) score++;
+        if (n.includes('designacao de emissoes')) score++;
+        if (n.includes('tecnologia')) score++;
+        if (n.includes('tipo de modulacao')) score++;
+        return score;
+    }
+
+    function extractTechnicalTables() {
+        const out = {esquerda: [], direita: [], debug: []};
+
+        let candidates = Array.from(document.querySelectorAll('table'))
+            .filter(visible)
+            .filter(table => {
+                const rows = directRows(table);
+                return rows.some(tr => technicalHeaderScore(vals(directCells(tr))) >= 3);
+            });
+
+        candidates = candidates.filter(
+            t => !candidates.some(other => other !== t && t.contains(other))
+        ).sort((a,b) => {
+            const ra = a.getBoundingClientRect();
+            const rb = b.getBoundingClientRect();
+            return (ra.top-rb.top) || (ra.left-rb.left);
+        });
+
+        candidates.forEach((table, index) => {
+            const side = sideOf(table);
+            const rows = directRows(table);
+            const debug = {index, side, qtd_linhas: 0, cabecalho: []};
+            let headerFound = false;
+
+            for (const tr of rows) {
+                if (!visible(tr)) continue;
+
+                const cells = directCells(tr).filter(visible);
+                if (!cells.length) continue;
+
+                const values = vals(cells);
+                const score = technicalHeaderScore(values);
+
+                if (score >= 3) {
+                    headerFound = true;
+                    debug.cabecalho = values;
+                    continue;
+                }
+
+                if (!headerFound || values.length < 4) continue;
+
+                const n = normText(values.join(' '));
+                if (
+                    n.includes('especificacoes complementares') ||
+                    n.startsWith('laboratorio') ||
+                    n.startsWith('relacao de arquivos anexos') ||
+                    n.startsWith('garantias')
+                ) {
+                    continue;
+                }
+
+                out[side].push({
+                    celulas: values,
+                    texto: values.join(' | '),
+                    red: cells.some(treeIsRed),
+                    tabela_index: index,
+                });
+                debug.qtd_linhas++;
+            }
+
+            out.debug.push(debug);
+        });
+
+        return out;
+    }
+
     const nodes=Array.from(document.querySelectorAll('td, th, span, font, div, p, li, label, a, b, strong, legend'));
     const items=[];
     for(const el of nodes){
@@ -10905,6 +10983,7 @@ def _coletar_visao_comparar_versoes(driver):
     }
 
     const anexos=extractTables();
+    const dadosTecnicos=extractTechnicalTables();
     return {
         url:String(window.location.href||''), title:String(document.title||''),
         texto_total:document.body?(document.body.innerText||document.body.textContent||''):'',
@@ -10916,6 +10995,9 @@ def _coletar_visao_comparar_versoes(driver):
         documentos_anexos_vermelhos_esquerda:anexos.esquerda.filter(x=>x.red),
         documentos_anexos_vermelhos_direita:anexos.direita.filter(x=>x.red),
         debug_tabelas_anexos:anexos.debug,
+        dados_tecnicos_linhas_esquerda:dadosTecnicos.esquerda,
+        dados_tecnicos_linhas_direita:dadosTecnicos.direita,
+        debug_tabelas_dados_tecnicos:dadosTecnicos.debug,
         produto_esquerda:extractProductBlock('esquerda'), produto_direita:extractProductBlock('direita')
     };
     """
@@ -13124,6 +13206,100 @@ def _normalizar_dados_tecnicos_para_comparacao_retorno(texto):
 
 
 
+
+def _normalizar_celula_tabela_tecnica_retorno(valor):
+    texto = _normalizar_texto_retorno(valor)
+
+    if not texto:
+        return ""
+
+    def _norm_num(match):
+        bruto = match.group(0)
+        try:
+            normalizado = _normalizar_decimal_tabela(bruto)
+        except Exception:
+            normalizado = ""
+        return normalizado or bruto
+
+    # 2.400,0 == 2400.0; 0,153 == 0.153.
+    texto = re.sub(
+        r"(?<![a-z0-9])\d[\d.,]*(?![a-z0-9])",
+        _norm_num,
+        texto,
+    )
+
+    # Faixas equivalentes.
+    texto = re.sub(r"\s+(?:a|ate)\s+", "-", texto)
+    texto = re.sub(r"\s*[-–—]\s*", "-", texto)
+
+    # Modulações equivalentes.
+    texto = texto.replace("8-dpsk", "8dpsk")
+    texto = texto.replace("8-psk", "8psk")
+    texto = re.sub(r"\b(\d+)\s*-\s*qam\b", r"\1qam", texto)
+    texto = re.sub(r"\b(\d+)\s+qam\b", r"\1qam", texto)
+
+    # Número + unidade.
+    texto = re.sub(
+        r"(\d)\s+(mhz|ghz|khz|hz|kw|mw|w|ma|a|v)",
+        r"\1\2",
+        texto,
+    )
+
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _linhas_tabela_tecnica_canonicas_retorno(linhas):
+    canonicas = []
+
+    for item in linhas or []:
+        if isinstance(item, dict):
+            celulas = item.get("celulas") or []
+        elif isinstance(item, (list, tuple)):
+            celulas = list(item)
+        else:
+            celulas = str(item or "").split("|")
+
+        celulas_norm = [
+            _normalizar_celula_tabela_tecnica_retorno(c)
+            for c in celulas
+        ]
+
+        while celulas_norm and not celulas_norm[-1]:
+            celulas_norm.pop()
+
+        if len(celulas_norm) < 4:
+            continue
+
+        canonicas.append(tuple(celulas_norm))
+
+    # Ordena para não depender da ordem DOM e preserva duplicidades reais.
+    return sorted(canonicas)
+
+
+def _comparar_tabelas_tecnicas_estruturadas_retorno(
+    linhas_antigas,
+    linhas_novas,
+):
+    antigas = _linhas_tabela_tecnica_canonicas_retorno(
+        linhas_antigas
+    )
+    novas = _linhas_tabela_tecnica_canonicas_retorno(
+        linhas_novas
+    )
+
+    disponivel = bool(antigas and novas)
+
+    return {
+        "disponivel": disponivel,
+        "alterado": bool(disponivel and antigas != novas),
+        "linhas_antigas": antigas,
+        "linhas_novas": novas,
+        "qtd_linhas_antigas": len(antigas),
+        "qtd_linhas_novas": len(novas),
+    }
+
+
 def _assinatura_dados_tecnicos_retorno(texto):
     bruto = str(texto or "")
     if not bruto.strip():
@@ -13207,7 +13383,12 @@ def _assinatura_dados_tecnicos_retorno(texto):
 
 
 
-def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
+def _comparar_blocos_dados_tecnicos_retorno(
+    texto_antigo,
+    texto_novo,
+    linhas_estruturadas_antigas=None,
+    linhas_estruturadas_novas=None,
+):
     dados_antigos = _recortar_secao_retorno(
         texto_antigo,
         ["Dados Técnicos do Produto", "Dados Tecnicos do Produto"],
@@ -13266,7 +13447,22 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         dados_novos_sem_espec
     )
 
-    if (
+    comparacao_estruturada = (
+        _comparar_tabelas_tecnicas_estruturadas_retorno(
+            linhas_estruturadas_antigas,
+            linhas_estruturadas_novas,
+        )
+    )
+
+    # As linhas reais da tabela são a fonte principal.
+    # Alterações fora de Dados Técnicos não podem contaminar este resultado.
+    if comparacao_estruturada.get("disponivel"):
+        dados_tecnicos_diferentes = bool(
+            comparacao_estruturada.get("alterado")
+        )
+        metodo_comparacao_dados = "tabela_tecnica_dom_estruturada"
+
+    elif (
         assinatura_dados_antigos
         and assinatura_dados_novos
         and any(assinatura_dados_antigos.values())
@@ -13275,7 +13471,8 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         dados_tecnicos_diferentes = (
             assinatura_dados_antigos != assinatura_dados_novos
         )
-        metodo_comparacao_dados = "assinatura_tecnica_semantica"
+        metodo_comparacao_dados = "assinatura_tecnica_semantica_fallback"
+
     else:
         dados_tecnicos_diferentes = (
             norm_dados_antigos != norm_dados_novos
@@ -13324,6 +13521,7 @@ def _comparar_blocos_dados_tecnicos_retorno(texto_antigo, texto_novo):
         "normalizado_dados_novos": norm_dados_novos,
         "assinatura_dados_antigos": assinatura_dados_antigos,
         "assinatura_dados_novos": assinatura_dados_novos,
+        "comparacao_tabela_tecnica_estruturada": comparacao_estruturada,
         "metodo_comparacao_dados_tecnicos": metodo_comparacao_dados,
         "normalizado_especificacoes_antigas": norm_espec_antiga,
         "normalizado_especificacoes_novas": norm_espec_nova,
@@ -15621,6 +15819,22 @@ def analisar_retorno_para_estudo(
         comparacao_tecnica = _comparar_blocos_dados_tecnicos_retorno(
             texto_antigo,
             texto_novo,
+            linhas_estruturadas_antigas=(
+                captura.get("dados_tecnicos_linhas_esquerda", []) or []
+            ),
+            linhas_estruturadas_novas=(
+                captura.get("dados_tecnicos_linhas_direita", []) or []
+            ),
+        )
+
+        print(
+            "[SCH][RETORNO][DADOS TÉCNICOS] "
+            f"método={comparacao_tecnica.get('metodo_comparacao_dados_tecnicos', '')} | "
+            f"linhas_antigas="
+            f"{comparacao_tecnica.get('comparacao_tabela_tecnica_estruturada', {}).get('qtd_linhas_antigas', 0)} | "
+            f"linhas_novas="
+            f"{comparacao_tecnica.get('comparacao_tabela_tecnica_estruturada', {}).get('qtd_linhas_novas', 0)} | "
+            f"alterado={'SIM' if comparacao_tecnica.get('alterado') else 'NÃO'}"
         )
 
         documentos = _comparar_documentos_anexos_retorno(
