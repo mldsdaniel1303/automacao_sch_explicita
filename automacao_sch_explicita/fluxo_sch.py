@@ -41,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.7.6"
+VERSAO_SCRIPT = "0.8.7.8"
 
 
 def _normalizar_texto(valor):
@@ -1587,27 +1587,39 @@ def executar_fluxo_sch(
                     # ======================================================
                     # REGISTRO DA ANÁLISE EM ACOMPANHAR PROCESSO
                     #
-                    # A frase deve ser registrada SOMENTE no caminho de
-                    # aprovação automática, imediatamente antes do envio.
-                    # Requerimentos destinados à revisão manual não recebem
-                    # essa marcação. Se o salvamento não for confirmado, a
-                    # aprovação automática é bloqueada.
+                    # A frase deve ser registrada em TODO requerimento de
+                    # Retorno Para Estudo efetivamente analisado pela automação,
+                    # independentemente de:
+                    # - estar APTO ou NÃO APTO;
+                    # - seguir para revisão manual;
+                    # - a aprovação automática estar habilitada ou desabilitada.
+                    #
+                    # Não recebe marcação:
+                    # - requerimento ignorado antes da análise;
+                    # - fora do escopo;
+                    # - análise sem conclusão segura do Comparar Versões;
+                    # - tela original não restaurada.
+                    #
+                    # A falha na marcação só bloqueia o envio quando o
+                    # requerimento estiver, de fato, no caminho de aprovação
+                    # automática.
                     # ======================================================
                     marcacao_deve_registrar = bool(
+                        comparacao_concluida
+                        and restauracao_requerimento.get("restaurado")
+                    )
+
+                    marcacao_obrigatoria_para_envio = bool(
                         executar_envio_retorno_para_estudo
                         and comparacao_concluida
                         and restauracao_requerimento.get("restaurado")
                         and retorno_estudo.get("deve_enviar_para_aprovacao")
                     )
 
-                    marcacao_obrigatoria_para_envio = bool(
-                        marcacao_deve_registrar
-                    )
-
                     if marcacao_deve_registrar:
                         print(
                             "[SCH][RETORNO] Registrando avaliação da automação "
-                            "em Acompanhar Processo antes da aprovação..."
+                            "em Acompanhar Processo para requerimento analisado..."
                         )
 
                         marcacao_automacao = (
@@ -1627,31 +1639,21 @@ def executar_fluxo_sch(
                             )
                         )
                     else:
-                        if not executar_envio_retorno_para_estudo:
+                        if not comparacao_concluida:
                             motivo_marcacao = (
-                                "aprovação automática desabilitada nesta execução"
+                                "análise não concluída com segurança no Comparar Versões"
                             )
-                            status_marcacao = (
-                                "nao_executada_aprovacao_automatica_desabilitada"
-                            )
-                        elif not comparacao_concluida:
-                            motivo_marcacao = (
-                                "Comparar Versões não concluiu uma análise válida"
-                            )
-                            status_marcacao = "nao_executada_comparacao_invalida"
+                            status_marcacao = "nao_executada_analise_incompleta"
                         elif not restauracao_requerimento.get("restaurado"):
                             motivo_marcacao = (
                                 "tela original do requerimento não restaurada"
                             )
                             status_marcacao = "nao_executada_tela_nao_restaurada"
-                        elif not retorno_estudo.get("deve_enviar_para_aprovacao"):
-                            motivo_marcacao = (
-                                "requerimento não está no caminho de aprovação automática"
-                            )
-                            status_marcacao = "nao_executada_revisao_manual"
                         else:
-                            motivo_marcacao = "condição de registro não atendida"
-                            status_marcacao = "nao_executada_sem_condicao_segura"
+                            motivo_marcacao = (
+                                "requerimento não chegou a uma análise concluída segura"
+                            )
+                            status_marcacao = "nao_executada_sem_analise_concluida"
 
                         marcacao_automacao = {
                             "exigida": False,
@@ -1663,7 +1665,7 @@ def executar_fluxo_sch(
                         }
 
                         print(
-                            "[SCH][RETORNO] Informações Adicionais: "
+                            "[SCH][RETORNO] Acompanhar Processo: "
                             f"marcação NÃO EXECUTADA — {motivo_marcacao}."
                         )
 
@@ -1707,9 +1709,9 @@ def executar_fluxo_sch(
                         and not marcacao_confirmada
                     ):
                         retorno_estudo.setdefault("alertas", []).append(
-                            "O requerimento estava apto à aprovação automática, "
-                            "mas não foi possível salvar e confirmar a frase de "
-                            "registro em Informações Adicionais."
+                            "O requerimento foi analisado pela automação, mas não "
+                            "foi possível salvar e confirmar a frase de registro "
+                            "em Acompanhar Processo."
                         )
 
                     if (
@@ -1720,7 +1722,7 @@ def executar_fluxo_sch(
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["acao_recomendada"] = (
                             "Não enviar para aprovação / Revisar registro em "
-                            "Informações Adicionais"
+                            "Acompanhar Processo"
                         )
                         retorno_estudo["status_comparacao"] = (
                             "bloqueado_por_falha_na_marcacao_da_automacao"
@@ -1728,7 +1730,7 @@ def executar_fluxo_sch(
                         retorno_estudo.setdefault("alertas", []).append(
                             "A aprovação automática foi bloqueada porque a frase "
                             "de registro da análise por automação não foi salva e "
-                            "confirmada em Informações Adicionais > Descrição."
+                            "confirmada em Acompanhar Processo."
                         )
 
                     # A análise já encerrou a tela Comparar Versões. Agora o envio

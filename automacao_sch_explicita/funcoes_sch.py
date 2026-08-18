@@ -8841,119 +8841,316 @@ def _localizar_textarea_acompanhar_processo(driver, wait=None, timeout=6):
 
 
 
-def marcar_acompanhar_processo(driver, wait):
+
+def _localizar_checkbox_acompanhar_processo(
+    driver,
+    wait=None,
+    timeout=5,
+):
     """
-    Marca especificamente:
+    Localiza o checkbox REAL associado ao texto:
     'Desejo acompanhar este processo.'
 
-    Não usa checkbox genérico da página.
+    Não depende de id/name fixos do JSF e também funciona quando o texto da
+    opção não está dentro de uma tag <label>.
+    """
+    entrar_iframe_detalhe_analise(driver, wait)
+
+    try:
+        timeout = max(0.5, float(timeout or 5))
+    except Exception:
+        timeout = 5.0
+
+    xpaths = [
+        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]"
+        "/preceding::input[@type='checkbox'][1]",
+
+        "//*[contains(normalize-space(.), 'Desejo acompanhar este processo')]"
+        "/ancestor::*[self::td or self::div or self::span][1]"
+        "//input[@type='checkbox'][1]",
+
+        "//input[@type='checkbox' and "
+        "contains(translate(concat(@id,' ',@name),"
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
+    ]
+
+    inicio_busca = time.time()
+
+    while time.time() - inicio_busca < timeout:
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        for xpath in xpaths:
+            try:
+                elementos = driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                elementos = []
+
+            for el in elementos:
+                try:
+                    if str(el.tag_name or "").lower() == "input":
+                        return el
+                except Exception:
+                    continue
+
+        try:
+            checkbox_js = driver.execute_script(
+                """
+                function norm(s) {
+                    return String(s || '')
+                        .normalize('NFD')
+                        .replace(/[\\u0300-\\u036f]/g, '')
+                        .replace(/\\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                }
+
+                const alvo = 'desejo acompanhar este processo';
+                const checks = Array.from(
+                    document.querySelectorAll('input[type="checkbox"]')
+                );
+
+                let melhor = null;
+                let melhorScore = Number.POSITIVE_INFINITY;
+
+                for (const cb of checks) {
+                    let no = cb;
+
+                    for (
+                        let nivel = 0;
+                        no && nivel < 8;
+                        nivel++, no = no.parentElement
+                    ) {
+                        const txt = norm(
+                            no.innerText || no.textContent || ''
+                        );
+
+                        if (txt.includes(alvo)) {
+                            const score = txt.length + (nivel * 10);
+
+                            if (score < melhorScore) {
+                                melhor = cb;
+                                melhorScore = score;
+                            }
+
+                            break;
+                        }
+                    }
+                }
+
+                if (melhor) return melhor;
+
+                const marcadores = Array.from(
+                    document.querySelectorAll(
+                        'label, span, td, div, p'
+                    )
+                )
+                .filter(el =>
+                    norm(el.innerText || el.textContent || '')
+                        .includes(alvo)
+                )
+                .sort((a,b) => {
+                    const ta = norm(
+                        a.innerText || a.textContent || ''
+                    );
+                    const tb = norm(
+                        b.innerText || b.textContent || ''
+                    );
+                    return ta.length - tb.length;
+                });
+
+                for (const marcador of marcadores) {
+                    let no = marcador;
+
+                    for (
+                        let nivel = 0;
+                        no && nivel < 5;
+                        nivel++, no = no.parentElement
+                    ) {
+                        const cb = no.querySelector
+                            ? no.querySelector(
+                                'input[type="checkbox"]'
+                            )
+                            : null;
+
+                        if (cb) return cb;
+                    }
+                }
+
+                return null;
+                """
+            )
+
+            if checkbox_js is not None:
+                return checkbox_js
+
+        except Exception:
+            pass
+
+        time.sleep(0.15)
+
+    return None
+
+
+def marcar_acompanhar_processo(driver, wait):
+    """
+    Marca 'Desejo acompanhar este processo.' usando o input real.
+
+    Só retorna True após confirmar que o checkbox ficou efetivamente marcado.
     """
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.05)
 
-    checkbox_xpaths = [
-        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
-        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/ancestor::*[self::td or self::div or self::span][1]//input[@type='checkbox'][1]",
-        "//input[@type='checkbox' and contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        "//input[@type='checkbox' and contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-    ]
+    checkbox = _localizar_checkbox_acompanhar_processo(
+        driver,
+        wait,
+        timeout=5,
+    )
 
-    label_xpaths = [
-        "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]",
-        "//*[self::span or self::div or self::td][contains(normalize-space(.), 'Desejo acompanhar este processo')]",
-    ]
-
-    def localizar_checkbox():
-        entrar_iframe_detalhe_analise(driver, wait)
-
-        for xpath in checkbox_xpaths:
-            try:
-                for el in driver.find_elements(By.XPATH, xpath):
-                    try:
-                        if el.is_enabled():
-                            return el
-                    except Exception:
-                        continue
-            except Exception:
-                continue
-
-        return None
-
-    checkbox = localizar_checkbox()
-
-    if checkbox is not None and _checkbox_esta_marcado(checkbox):
-        print("[SCH] Opção 'Desejo acompanhar este processo' já está marcada.")
-        return True
-
-    # Em alguns layouts PrimeFaces o input real pode ficar visualmente oculto;
-    # nesses casos o clique correto é no label.
-    alvo = None
-
-    for xpath in label_xpaths:
-        try:
-            for el in driver.find_elements(By.XPATH, xpath):
-                try:
-                    if el.is_displayed():
-                        alvo = el
-                        break
-                except Exception:
-                    continue
-            if alvo is not None:
-                break
-        except Exception:
-            continue
-
-    if alvo is None:
-        alvo = checkbox
-
-    if alvo is None:
+    if checkbox is None:
         raise RuntimeError(
             "Controle 'Desejo acompanhar este processo' não foi localizado."
         )
 
-    for tentativa in range(1, 3):
-        entrar_iframe_detalhe_analise(driver, wait)
-
-        try:
-            driver.execute_script(
-                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
-                alvo,
-            )
-        except Exception:
-            pass
-
-        _clicar_com_fallback(driver, alvo)
-        esperar_tela_carregar(driver, 0.18)
-
-        checkbox = localizar_checkbox()
-
-        if checkbox is not None and _checkbox_esta_marcado(checkbox):
-            print(
-                "[SCH] Opção 'Desejo acompanhar este processo' "
-                "marcada com sucesso."
-            )
-            return True
-
-        # Relocaliza o label após eventual AJAX.
-        alvo = None
-        entrar_iframe_detalhe_analise(driver, wait)
-
-        for xpath in label_xpaths:
-            try:
-                for el in driver.find_elements(By.XPATH, xpath):
-                    if el.is_displayed():
-                        alvo = el
-                        break
-                if alvo is not None:
-                    break
-            except Exception:
-                continue
-
-        if alvo is None:
-            alvo = checkbox
+    if _checkbox_esta_marcado(checkbox):
+        print(
+            "[SCH][RETORNO] Opção 'Desejo acompanhar este processo' "
+            "já está marcada."
+        )
+        return True
 
     print(
-        "[SCH][WARN] Não foi possível confirmar que "
+        "[SCH][RETORNO] Marcando 'Desejo acompanhar este processo'..."
+    )
+
+    def _confirmar(timeout=2.5):
+        inicio_conf = time.time()
+
+        while time.time() - inicio_conf < timeout:
+            cb = _localizar_checkbox_acompanhar_processo(
+                driver,
+                wait,
+                timeout=0.8,
+            )
+
+            if cb is not None and _checkbox_esta_marcado(cb):
+                return cb
+
+            time.sleep(0.12)
+
+        return None
+
+    # 1) Clique Selenium diretamente no input real.
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        checkbox = _localizar_checkbox_acompanhar_processo(
+            driver,
+            wait,
+            timeout=1.5,
+        )
+
+        if checkbox is not None:
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView("
+                    "{block:'center', inline:'center'});",
+                    checkbox,
+                )
+            except Exception:
+                pass
+
+            checkbox.click()
+
+            if _confirmar() is not None:
+                print(
+                    "[SCH][RETORNO] Checkbox Acompanhar Processo "
+                    "marcado por clique Selenium."
+                )
+                return True
+
+    except Exception as e:
+        print(
+            "[SCH][RETORNO][WARN] Clique Selenium no checkbox não "
+            f"confirmou a marcação: {e}"
+        )
+
+    # 2) click() JavaScript no próprio input.
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        checkbox = _localizar_checkbox_acompanhar_processo(
+            driver,
+            wait,
+            timeout=1.5,
+        )
+
+        if checkbox is not None:
+            driver.execute_script(
+                """
+                const cb = arguments[0];
+                if (!cb.checked) cb.click();
+                """,
+                checkbox,
+            )
+
+            if _confirmar() is not None:
+                print(
+                    "[SCH][RETORNO] Checkbox Acompanhar Processo "
+                    "marcado por clique JavaScript."
+                )
+                return True
+
+    except Exception as e:
+        print(
+            "[SCH][RETORNO][WARN] Clique JavaScript no checkbox não "
+            f"confirmou a marcação: {e}"
+        )
+
+    # 3) Último fallback para layout JSF antigo.
+    try:
+        entrar_iframe_detalhe_analise(driver, wait)
+
+        checkbox = _localizar_checkbox_acompanhar_processo(
+            driver,
+            wait,
+            timeout=1.5,
+        )
+
+        if checkbox is not None:
+            driver.execute_script(
+                """
+                const cb = arguments[0];
+
+                if (!cb.checked) {
+                    cb.checked = true;
+                    cb.setAttribute('checked', 'checked');
+
+                    cb.dispatchEvent(
+                        new Event('input', {bubbles: true})
+                    );
+                    cb.dispatchEvent(
+                        new Event('change', {bubbles: true})
+                    );
+                }
+                """,
+                checkbox,
+            )
+
+            if _confirmar() is not None:
+                print(
+                    "[SCH][RETORNO] Checkbox Acompanhar Processo "
+                    "marcado pelo fallback JSF."
+                )
+                return True
+
+    except Exception as e:
+        print(
+            "[SCH][RETORNO][WARN] Fallback JSF do checkbox falhou: "
+            f"{e}"
+        )
+
+    print(
+        "[SCH][RETORNO][WARN] Não foi possível confirmar que "
         "'Desejo acompanhar este processo' ficou marcado."
     )
     return False
@@ -9684,7 +9881,24 @@ def _preencher_frase_acompanhar_processo_retorno(
     ).strip()
 
     frase_norm = _normalizar_texto_comparacao(frase)
-    anterior_norm = _normalizar_texto_comparacao(conteudo_anterior)
+
+    # Remove somente linhas cujo conteúdo seja EXATAMENTE "AS".
+    # Textos legítimos continuam preservados.
+    linhas_originais = str(conteudo_anterior or "").splitlines()
+    linhas_preservadas = []
+    residuo_as_removido = False
+
+    for linha in linhas_originais:
+        linha_limpa = str(linha or "").strip()
+
+        if _normalizar_texto_comparacao(linha_limpa) == "as":
+            residuo_as_removido = True
+            continue
+
+        linhas_preservadas.append(linha.rstrip())
+
+    conteudo_base = "\n".join(linhas_preservadas).strip()
+    anterior_norm = _normalizar_texto_comparacao(conteudo_base)
 
     ja_existia = bool(
         frase_norm
@@ -9692,13 +9906,13 @@ def _preencher_frase_acompanhar_processo_retorno(
     )
 
     if ja_existia:
-        conteudo_final = conteudo_anterior
-    elif conteudo_anterior:
-        conteudo_final = conteudo_anterior.rstrip() + "\n" + frase
+        conteudo_final = conteudo_base
+    elif conteudo_base:
+        conteudo_final = conteudo_base.rstrip() + "\n" + frase
     else:
         conteudo_final = frase
 
-    if not ja_existia:
+    if (not ja_existia) or residuo_as_removido:
         driver.execute_script(
             """
             const campo = arguments[0];
@@ -9760,6 +9974,7 @@ def _preencher_frase_acompanhar_processo_retorno(
         "conteudo_final": valor_confirmado,
         "conteudo_final_esperado": conteudo_final,
         "ja_existia": bool(ja_existia),
+        "residuo_as_removido": bool(residuo_as_removido),
     }
 
 
@@ -9806,31 +10021,11 @@ def _confirmar_frase_acompanhar_processo_apos_salvar(
     try:
         entrar_iframe_detalhe_analise(driver, wait)
 
-        checkbox = None
-
-        checkbox_xpaths = [
-            "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/preceding::input[@type='checkbox'][1]",
-            "//label[contains(normalize-space(.), 'Desejo acompanhar este processo')]/ancestor::*[self::td or self::div or self::span][1]//input[@type='checkbox'][1]",
-            "//input[@type='checkbox' and contains(translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-            "//input[@type='checkbox' and contains(translate(@id,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'acompanh')]",
-        ]
-
-        for xpath in checkbox_xpaths:
-            try:
-                elementos = driver.find_elements(By.XPATH, xpath)
-            except Exception:
-                elementos = []
-
-            for el in elementos:
-                try:
-                    if el.is_enabled():
-                        checkbox = el
-                        break
-                except Exception:
-                    continue
-
-            if checkbox is not None:
-                break
+        checkbox = _localizar_checkbox_acompanhar_processo(
+            driver,
+            wait,
+            timeout=4,
+        )
 
         marcado = bool(
             checkbox is not None
@@ -9918,6 +10113,7 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
         "conteudo_final": "",
         "conteudo_confirmado": "",
         "ja_existia": False,
+        "residuo_as_removido": False,
         "preenchida": False,
         "salva": False,
         "confirmada_apos_salvar": False,
@@ -9971,6 +10167,9 @@ def registrar_avaliacao_automacao_informacoes_adicionais_retorno(
             )
             resultado["ja_existia"] = bool(
                 preenchimento.get("ja_existia")
+            )
+            resultado["residuo_as_removido"] = bool(
+                preenchimento.get("residuo_as_removido")
             )
 
             if not (
