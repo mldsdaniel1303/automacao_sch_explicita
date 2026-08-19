@@ -15425,10 +15425,17 @@ def _perfis_analise_individual_retorno():
             "nome": "Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
             "produto": "bloqueia",
             "dados_tecnicos": "bloqueia",
-            "unidade_fabril": "esperada",
+            # REGRA RE 1:
+            # o resultado do Comparar Versões para Unidade Fabril é somente
+            # informativo. A análise do RE 1 deve ocorrer normalmente tanto
+            # quando houver diferença quanto quando os dois lados estiverem iguais.
+            "unidade_fabril": "informativa",
             "descricao": (
-                "A alteração de Unidade Fabril é o objeto do RE 1. "
-                "Produto e Dados Técnicos não devem sofrer alteração."
+                "O RE 1 é analisado pelos seus critérios próprios e pela sua "
+                "base documental. A indicação de alteração ou ausência de alteração "
+                "em Unidade Fabril no Comparar Versões é apenas informativa e não "
+                "bloqueia nem força revisão. Produto e Dados Técnicos não devem "
+                "sofrer alteração indevida."
             ),
         },
         "5": {
