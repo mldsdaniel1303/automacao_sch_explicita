@@ -15425,10 +15425,17 @@ def _perfis_analise_individual_retorno():
             "nome": "Inclusão/exclusão de unidade(s) fabril(is), sem alteração do CH",
             "produto": "bloqueia",
             "dados_tecnicos": "bloqueia",
-            "unidade_fabril": "esperada",
+            # REGRA RE 1:
+            # o resultado do Comparar Versões para Unidade Fabril é somente
+            # informativo. A análise do RE 1 deve ocorrer normalmente tanto
+            # quando houver diferença quanto quando os dois lados estiverem iguais.
+            "unidade_fabril": "informativa_nao_decisoria",
             "descricao": (
-                "A alteração de Unidade Fabril é o objeto do RE 1. "
-                "Produto e Dados Técnicos não devem sofrer alteração."
+                "O RE 1 é analisado pelos seus critérios próprios e pela sua "
+                "base documental. A indicação de alteração ou ausência de alteração "
+                "em Unidade Fabril no Comparar Versões é apenas informativa e não "
+                "bloqueia nem força revisão. Produto e Dados Técnicos não devem "
+                "sofrer alteração indevida."
             ),
         },
         "5": {
@@ -15589,11 +15596,47 @@ def _analisar_tipo_re_individual_retorno(
         dados_tecnicos_alterados,
         perfil.get("dados_tecnicos", "ignora"),
     )
-    aplicar_politica(
-        "Outras Unidades Fabris",
-        unidade_fabril_alterada,
-        perfil.get("unidade_fabril", "ignora"),
-    )
+    # ==========================================================
+    # REGRA ESPECÍFICA DO RE 1
+    #
+    # Para Inclusão/exclusão de unidade(s) fabril(is), a indicação do
+    # Comparar Versões sobre "Outras Unidades Fabris" NÃO participa do
+    # julgamento.
+    #
+    # Motivo operacional:
+    # muitos OCDs registram a alteração apenas no CCT e não atualizam esse
+    # bloco no SCH. Portanto:
+    # - unidade fabril igual   -> não bloqueia / não revisa;
+    # - unidade fabril diferente -> não bloqueia / não revisa.
+    #
+    # A informação continua registrada como evidência no relatório.
+    # ==========================================================
+    if tipo_re == "1":
+        criterios.append(
+            {
+                "criterio": "Outras Unidades Fabris",
+                "politica": "informativa_nao_decisoria",
+                "alterado": bool(unidade_fabril_alterada),
+            }
+        )
+
+        observacoes.append(
+            (
+                "RE 1: o resultado de Outras Unidades Fabris no Comparar "
+                "Versões é apenas informativo e não participa do julgamento. "
+                + (
+                    "Foi identificada diferença no bloco."
+                    if unidade_fabril_alterada
+                    else "Não foi identificada diferença no bloco."
+                )
+            )
+        )
+    else:
+        aplicar_politica(
+            "Outras Unidades Fabris",
+            unidade_fabril_alterada,
+            perfil.get("unidade_fabril", "ignora"),
+        )
 
     if not captura_documental_segura:
         revisoes.append(

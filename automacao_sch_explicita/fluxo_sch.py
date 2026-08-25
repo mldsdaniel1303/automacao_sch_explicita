@@ -41,7 +41,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.7.8"
+VERSAO_SCRIPT = "0.8.8.0"
 
 
 def _normalizar_texto(valor):
