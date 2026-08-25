@@ -5489,6 +5489,180 @@ def preencher_titulo_caracteristicas_secundarias_se_existir(
     return resultado
 
 
+
+def preencher_caracteristicas_secundarias_retorno(
+    driver,
+    wait,
+    req=None,
+    dados_pdf=None,
+):
+    """
+    Aplica no Retorno Para Estudo a MESMA lógica segura de Características
+    Técnicas Secundárias já usada na fila Em Análise.
+
+    Esta rotina altera SOMENTE:
+    'Título/Descrição para Características Técnicas Secundárias'
+
+    Não altera:
+    - observação técnica principal;
+    - tabelas de Características Técnicas;
+    - Dados Técnicos do Produto;
+    - Justificativa/Informações Adicionais;
+    - demais campos da aba.
+
+    A decisão de título continua usando o CCT/parser + contexto da tabela
+    secundária do SCH, com o Tipo de Produto principal apenas como referência
+    para evitar falso positivo.
+    """
+    req = req or {}
+    dados_pdf = dados_pdf or {}
+
+    resultado = {
+        "executado": False,
+        "campo_encontrado": False,
+        "preenchido": False,
+        "corrigido": False,
+        "salvo": False,
+        "confirmado_apos_salvar": False,
+        "status": "pendente",
+        "motivo": "",
+        "titulo_esperado": "",
+        "categoria": "",
+        "fila": "Retorno Para Estudo",
+        "somente_titulo_secundario": True,
+    }
+
+    if not dados_pdf:
+        resultado.update(
+            {
+                "status": "nao_executada_sem_cct",
+                "motivo": (
+                    "CCT não localizado/parseado; Características Secundárias "
+                    "não foram alteradas."
+                ),
+            }
+        )
+        return resultado
+
+    try:
+        clicar_aba_caracteristicas_tecnicas(driver, wait)
+
+        titulo = preencher_titulo_caracteristicas_secundarias_se_existir(
+            driver=driver,
+            wait=wait,
+            req=req,
+            dados_pdf=dados_pdf,
+        )
+
+        resultado["executado"] = True
+        resultado["titulo"] = titulo
+        resultado["campo_encontrado"] = bool(
+            titulo.get("campo_encontrado")
+        )
+        resultado["preenchido"] = bool(titulo.get("preenchido"))
+        resultado["corrigido"] = bool(titulo.get("corrigido"))
+        resultado["titulo_esperado"] = str(
+            titulo.get("titulo_esperado") or ""
+        ).strip()
+        resultado["categoria"] = str(
+            titulo.get("categoria") or ""
+        ).strip()
+
+        if not titulo.get("campo_encontrado"):
+            resultado.update(
+                {
+                    "status": "nao_aplicavel",
+                    "motivo": titulo.get(
+                        "motivo",
+                        "Campo de Características Secundárias não existe.",
+                    ),
+                }
+            )
+            return resultado
+
+        if not resultado["titulo_esperado"]:
+            resultado.update(
+                {
+                    "status": "revisar_sem_titulo_seguro",
+                    "motivo": titulo.get(
+                        "motivo",
+                        "Categoria secundária não identificada com segurança.",
+                    ),
+                }
+            )
+            return resultado
+
+        if titulo.get("motivo") == "campo_ja_correto":
+            resultado.update(
+                {
+                    "salvo": True,
+                    "confirmado_apos_salvar": True,
+                    "status": "ja_correto",
+                    "motivo": "Título secundário já estava correto.",
+                }
+            )
+            print(
+                "[SCH][RETORNO][SECUNDÁRIAS] "
+                f"Título já correto: {resultado['titulo_esperado']}"
+            )
+            return resultado
+
+        salvamento = salvar_caracteristicas_tecnicas(
+            driver=driver,
+            wait=wait,
+            texto_esperado="",
+            titulo_secundario_esperado=resultado["titulo_esperado"],
+        )
+
+        resultado["resultado_salvamento"] = salvamento
+        resultado["salvo"] = bool(salvamento.get("salvo"))
+        resultado["confirmado_apos_salvar"] = bool(
+            salvamento.get("confirmado_apos_salvar")
+        )
+
+        if resultado["confirmado_apos_salvar"]:
+            resultado["status"] = (
+                "corrigido_e_confirmado"
+                if resultado["corrigido"]
+                else "preenchido_e_confirmado"
+            )
+            resultado["motivo"] = (
+                "Título de Características Secundárias salvo e confirmado."
+            )
+        else:
+            resultado["status"] = "erro_confirmacao"
+            resultado["motivo"] = (
+                "Título secundário foi tratado, mas não pôde ser confirmado "
+                "após salvar."
+            )
+
+        print(
+            "[SCH][RETORNO][SECUNDÁRIAS] "
+            f"status={resultado['status']} | "
+            f"categoria={resultado['categoria'] or 'não identificada'} | "
+            f"título={resultado['titulo_esperado'] or 'não informado'}"
+        )
+
+        return resultado
+
+    except Exception as e:
+        resultado.update(
+            {
+                "executado": True,
+                "status": "erro",
+                "erro": str(e),
+                "motivo": str(e),
+            }
+        )
+
+        print(
+            "[SCH][RETORNO][WARN] Falha ao tratar Características "
+            f"Secundárias: {e}"
+        )
+
+        return resultado
+
+
 def salvar_caracteristicas_tecnicas(
     driver,
     wait,
@@ -5550,7 +5724,11 @@ def salvar_caracteristicas_tecnicas(
     except Exception:
         pass
 
-    confirmado = False
+    # Quando esta rotina for usada somente para Características Secundárias,
+    # não existe observação principal a confirmar. Nesse caso, a parte de
+    # observação já nasce como satisfeita e a confirmação geral depende apenas
+    # do título secundário.
+    confirmado = not bool(str(texto_esperado or "").strip())
 
     if texto_esperado:
         try:

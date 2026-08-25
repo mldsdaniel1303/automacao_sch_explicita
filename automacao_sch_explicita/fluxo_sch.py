@@ -20,6 +20,7 @@ from funcoes_sch import (
     comparar_dados_sch_x_cct,
     avisar_resultado_conferencia_sch_cct,
     preencher_caracteristicas_tecnicas_com_analise,
+    preencher_caracteristicas_secundarias_retorno,
     preencher_informacoes_adicionais_com_analise,
     registrar_avaliacao_automacao_informacoes_adicionais_retorno,
     avaliar_validade_cct,
@@ -41,7 +42,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.8.0"
+VERSAO_SCRIPT = "0.8.8.1"
 
 
 def _normalizar_texto(valor):
@@ -1093,7 +1094,14 @@ def executar_fluxo_sch(
                         if fila_retorno
                         else "analise_sar_cct"
                     ),
-                    "caracteristicas": preencher_caracteristicas and not fila_retorno,
+                    "caracteristicas": (
+                        True
+                        if fila_retorno
+                        else bool(preencher_caracteristicas)
+                    ),
+                    "caracteristicas_secundarias_retorno": bool(
+                        fila_retorno
+                    ),
                     "informacoes_adicionais": preencher_informacoes_adicionais and not fila_retorno,
                 },
                 "minuta": {
@@ -1300,6 +1308,21 @@ def executar_fluxo_sch(
                                 "analise_retorno_interrompida_antes_da_etapa_de_aprovacao"
                             ),
                         }
+                        retorno_estudo["caracteristicas_secundarias"] = {
+                            "executado": False,
+                            "status": (
+                                "nao_executada_analise_interrompida"
+                            ),
+                            "motivo": (
+                                "Características Secundárias não foram "
+                                "alteradas porque a análise do Retorno não "
+                                "chegou a uma comparação válida."
+                            ),
+                            "fila": "Retorno Para Estudo",
+                        }
+                        resumo["caracteristicas_secundarias_retorno"] = (
+                            retorno_estudo["caracteristicas_secundarias"]
+                        )
                         retorno_estudo["pode_enviar_para_aprovacao"] = False
                         retorno_estudo["deve_enviar_para_aprovacao"] = False
                         retorno_estudo["resultado_execucao_analise"] = (
@@ -1398,6 +1421,112 @@ def executar_fluxo_sch(
                     retorno_estudo["restauracao_tela_requerimento"] = (
                         restauracao_requerimento
                     )
+
+                    # ======================================================
+                    # CARACTERÍSTICAS TÉCNICAS SECUNDÁRIAS — RETORNO
+                    #
+                    # A Justificativa/Tipos RE já foram lidos e o Comparar
+                    # Versões já foi concluído antes desta alteração.
+                    #
+                    # Reutiliza a mesma lógica segura da fila Em Análise, mas
+                    # altera SOMENTE o campo:
+                    # "Título/Descrição para Características Técnicas
+                    # Secundárias".
+                    # ======================================================
+                    dados_pdf_secundarias_retorno = {}
+
+                    if restauracao_requerimento.get("restaurado") and pdf_cct:
+                        try:
+                            dados_pdf_secundarias_retorno = (
+                                parsear_certificado_pdf(pdf_cct) or {}
+                            )
+
+                            caracteristicas_sec_retorno = (
+                                inferir_caracteristicas_secundarias(
+                                    dados_pdf_secundarias_retorno
+                                )
+                            )
+
+                            texto_sec_retorno = (
+                                gerar_texto_caracteristicas_secundarias(
+                                    dados_pdf_secundarias_retorno
+                                )
+                            )
+
+                            dados_pdf_secundarias_retorno[
+                                "caracteristicas_secundarias"
+                            ] = caracteristicas_sec_retorno
+                            dados_pdf_secundarias_retorno[
+                                "titulo_caracteristicas_secundarias"
+                            ] = caracteristicas_sec_retorno.get(
+                                "titulo",
+                                "",
+                            )
+                            dados_pdf_secundarias_retorno[
+                                "texto_caracteristicas_secundarias"
+                            ] = texto_sec_retorno
+                            dados_pdf_secundarias_retorno[
+                                "tipo_produto"
+                            ] = req.get("tipo_produto", "")
+
+                        except Exception as e:
+                            print(
+                                "[SCH][RETORNO][WARN] Não foi possível "
+                                "preparar o CCT para Características "
+                                f"Secundárias: {e}"
+                            )
+                            dados_pdf_secundarias_retorno = {}
+
+                    if restauracao_requerimento.get("restaurado"):
+                        resultado_secundarias_retorno = (
+                            preencher_caracteristicas_secundarias_retorno(
+                                driver=driver,
+                                wait=wait,
+                                req=req,
+                                dados_pdf=dados_pdf_secundarias_retorno,
+                            )
+                        )
+                    else:
+                        resultado_secundarias_retorno = {
+                            "executado": False,
+                            "campo_encontrado": False,
+                            "preenchido": False,
+                            "corrigido": False,
+                            "salvo": False,
+                            "confirmado_apos_salvar": False,
+                            "status": "nao_executada_tela_nao_restaurada",
+                            "motivo": (
+                                "Tela original do requerimento não foi "
+                                "restaurada após Comparar Versões."
+                            ),
+                            "fila": "Retorno Para Estudo",
+                        }
+
+                    retorno_estudo[
+                        "caracteristicas_secundarias"
+                    ] = resultado_secundarias_retorno
+
+                    resumo[
+                        "caracteristicas_secundarias_retorno"
+                    ] = resultado_secundarias_retorno
+
+                    if resultado_secundarias_retorno.get("status") in {
+                        "erro",
+                        "erro_confirmacao",
+                        "revisar_sem_titulo_seguro",
+                    }:
+                        retorno_estudo.setdefault("alertas", []).append(
+                            "Características Secundárias: "
+                            + str(
+                                resultado_secundarias_retorno.get(
+                                    "motivo",
+                                    resultado_secundarias_retorno.get(
+                                        "status",
+                                        "",
+                                    ),
+                                )
+                            )
+                        )
 
                     tipo_produto = req.get("tipo_produto", "")
                     limpeza_exigida = (
@@ -1857,6 +1986,8 @@ def executar_fluxo_sch(
                         "[SCH][RETORNO] Requerimento finalizado. "
                         f"Resultado={retorno_estudo.get('status_comparacao')} | "
                         f"Comparar Versões={'SIM' if retorno_estudo.get('comparacao_executada') else 'NÃO'} | "
+                        f"Características Secundárias="
+                        f"{resultado_secundarias_retorno.get('status', 'não executada')} | "
                         f"Tratamento da minuta={'SIM' if tratamento_confirmado else 'NÃO'} | "
                         f"Registro em Informações Adicionais="
                         f"{'SIM' if marcacao_automacao.get('confirmada_apos_salvar') else 'NÃO'} | "
