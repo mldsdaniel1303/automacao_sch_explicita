@@ -14073,13 +14073,18 @@ def _comparar_documentos_anexos_retorno(
     # conteúdos é a fonte principal para inclusão. A cor vermelha serve como
     # confirmação visual, mas uma linha vermelha que continua idêntica nos
     # dois lados NÃO pode virar documento novo/removido.
+    # As duas fontes de marcação vermelha são complementares.
+    #
+    # Não usar "A or B": se a captura estruturada encontrar alguns itens,
+    # mas perder uma linha específica (ex.: Selo ANATEL), o fallback geral
+    # ainda precisa acrescentar essa linha.
     candidatos_add_vermelhos = _lista_unica_retorno(
-        adicionados_por_vermelho_tabela
-        or vermelhos_docs_direita_na_relacao
+        list(adicionados_por_vermelho_tabela)
+        + list(vermelhos_docs_direita_na_relacao)
     )
     candidatos_rem_vermelhos = _lista_unica_retorno(
-        removidos_por_vermelho_tabela
-        or vermelhos_docs_esquerda_na_relacao
+        list(removidos_por_vermelho_tabela)
+        + list(vermelhos_docs_esquerda_na_relacao)
     )
 
     # Inclusão documental é reconhecida por duas evidências complementares:
@@ -14193,6 +14198,13 @@ def _comparar_documentos_anexos_retorno(
         ),
         "documentos_adicionados_por_marcacao_vermelha": _lista_unica_retorno(
             candidatos_add_vermelhos
+        ),
+        "selos_anatel_adicionados": _lista_unica_retorno(
+            [
+                x
+                for x in docs_adicionados
+                if _categoria_documento_anexo_retorno(x) == "Selo ANATEL"
+            ]
         ),
         "criterio_inclusao_documental": (
             "uniao_diferenca_estrutural_e_marcacao_vermelha_lado_novo"
@@ -14647,6 +14659,21 @@ def _doc_match_retorno(documento, aliases):
     if (
         categoria_norm.startswith("fotos internas")
         and _aliases_tem("Fotos internas")
+    ):
+        return True
+
+    # RE 11 - Fotos do selo Anatel:
+    # no SCH esse documento pode estar cadastrado simplesmente na categoria
+    # "Selo ANATEL", independentemente do nome/descrição do arquivo.
+    if (
+        categoria_norm == "selo anatel"
+        and _aliases_tem(
+            "Selo ANATEL",
+            "Selo Anatel",
+            "Foto do selo",
+            "Fotos do selo",
+            "Fotos do selo Anatel",
+        )
     ):
         return True
 
@@ -15134,6 +15161,10 @@ def _regras_documentos_por_tipo_re_retorno():
         [
             "Selo ANATEL",
             "Selo Anatel",
+            "Selo Anatel atualizado",
+            "Foto Selo Anatel",
+            "Foto do selo Anatel",
+            "Fotos do selo Anatel",
             "foto do selo",
             "fotos do selo",
             "selo",
@@ -16323,6 +16354,7 @@ def analisar_retorno_para_estudo(
             f"adicionados={len(resultado['documentos_adicionados'])} | "
             f"por_diff={len(documentos.get('documentos_adicionados_por_diferenca', []) or [])} | "
             f"por_vermelho={len(documentos.get('documentos_adicionados_por_marcacao_vermelha', []) or [])} | "
+            f"selo_anatel={len(documentos.get('selos_anatel_adicionados', []) or [])} | "
             f"origem={documentos.get('origem_documentos', '')}"
         )
 
