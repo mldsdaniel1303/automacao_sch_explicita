@@ -4667,14 +4667,19 @@ TITULOS_CARACTERISTICAS_SECUNDARIAS = [
     {
         "categoria": "Sistema de Identificação por Radiofrequências",
         "aliases": [
+            # Formas no singular e no plural encontradas em CCTs.
+            "sistema de identificacao por radiofrequencia",
             "sistema de identificacao por radiofrequencias",
+            "sistemas de identificacao por radiofrequencia",
             "sistemas de identificacao por radiofrequencias",
+            "identificacao por radiofrequencia",
             "identificacao por radiofrequencias",
+            "radio frequency identification",
             "rfid",
         ],
         "titulo": (
-            "O produto incorpora Sistema de Identificação por "
-            "Radiofrequências com as seguintes características:"
+            "O produto incorpora o módulo Sistema de Identificação por "
+            "Radiofrequência com as seguintes características:"
         ),
     },
     {
@@ -4852,6 +4857,9 @@ def _extrair_titulos_explicitos_secundarios_cct(texto_cct):
 
     Características como Equipamento de Radiocomunicação de Radiação Restrita:
 
+    O produto incorpora o módulo Sistema de Identificação por
+    Radiofrequência com as seguintes características:
+
     A busca é feita por linha e também no texto contínuo, para tolerar PDFs
     cuja extração quebre o título em mais de uma linha.
     """
@@ -4878,6 +4886,12 @@ def _extrair_titulos_explicitos_secundarios_cct(texto_cct):
         "caracteristicas tecnicas como",
         "caracteristicas de",
         "caracteristicas tecnicas de",
+
+        # Formulações explícitas usadas nos CCTs.
+        "o produto incorpora",
+        "produto incorpora",
+        "incorpora o modulo",
+        "incorpora um modulo",
     ]
 
     for janela in janelas:
@@ -4928,10 +4942,12 @@ def diagnosticar_titulo_caracteristicas_secundarias(
     """
     Escolhe a categoria secundária usando fontes em ordem de confiança:
 
-    1. Título explícito no texto do CCT;
+    1. Título explícito no texto do CCT, inclusive "O produto incorpora...";
     2. Categoria/título estruturado pelo parser;
-    3. Contexto da tabela secundária do SCH;
-    4. Ocorrências gerais no CCT, somente como último apoio.
+    3. Ocorrências gerais no CCT, somente como último apoio.
+
+    A estrutura da tabela secundária do SCH é apenas diagnóstico e nunca
+    escolhe sozinha uma categoria.
 
     O tipo principal do requerimento não é usado como categoria secundária
     por simples ocorrência no texto. Ele recebe penalidade nas evidências
@@ -4991,7 +5007,7 @@ def diagnosticar_titulo_caracteristicas_secundarias(
         pontos[categoria] = pontos.get(categoria, 0) + 180
         origens.setdefault(categoria, []).append(
             {
-                "origem": "cct.titulo_explicito_caracteristicas_como",
+                "origem": "cct.titulo_explicito",
                 "peso": 180,
                 "termo": _normalizar_texto_comparacao(
                     registro["categoria"]
@@ -5016,23 +5032,19 @@ def diagnosticar_titulo_caracteristicas_secundarias(
         or ""
     )
 
-    # Evidência típica da tabela de Equipamento de Radiocomunicação.
-    if (
+    contexto_intensidade_distancia = False
+
+    # IMPORTANTE:
+    # "Intensidade de Campo" + "Distância da Medida" NÃO identifica uma
+    # categoria por si só. Essa mesma estrutura aparece, por exemplo, em
+    # Sistema de Identificação por Radiofrequência (RFID).
+    #
+    # O contexto continua registrado apenas como diagnóstico e NÃO soma
+    # pontos para nenhuma categoria.
+    contexto_intensidade_distancia = bool(
         "intensidade de campo" in contexto_norm
         and "distancia da medida" in contexto_norm
-    ):
-        registro = _registro_titulo_secundario_por_texto(
-            "Equipamento de Radiocomunicação de Radiação Restrita"
-        )
-        categoria = registro["categoria"]
-        pontos[categoria] = pontos.get(categoria, 0) + 75
-        origens.setdefault(categoria, []).append(
-            {
-                "origem": "sch.tabela_secundaria_intensidade_e_distancia",
-                "peso": 75,
-                "termo": "intensidade de campo + distancia da medida",
-            }
-        )
+    )
 
     # Ocorrência geral no CCT: peso baixo, pois o texto também contém a
     # característica principal.
@@ -5072,8 +5084,9 @@ def diagnosticar_titulo_caracteristicas_secundarias(
             continue
 
         tem_titulo_explicito = any(
-            item.get("origem")
-            == "cct.titulo_explicito_caracteristicas_como"
+            str(item.get("origem") or "").startswith(
+                "cct.titulo_explicito"
+            )
             for item in origens.get(categoria, [])
         )
 
@@ -5136,6 +5149,9 @@ def diagnosticar_titulo_caracteristicas_secundarias(
         "segunda_pontuacao": segunda_pontuacao,
         "pontuacoes": pontos,
         "origens": origens,
+        "contexto_intensidade_distancia": bool(
+            contexto_intensidade_distancia
+        ),
         "tipo_principal": (
             req.get("tipo_produto")
             or dados_pdf.get("tipo_produto")
