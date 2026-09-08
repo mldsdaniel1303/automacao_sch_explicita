@@ -383,8 +383,8 @@ def escolher_acoes_da_fila(fila_sch):
         "produto estiver na lista configurada"
     )
     print(
-        "- Registrar em Informações Adicionais que o processo foi avaliado "
-        "por automação antes de uma aprovação automática"
+        "- Registrar em Acompanhar Processo que o processo foi avaliado "
+        "por automação"
     )
     print(
         "- Bloquear aprovação quando o tratamento da minuta ou a marcação "
@@ -637,7 +637,7 @@ def exibir_resumo_fluxo_completo(opcoes):
             "Automático quando aplicável (limpeza ou substituição)"
         )
         print(
-            "Marcação em Informações Adicionais antes da aprovação: "
+            "Marcação em Acompanhar Processo: "
             "Automática e obrigatória"
         )
         print(
@@ -651,6 +651,120 @@ def exibir_resumo_fluxo_completo(opcoes):
     )
 
     linha()
+
+
+
+def coletar_opcoes_retorno_padrao():
+    """
+    Configuração rápida usada pelos analistas no Retorno Para Estudo.
+
+    Valores fixos:
+    - fila: Retorno Para Estudo
+    - navegador: Chrome
+    - requerimentos: todos
+    - somente pendentes: não
+    - registros por página: 100
+    - download de documentos: nenhum
+    - navegador permanece aberto ao final
+
+    O usuário escolhe somente:
+    - pasta base da execução;
+    - permissão para aprovação automática quando o processo estiver apto.
+    """
+    limpar_tela()
+    linha()
+    print("RETORNO PARA ESTUDO — CONFIGURAÇÃO PADRÃO")
+    linha()
+    print(
+        "Este modo aplica automaticamente a configuração normalmente "
+        "utilizada pelos analistas."
+    )
+
+    titulo_secao("CONFIGURAÇÕES FIXAS")
+    print("Fila: Retorno Para Estudo")
+    print("Navegador: Chrome")
+    print("Requerimentos: Todos os requerimentos da fila")
+    print("Somente requerimentos ainda não processados: Não")
+    print("Registros por página: 100")
+    print("Download de documentos: Nenhum")
+    print("Comparar Versões: Sim")
+    print(
+        "Tratamento de Especificações Complementares: "
+        "Automático quando aplicável"
+    )
+    print("Marcação em Acompanhar Processo: Automática e obrigatória")
+    print("Manter navegador aberto ao final: Sim")
+
+    titulo_secao("APROVAÇÃO AUTOMÁTICA")
+    executar_envio = perguntar_sim_nao(
+        "Permitir aprovação automática quando a análise estiver apta?",
+        padrao=False,
+    )
+
+    titulo_secao("PASTA DE SAÍDA")
+    pasta_escolhida = escolher_pasta(
+        "Escolha a pasta base da execução",
+        Path.cwd() / "automacao_sch_output",
+    )
+    pasta_base = normalizar_pasta_base_fluxo(pasta_escolhida)
+
+    return {
+        "fila_sch": "Retorno Para Estudo",
+        "navegador": "chrome",
+        "quantidade_exibida_sch": 100,
+        "descricao_requerimentos": "Todos os requerimentos da fila",
+        "limite_requerimentos": None,
+        "requerimento_especifico": None,
+        "processar_somente_pendentes": False,
+        "categorias_anexos": [],
+        "descricao_categorias": "Nenhum documento",
+        "pausar_antes_anexos": False,
+        "processar_apenas_radiacao_restrita": False,
+        "preencher_caracteristicas": False,
+        "preencher_minuta": False,
+        "preencher_informacoes_adicionais": False,
+        "executar_envio_retorno_para_estudo": executar_envio,
+        "pasta_base": pasta_base,
+        "fechar_navegador_ao_final": False,
+    }
+
+
+def executar_configuracao_retorno_padrao():
+    """
+    Executa o atalho de Retorno Para Estudo com configuração padrão.
+
+    Depois das duas escolhas permitidas ao usuário, exibe um resumo final
+    apenas para conferência antes de iniciar o navegador.
+    """
+    opcoes = coletar_opcoes_retorno_padrao()
+
+    exibir_resumo_fluxo_completo(opcoes)
+
+    print("CONFIGURAÇÃO: PADRÃO — RETORNO PARA ESTUDO")
+    print()
+    print("1. Iniciar execução")
+    print("0. Voltar ao menu principal")
+
+    decisao = perguntar_opcao(
+        "\nOpção [0-1] (Enter = 1): ",
+        {"0", "1"},
+        padrao="1",
+    )
+
+    if decisao == "0":
+        return None
+
+    opcoes_execucao = dict(opcoes)
+    opcoes_execucao.pop("descricao_requerimentos", None)
+    opcoes_execucao.pop("descricao_categorias", None)
+
+    print()
+    linha()
+    print("INICIANDO AUTOMAÇÃO — RETORNO PARA ESTUDO / PADRÃO")
+    linha()
+
+    executar_fluxo_sch(**opcoes_execucao)
+    return True
 
 
 def coletar_opcoes_analise_local():
@@ -694,7 +808,14 @@ def exibir_menu():
     print("AUTOMAÇÃO SCH")
     linha()
     print("1. Processar requerimentos diretamente no SCH")
+    print("   Configuração completa / personalizada")
+    print()
     print("2. Analisar documentos já baixados")
+    print()
+    print("3. Retorno Para Estudo — PADRÃO")
+    print("   Chrome | Todos | 100 por página | Sem downloads")
+    print("   O usuário escolhe somente pasta e aprovação automática")
+    print()
     print("0. Sair")
     linha()
 
@@ -770,7 +891,7 @@ def main():
             exibir_menu()
             opcao = perguntar_opcao(
                 "\nEscolha uma opção: ",
-                {"0", "1", "2"},
+                {"0", "1", "2", "3"},
             )
 
             if opcao == "0":
@@ -790,6 +911,16 @@ def main():
 
                 if executou:
                     return 0
+
+                continue
+
+            if opcao == "3":
+                executou = executar_configuracao_retorno_padrao()
+
+                if executou:
+                    return 0
+
+                continue
 
     except KeyboardInterrupt:
         print("\n[INFO] Execução interrompida pelo usuário.")
