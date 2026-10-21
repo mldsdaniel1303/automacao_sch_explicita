@@ -949,6 +949,20 @@ def _html_conferencia_bloco(resultado):
             "</div>"
         )
 
+    elif status_geral == "nao_executada_opcao_usuario":
+        blocos.append("<p><b>Conferência não executada:</b> opção Comparar Versões selecionada; nenhum CCT foi exigido.</p>")
+
+    elif status_geral == "fora_escopo_cct":
+        motivo = conferencia.get("motivo") or "Produto fora do escopo da conferência CCT x SCH."
+        blocos.append("<p><b>Conferência não aplicável:</b> " + escape(str(motivo)) + "</p>")
+
+    elif status_geral in {"erro", "nao_executada_tela"}:
+        motivo = conferencia.get("motivo") or "A conferência não pôde ser concluída."
+        blocos.append(
+            "<div class='alerta'>Conferência CCT x SCH não concluída: "
+            + escape(str(motivo)) + "</div>"
+        )
+
     elif status_geral == "parcial":
         blocos.append(
             "<div class='alerta'>"
@@ -963,6 +977,9 @@ def _html_conferencia_bloco(resultado):
             "Foram encontradas incongruências entre os dados do SCH e do CCT."
             "</div>"
         )
+
+    if status_geral in {"sem_cct", "erro", "nao_executada_tela", "fora_escopo_cct", "nao_executada_opcao_usuario"}:
+        return "".join(blocos)
 
     blocos.append(_criar_tabela_comparacao(resultado))
 
@@ -1888,6 +1905,69 @@ def _html_retorno_para_estudo_bloco(resultado):
         </div>
     """
 
+def _html_retorno_por_escopo(resultado):
+    """Não inventa análise tradicional em requerimentos conferidos só pelo CCT."""
+    escopo = resultado.get("escopo_modulos_re") or {}
+    if escopo and not escopo.get("analise_tradicional_re", True):
+        numero = _fmt_req(resultado)
+        motivo = (
+            "modo Análise Simplificada selecionado pelo usuário"
+            if resultado.get("modo_analise_re") == "analise_simplificada"
+            else "requerimento fora do escopo da análise tradicional"
+        )
+        return (
+            f"<h2>Análise tradicional de RE — Requerimento {escape(str(numero))}</h2>"
+            f"<p>Não executada: {escape(motivo)}. "
+            "Comparar Versões, Corrigir Minuta, Acompanhar Processo e aprovação automática "
+            "não foram acionados neste módulo.</p>"
+        )
+    return _html_retorno_para_estudo_bloco(resultado)
+
+
+def _html_resumo_conferencia_cct_re(resultados):
+    """Quadro independente para não confundir conferência CCT com aprovação RE."""
+    linhas = []
+    elegiveis = 0
+    concluidos = 0
+    sem_cct = 0
+
+    for resultado in resultados or []:
+        escopos = resultado.get("escopo_modulos_re") or {}
+        conferencia = resultado.get("conferencia_sch_cct") or {}
+        status = conferencia.get("status_geral", "não executada")
+        participa = bool(escopos.get("comparacao_cct_sch"))
+        if participa:
+            elegiveis += 1
+        if participa and status in {"ok", "conforme", "divergente", "parcial"}:
+            concluidos += 1
+        if participa and status == "sem_cct":
+            sem_cct += 1
+        numero = _fmt_req(resultado)
+        tipo = (resultado.get("requerimento") or {}).get("tipo_produto", "")
+        tradicional = "Sim" if escopos.get("analise_tradicional_re") else "Não"
+        motivo = conferencia.get("motivo", "")
+        linhas.append(
+            "<tr>"
+            f"<td>{escape(str(numero))}</td>"
+            f"<td>{escape(str(tipo))}</td>"
+            f"<td>{escape(tradicional)}</td>"
+            f"<td>{escape(str(status))}</td>"
+            f"<td>{escape(str(motivo))}</td>"
+            "</tr>"
+        )
+
+    return (
+        "<h2>Conferência CCT x SCH — módulo independente de RE</h2>"
+        f"<p>Elegíveis: <b>{elegiveis}</b> | Conferências com resultado: "
+        f"<b>{concluidos}</b> | Sem CCT: <b>{sem_cct}</b>. "
+        "Este quadro não altera a decisão de aprovação do módulo tradicional.</p>"
+        "<table><thead><tr><th>Requerimento</th><th>Tipo de produto</th>"
+        "<th>RE tradicional</th><th>Situação CCT x SCH</th><th>Observação</th>"
+        "</tr></thead><tbody>"
+        + "".join(linhas) + "</tbody></table>"
+    )
+
+
 def _html_requerimento_retorno_para_estudo(resultado):
     req_numero = _fmt_req(resultado)
     tempo_ativo = _tempo_ativo_resultado_segundos(resultado)
@@ -1910,11 +1990,15 @@ def _html_requerimento_retorno_para_estudo(resultado):
     <body>
         <h1>Requerimento {escape(req_numero)}</h1>
         <p class="muted">Fila: Retorno Para Estudo</p>
+        <p class="muted">Modo da execução: {escape(str(resultado.get('modo_analise_re') or 'não informado'))}</p>
         <p class="muted">Tempo de análise: {escape(str(tempo_ativo))} segundo(s)</p>
 
         {erro_html}
 
-        {_html_retorno_para_estudo_bloco(resultado)}
+        {_html_retorno_por_escopo(resultado)}
+
+        {_html_conferencia_bloco(resultado)}
+        {_html_validade_cct(resultado) if resultado.get("dados_pdf") else ""}
 
         <h2>Dados operacionais</h2>
         <ul>
@@ -2796,6 +2880,9 @@ def _html_consolidado_retorno_para_estudo(
         mensagem = item.get("mensagem", "") or ""
 
         motivo_humano = {
+            "fora_escopo_ambos_modulos_re": (
+                "Fora do escopo dos dois módulos de RE"
+            ),
             "tipo_produto_fora_escopo_automatico_retorno": (
                 "Tipo de produto fora da lista de avaliação automática do Retorno Para Estudo"
             ),
@@ -2820,7 +2907,7 @@ def _html_consolidado_retorno_para_estudo(
         req_numero = _req_numero(resultado)
 
         try:
-            bloco = _html_retorno_para_estudo_bloco(resultado)
+            bloco = _html_retorno_por_escopo(resultado)
         except Exception as e:
             bloco = (
                 "<div class='card erro-card'>"
@@ -2830,6 +2917,15 @@ def _html_consolidado_retorno_para_estudo(
                 "</div>"
             )
 
+        try:
+            bloco += _html_conferencia_bloco(resultado)
+            if resultado.get("dados_pdf"):
+                bloco += _html_validade_cct(resultado)
+        except Exception as e:
+            bloco += (
+                "<div class='alerta'>Falha ao renderizar conferência "
+                f"CCT x SCH: {_safe_txt(e)}</div>"
+            )
         blocos_detalhes.append(bloco)
 
     html = f"""<!DOCTYPE html>
@@ -3053,6 +3149,10 @@ def _html_consolidado_retorno_para_estudo(
                 {''.join(linhas_resumo)}
             </tbody>
         </table>
+
+        <p class="observacao">Os indicadores de aprovação acima referem-se somente ao módulo tradicional de RE.</p>
+
+        {_html_resumo_conferencia_cct_re(resultados)}
 
         <h3>Requerimentos ignorados antes da análise automática</h3>
 

@@ -4,6 +4,8 @@ import builtins
 import re
 import unicodedata
 
+from selenium.webdriver.common.by import By
+
 from navegador import criar_driver
 from utils import aguardar_enter, carregar_regras, salvar_json, nome_seguro
 from pdf_parser import parsear_certificado_pdf
@@ -42,7 +44,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.8.3"
+VERSAO_SCRIPT = "0.8.9.1-re-modos"
 
 
 def _normalizar_texto(valor):
@@ -243,6 +245,145 @@ def _tipo_produto_no_escopo_automatico_retorno(tipo_produto):
     return bool(
         tipo_produto_deve_limpar_especificacoes_complementares(tipo_produto)
     )
+
+
+# A conferência CCT x SCH tem escopo próprio e NÃO compartilha a lista
+# positiva de produtos utilizada por Comparar Versões/Corrigir Minuta.
+CATEGORIA_CCT = "Certificado de Conformidade Técnica - CCT"
+
+
+def _escopo_conferencia_cct_re(req, dados_sch=None):
+    """Exclui os quatro tipos do art. 3 e a modalidade Declaração de Conformidade.
+
+    A modalidade só é excluída quando identificada explicitamente; na ausência
+    dessa informação, não inventamos que o produto foi declarado. A decisão
+    permanece registrada para auditoria e possível revisão da fonte no SCH.
+    """
+    req = req or {}
+    dados_sch = dados_sch or {}
+    tipo = _normalizar_texto(req.get("tipo_produto", ""))
+
+    proibidos = (
+        "carregador para telefone celular",
+        "carregador indutivo para telefone celular",
+        "bateria de litio utilizada em telefone celular",
+        "acessorio para telefone movel celular do tipo bateria auxiliar",
+    )
+    # A comparação é por expressão completa, não por palavras soltas:
+    # evita excluir todos os acessórios ou todos os aparelhos celulares.
+    tipo_limpo = re.sub(r"[^a-z0-9]+", " ", tipo).strip()
+    for excluido in proibidos:
+        if tipo_limpo == excluido or tipo_limpo.startswith(excluido + " "):
+            return {
+                "executar": False,
+                "motivo": "tipo_produto_excluido_portaria_art_3",
+                "descricao": f"Tipo de produto excluído da análise simplificada: {req.get('tipo_produto', '')}",
+                "modalidade_confirmada": False,
+            }
+
+    # A modalidade não é sinônimo de tipo de produto: verificar campos explícitos.
+    campos_modalidade = (
+        "modalidade_avaliacao", "modalidade_de_avaliacao",
+        "modalidade", "modalidade_certificacao", "tipo_avaliacao",
+    )
+    valores = [
+        str(fonte.get(campo) or "")
+        for fonte in (req, dados_sch)
+        for campo in campos_modalidade
+        if fonte.get(campo)
+    ]
+    # Suporte a uma linha de fila que informe EXPRESSAMENTE a modalidade.
+    texto_linha = _normalizar_texto(req.get("texto_linha", ""))
+    trecho = re.search(
+        r"modalidade(?:\s+de\s+avaliacao)?\s*[:=\-]\s*([^|;\n]+)",
+        texto_linha,
+    )
+    if trecho:
+        valores.append(trecho.group(1))
+
+    declaracao = any(
+        "declaracao de conformidade" in _normalizar_texto(valor)
+        for valor in valores
+    )
+    if declaracao:
+        return {
+            "executar": False,
+            "motivo": "modalidade_declaracao_conformidade",
+            "descricao": "Modalidade de avaliação: Declaração de Conformidade.",
+            "modalidade_confirmada": True,
+        }
+
+    return {
+        "executar": True,
+        "motivo": "produto_elegivel_para_conferencia_cct",
+        "descricao": "Comparação CCT x SCH habilitada independentemente do tipo RE.",
+        "modalidade_confirmada": bool(valores),
+    }
+
+
+def _extrair_modalidade_avaliacao_visivel_sch(driver):
+    """Lê a modalidade APENAS se estiver rotulada na tela atual de Dados Gerais.
+
+    Não busca a palavra 'declaração' livremente na página: isso poderia
+    confundir anexos, referências legais ou outras informações com a
+    modalidade efetiva de avaliação do requerimento.
+    """
+    try:
+        texto = driver.find_element(By.TAG_NAME, "body").text or ""
+    except Exception:
+        return ""
+
+    linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
+    for i, linha in enumerate(linhas):
+        if not re.fullmatch(r"modalidade(?:\s+de\s+avaliacao)?", _normalizar_texto(linha.rstrip(":"))):
+            # Captura também campo rotulado e valor juntos na mesma linha.
+            m = re.match(
+                r"^modalidade(?:\s+de\s+avalia[çc][ãa]o)?\s*[:\-]\s*(.+)$",
+                linha,
+                flags=re.I,
+            )
+            if m:
+                return m.group(1).strip()
+            continue
+        if i + 1 < len(linhas):
+            return linhas[i + 1]
+    return ""
+
+
+def _definir_escopos_re(req):
+    """Marca módulos independentes SEM descartar o requerimento antecipadamente."""
+    pode_tradicional = _tipo_produto_no_escopo_automatico_retorno(
+        req.get("tipo_produto", "")
+    ) and not _homologacao_ano_2026_ou_superior(req)
+    conferencia = _escopo_conferencia_cct_re(req)
+    return {
+        "analise_tradicional_re": bool(pode_tradicional),
+        "comparacao_cct_sch": bool(conferencia["executar"]),
+        "motivo_comparacao_cct": conferencia["motivo"],
+        "descricao_comparacao_cct": conferencia["descricao"],
+        "modalidade_confirmada": conferencia["modalidade_confirmada"],
+        "ano_homologacao_2026_mais": _homologacao_ano_2026_ou_superior(req),
+    }
+
+
+MODOS_ANALISE_RE = {"comparar_versoes", "analise_simplificada", "ambos"}
+CATEGORIA_RACT = "Relatório de Avaliação da Conformidade - RACT"
+
+
+def _escopos_para_modo_re(escopos, modo):
+    """Aplica a escolha do usuário aos escopos técnicos independentes."""
+    if modo not in MODOS_ANALISE_RE:
+        raise ValueError(f"Modo de análise RE desconhecido: {modo}")
+    escopos = dict(escopos or {})
+    escopos["modo_analise_re"] = modo
+    if modo == "comparar_versoes":
+        escopos["comparacao_cct_sch"] = False
+        escopos["motivo_comparacao_cct"] = "nao_executada_opcao_usuario"
+        escopos["descricao_comparacao_cct"] = "Conferência não selecionada: modo Comparar Versões."
+    if modo == "analise_simplificada":
+        escopos["analise_tradicional_re"] = False
+        escopos["motivo_analise_tradicional"] = "nao_executada_opcao_usuario"
+    return escopos
 
 
 def separar_requerimentos_por_escopo(requerimentos, processar_apenas_rr=True):
@@ -710,6 +851,121 @@ def _requerimento_corresponde_ao_alvo(req, alvo):
     )
 
 
+def _conferir_cct_sch_independente_re(
+    driver,
+    wait,
+    req,
+    pdf_cct,
+    dados_certificado_sch,
+    resumo,
+    tela_requerimento_restaurada=True,
+):
+    """Reutiliza em RE a MESMA comparação da fila Em Análise, sem aprovar nem editar.
+
+    A conferência é independente de Comparar Versões e dos analisadores dos RE.
+    Quando não houver CCT ou a tela não estiver acessível, registra o motivo
+    explícito em vez de afirmar conformidade.
+    """
+    numero = _numero_requerimento(req)
+    dados_certificado_sch = dados_certificado_sch or {}
+
+    def nao_executada(status, motivo):
+        resumo["conferencia_sch_cct"] = {
+            "status_geral": status,
+            "comparacoes": [],
+            "divergencias": [],
+            "campos_ausentes": [],
+            "comparacao_tabela_tecnica": {
+                "status": "sem_tabela",
+                "motivo": motivo,
+                "divergencias": [],
+            },
+            "requerimento": numero,
+            "motivo": motivo,
+        }
+        print(f"[SCH][RETORNO][CCT x SCH][WARN] {numero}: {motivo}")
+        return resumo["conferencia_sch_cct"]
+
+    if not pdf_cct:
+        return nao_executada(
+            "sem_cct", "CCT não localizado. Verifique a seleção de downloads ou a pasta do requerimento."
+        )
+
+    try:
+        dados_pdf = parsear_certificado_pdf(pdf_cct) or {}
+    except Exception as exc:
+        return nao_executada("erro", f"Falha ao interpretar PDF do CCT: {type(exc).__name__}: {exc}")
+
+    if not dados_pdf:
+        return nao_executada("sem_cct", "O PDF do CCT não forneceu dados válidos.")
+
+    # Guardar dados brutos do CCT ANTES de aplicar as datas do SCH para
+    # avaliação da validade. Sem isso, emissão ausente no parser pode acabar
+    # comparada com a própria emissão do SCH, produzindo falso status 'ok'.
+    dados_cct_datas_brutos = {
+        "data_emissao": dados_pdf.get("data_emissao", ""),
+        "data_validade": dados_pdf.get("data_validade", ""),
+        "data_emissao_cct": dados_pdf.get("data_emissao", ""),
+        "data_validade_cct": dados_pdf.get("data_validade", ""),
+    }
+
+    # Mesmo preparo de dados utilizado na fila Em Análise.
+    dados_pdf["nome_comercial_sch"] = req.get("nome_comercial", "")
+    dados_pdf["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
+
+    if dados_certificado_sch:
+        dados_pdf["data_emissao_cct"] = dados_pdf.get("data_emissao", "")
+        dados_pdf["data_validade_cct"] = dados_pdf.get("data_validade", "")
+        dados_pdf["data_emissao_sch"] = dados_certificado_sch.get("data_certificado", "")
+        dados_pdf["data_validade_sch"] = dados_certificado_sch.get("data_validade", "")
+        dados_pdf["numero_certificado_sch_dados_gerais"] = dados_certificado_sch.get("numero_certificado", "")
+        if dados_certificado_sch.get("data_certificado"):
+            dados_pdf["data_emissao"] = dados_certificado_sch["data_certificado"]
+        if dados_certificado_sch.get("data_validade"):
+            dados_pdf["data_validade"] = dados_certificado_sch["data_validade"]
+        dados_pdf["datas_origem"] = "SCH - Dados Gerais - Dados do Certificado"
+
+    resumo["dados_pdf"] = dados_pdf
+    resumo["validade_cct"] = avaliar_validade_cct(dados_pdf)
+
+    try:
+        datas = comparar_datas_certificado_sch_x_cct(
+            dados_certificado_sch=dados_certificado_sch,
+            dados_pdf=dados_cct_datas_brutos,
+        )
+    except Exception as exc:
+        datas = {
+            "status_geral": "erro", "mensagem": str(exc),
+            "comparacoes": [], "divergencias": [],
+        }
+    resumo["comparacao_datas_sch_cct"] = datas
+    dados_pdf["comparacao_datas_sch_cct"] = datas
+
+    if not tela_requerimento_restaurada:
+        return nao_executada(
+            "nao_executada_tela", "Não foi possível restaurar o requerimento para ler a tabela técnica do SCH."
+        )
+
+    try:
+        req["tabela_tecnica_sch"] = extrair_tabela_tecnica_sch(driver, wait)
+    except Exception as exc:
+        print(f"[SCH][RETORNO][CCT x SCH][WARN] Tabela técnica indisponível: {exc}")
+        req["tabela_tecnica_sch"] = {"cabecalho": [], "linhas": []}
+
+    resumo["tabela_tecnica_sch"] = req["tabela_tecnica_sch"]
+
+    # Estas DUAS funções são exatamente as já utilizadas em Em Análise.
+    resultado = comparar_dados_sch_x_cct(req, dados_pdf)
+    avisar_resultado_conferencia_sch_cct(resultado)
+    resumo["conferencia_sch_cct"] = resultado
+    print(
+        f"[SCH][RETORNO][CCT x SCH] {numero}: "
+        f"{resultado.get('status_geral', 'indefinido')} | "
+        f"Datas: {datas.get('status_geral', 'indefinido')}"
+    )
+    return resultado
+
+
 def executar_fluxo_sch(
     pasta_base,
     limite_requerimentos=None,
@@ -726,6 +982,7 @@ def executar_fluxo_sch(
     fechar_navegador_ao_final=None,
     fila_sch=None,
     executar_envio_retorno_para_estudo=False,
+    modo_analise_re="ambos",
 ):
     pasta_base = Path(pasta_base).resolve()
     pasta_base.mkdir(parents=True, exist_ok=True)
@@ -734,6 +991,19 @@ def executar_fluxo_sch(
         fila_sch = perguntar_fila_sch()
 
     fila_retorno = _eh_fila_retorno_para_estudo(fila_sch)
+    if fila_retorno and modo_analise_re not in MODOS_ANALISE_RE:
+        raise ValueError(f"Modo RE inválido: {modo_analise_re!r}")
+    if fila_retorno:
+        if modo_analise_re == "analise_simplificada":
+            executar_envio_retorno_para_estudo = False
+        # Em RE, os documentos são definidos pelo modo, não pelo seletor global.
+        categorias_anexos = (
+            [] if modo_analise_re == "comparar_versoes"
+            else [CATEGORIA_CCT, CATEGORIA_RACT]
+        )
+        print(f"[SCH][RETORNO] Modo: {modo_analise_re}")
+        print("[SCH][RETORNO] Documentos do modo: " +
+              (", ".join(categorias_anexos) if categorias_anexos else "Nenhum"))
     print(f"[SCH] Fila selecionada para processamento: {fila_sch}")
 
     regras = carregar_regras()
@@ -828,40 +1098,12 @@ def executar_fluxo_sch(
 
         requerimentos = list(reversed(requerimentos))
 
-        # ==========================================================
-        # REGRA DE HOMOLOGAÇÃO 2026+
-        #
-        # Esta regra pertence EXCLUSIVAMENTE à fila Retorno Para Estudo.
-        # Na fila Em Análise, requerimentos/homologações de 2026 ou posterior
-        # devem seguir o processamento normal.
-        # ==========================================================
+        # No RE, homologações 2026+ deixam de ser removidas da lista.
+        # O bloqueio continua pertencendo APENAS à análise tradicional de RE;
+        # o módulo independente CCT x SCH ainda pode analisar esses processos.
         ignorados_homologacao_2026_mais = []
-
         if fila_retorno:
-            requerimentos, ignorados_homologacao_2026_mais = (
-                _separar_homologacoes_2026_ou_superior(requerimentos)
-            )
-
-            if ignorados_homologacao_2026_mais:
-                print(
-                    "[SCH][RETORNO] Requerimentos ignorados por homologação "
-                    "de 2026 ou posterior: "
-                    f"{len(ignorados_homologacao_2026_mais)}"
-                )
-
-                for item in ignorados_homologacao_2026_mais:
-                    print(
-                        "[SCH][RETORNO][IGNORADO] "
-                        f"Requerimento={_numero_requerimento(item)} | "
-                        f"Homologação={item.get('homologacao', '')} | "
-                        f"Motivo=ano {item.get('ano_homologacao', '') or 'não identificado'} "
-                        "no bloco central (2026+)"
-                    )
-        else:
-            print(
-                "[SCH][EM ANÁLISE] Filtro de homologação 2026+ não aplicado "
-                "nesta fila. Requerimentos de 2026 ou posterior serão processados normalmente."
-            )
+            print("[SCH][RETORNO] Homologação 2026+ restringe apenas o módulo tradicional RE.")
 
         if requerimento_especifico:
             requerimentos_encontrados = [
@@ -912,44 +1154,30 @@ def executar_fluxo_sch(
         ignorados_tipo_produto_retorno = []
 
         if fila_retorno:
-            processaveis_retorno = []
-
+            selecionados = []
             for req in requerimentos_processaveis:
-                tipo_produto = (
-                    req.get("tipo_produto", "")
-                    if isinstance(req, dict)
-                    else ""
+                if not isinstance(req, dict):
+                    continue
+                escopos = _escopos_para_modo_re(
+                    _definir_escopos_re(req), modo_analise_re
                 )
-
-                # REGRA DO RETORNO PARA ESTUDO:
-                # só entra no requerimento se o tipo estiver na lista positiva
-                # configurada. Qualquer outro tipo é ignorado ainda na fila.
-                if not _tipo_produto_no_escopo_automatico_retorno(
-                    tipo_produto
-                ):
-                    item = dict(req)
-                    item["motivo"] = (
-                        "tipo_produto_fora_escopo_automatico_retorno"
+                req["escopo_modulos_re"] = escopos
+                if escopos["analise_tradicional_re"] or escopos["comparacao_cct_sch"]:
+                    selecionados.append(req)
+                    print(
+                        f"[SCH][RETORNO][ESCOPO] {_numero_requerimento(req)} | "
+                        f"RE tradicional={escopos['analise_tradicional_re']} | "
+                        f"CCT x SCH={escopos['comparacao_cct_sch']}"
                     )
+                else:
+                    item = dict(req)
+                    item["motivo"] = "fora_escopo_ambos_modulos_re"
                     item["mensagem"] = (
-                        "Requerimento ignorado ainda na fila porque o tipo de "
-                        "produto não pertence à lista de avaliação automática "
-                        "do Retorno Para Estudo. Nenhuma etapa interna do "
-                        "requerimento foi executada."
+                        "Fora do escopo dos dois módulos: análise tradicional RE "
+                        "e comparação CCT x SCH. Nenhuma etapa interna executada."
                     )
                     ignorados_tipo_produto_retorno.append(item)
-
-                    print(
-                        "[SCH][RETORNO][IGNORADO] "
-                        f"Requerimento={_numero_requerimento(item)} | "
-                        f"Tipo={tipo_produto or 'não identificado'} | "
-                        "Motivo=tipo de produto fora da lista positiva do Retorno"
-                    )
-                    continue
-
-                processaveis_retorno.append(req)
-
-            requerimentos_processaveis = processaveis_retorno
+            requerimentos_processaveis = selecionados
 
         requerimentos_ignorados = (
             list(ignorados_homologacao_2026_mais)
@@ -1054,6 +1282,7 @@ def executar_fluxo_sch(
                 "requerimento": req,
                 "pasta_requerimento": str(pasta_req),
                 "fila_sch": fila_sch,
+                "modo_analise_re": modo_analise_re if fila_retorno else None,
                 "navegador": (
                     _normalizar_navegador_preferido(navegador)
                     or "padrao"
@@ -1074,6 +1303,7 @@ def executar_fluxo_sch(
                 "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
                 "retorno_para_estudo": {},
+                "escopo_modulos_re": dict(req.get("escopo_modulos_re") or {}) if fila_retorno else {},
                 "downloads_realizados": 0,
                 "status": "iniciado",
                 "inicio": datetime.now().isoformat(),
@@ -1152,6 +1382,12 @@ def executar_fluxo_sch(
                     dados_certificado_sch = extrair_dados_certificado_sch(driver, wait)
                     dados_certificado_sch = dados_certificado_sch or {}
 
+                    if fila_retorno:
+                        modalidade_visivel = _extrair_modalidade_avaliacao_visivel_sch(driver)
+                        if modalidade_visivel:
+                            dados_certificado_sch["modalidade_avaliacao"] = modalidade_visivel
+                            resumo["modalidade_avaliacao_sch"] = modalidade_visivel
+
                     nome_comercial_sch = str(
                         dados_certificado_sch.get("nome_comercial") or ""
                     ).strip()
@@ -1194,27 +1430,64 @@ def executar_fluxo_sch(
                     resumo["nome_comercial_sch"] = req.get("nome_comercial", "")
                     resumo["modelo_sch_dados_gerais"] = req.get("modelo_sch_dados_gerais", "")
 
-                if baixar_anexos_habilitado:
-                    clicar_aba_anexos(driver, wait)
+                # A opção geral "Nenhuma" não desliga o CCT obrigatório do
+                # módulo independente de RE. Não força download de outros anexos.
+                escopos_re = req.get("escopo_modulos_re") or {}
+                executar_re_tradicional = bool(fila_retorno and escopos_re.get("analise_tradicional_re"))
+                executar_cct_re = bool(fila_retorno and escopos_re.get("comparacao_cct_sch"))
 
+                # Após entrar nos Dados Gerais, é possível haver mais metadados;
+                # impedir comparação se a modalidade explícita for Declaração.
+                if executar_cct_re:
+                    elegibilidade_final = _escopo_conferencia_cct_re(req, dados_certificado_sch)
+                    if not elegibilidade_final["executar"]:
+                        executar_cct_re = False
+                        escopos_re["comparacao_cct_sch"] = False
+                        escopos_re["motivo_comparacao_cct"] = elegibilidade_final["motivo"]
+                        escopos_re["descricao_comparacao_cct"] = elegibilidade_final["descricao"]
+                        resumo["escopo_modulos_re"] = dict(escopos_re)
+
+                if fila_retorno:
+                    # No modo Comparar Versões, nem CCT nem RACT devem ser
+                    # baixados. Em Simplificada/Ambos, baixar só CCT e RACT
+                    # dos requerimentos elegíveis à conferência.
+                    categorias_para_requerimento = (
+                        [CATEGORIA_CCT, CATEGORIA_RACT] if executar_cct_re else []
+                    )
+                    download_requerimento_habilitado = bool(categorias_para_requerimento)
+                else:
+                    categorias_para_requerimento = list(categorias_anexos_ativas)
+                    download_requerimento_habilitado = baixar_anexos_habilitado
+                regras_anexos_requerimento = dict(regras)
+                if fila_retorno or categorias_anexos_informadas:
+                    regras_anexos_requerimento["categorias_anexos"] = categorias_para_requerimento
+
+                if download_requerimento_habilitado:
+                    clicar_aba_anexos(driver, wait)
                     anexos_baixados = baixar_todos_os_anexos_de_todas_as_categorias(
                         driver=driver,
                         wait=wait,
                         req=req,
                         pasta_saida=pasta_req,
                         pasta_download=pasta_download,
-                        regras=regras,
+                        regras=regras_anexos_requerimento,
                     )
                     resumo["anexos_baixados"] = anexos_baixados or []
                 else:
                     anexos_baixados = []
                     resumo["anexos_baixados"] = []
-                    print(
-                        "[SCH] Download de anexos não executado: "
-                        "opção 'Nenhuma' selecionada."
-                    )
+                    print("[SCH] Download de anexos não executado: módulo sem documentos ou produto não elegível.")
 
-                pdf_cct = localizar_pdf_cct_do_requerimento(pasta_req, regras)
+                resumo["categorias_anexos_efetivas"] = categorias_para_requerimento
+                resumo["download_cct_obrigatorio_re"] = executar_cct_re
+
+                # Comparar Versões não precisa localizar/analisar CCT, mesmo
+                # quando houver PDF antigo na pasta de outra execução.
+                deve_buscar_cct = (executar_cct_re if fila_retorno else True)
+                pdf_cct = (
+                    localizar_pdf_cct_do_requerimento(pasta_req, regras)
+                    if deve_buscar_cct else None
+                )
                 resumo["pdf_cct"] = str(pdf_cct) if pdf_cct else ""
 
                 # ==========================================================
@@ -1224,6 +1497,54 @@ def executar_fluxo_sch(
                 # SCH x CCT da fila Em Análise.
                 # ==========================================================
                 if fila_retorno:
+                    # RE traditional só ocorre nos tipos/anos já permitidos.
+                    # O CCT x SCH segue fluxo próprio, mesmo quando o RE
+                    # tradicional não está habilitado para este requerimento.
+                    if not executar_cct_re:
+                        motivo_cct = escopos_re.get("motivo_comparacao_cct", "")
+                        resumo["conferencia_sch_cct"] = {
+                            "status_geral": (
+                                "nao_executada_opcao_usuario" if motivo_cct == "nao_executada_opcao_usuario"
+                                else "fora_escopo_cct"
+                            ),
+                            "motivo": escopos_re.get("descricao_comparacao_cct", "Excluído da comparação CCT x SCH."),
+                            "comparacoes": [], "divergencias": [],
+                        }
+                    if not executar_re_tradicional:
+                        resumo["retorno_para_estudo"] = {
+                            "status_comparacao": "nao_executada_fora_escopo_tradicional",
+                            "comparacao_executada": False,
+                            "pode_enviar_para_aprovacao": False,
+                            "deve_enviar_para_aprovacao": False,
+                            "envio_para_aprovacao": {"executado": False, "motivo": "modulo_tradicional_fora_escopo"},
+                            "motivo": (
+                                "Análise tradicional RE não selecionada pelo usuário."
+                                if modo_analise_re == "analise_simplificada"
+                                else "Análise tradicional RE fora do escopo; somente CCT x SCH habilitado."
+                            ),
+                        }
+                        if executar_cct_re:
+                            _conferir_cct_sch_independente_re(
+                                driver=driver, wait=wait, req=req,
+                                pdf_cct=pdf_cct,
+                                dados_certificado_sch=dados_certificado_sch,
+                                resumo=resumo, tela_requerimento_restaurada=True,
+                            )
+                        resumo["status"] = "sucesso"
+                        resumo["fim"] = datetime.now().isoformat()
+                        resumo["downloads_realizados"] = contar_arquivos_requerimento(pasta_req)
+                        _salvar_controle_downloads(
+                            pasta_req=pasta_req, numero=numero,
+                            qtd_downloads=resumo["downloads_realizados"],
+                            categorias_anexos_ativas=categorias_para_requerimento,
+                            anexos_baixados=resumo["anexos_baixados"],
+                            escopo_processamento=resumo["escopo_processamento"],
+                            fila_sch=fila_sch,
+                            retorno_para_estudo=resumo["retorno_para_estudo"],
+                        )
+                        print(f"[SCH][RETORNO][CCT x SCH] {numero}: conferência exclusiva finalizada; nenhuma ação tradicional RE.")
+                        continue
+
                     qtd_downloads = contar_arquivos_requerimento(pasta_req)
                     resumo["downloads_realizados"] = qtd_downloads
 
@@ -1239,6 +1560,57 @@ def executar_fluxo_sch(
                         anexos_baixados=resumo["anexos_baixados"],
                         executar_envio=False,
                     )
+
+                    # Conferência independente CCT x SCH para RE.
+                    # Não muda a decisão dos analisadores dos Tipos RE e
+                    # não escreve em nenhuma aba do requerimento.
+                    # A comparação de RE pode ter aberto outra janela; somente
+                    # extraímos a tabela após retornar ao requerimento original.
+                    if executar_cct_re and pdf_cct:
+                        try:
+                            restauracao_para_cct_re = (
+                                restaurar_tela_requerimento_apos_comparacao(
+                                    driver=driver,
+                                    wait=wait,
+                                    aba_original_sch=aba_original_sch,
+                                    info_abertura={},
+                                )
+                            )
+                            tela_para_cct_re = bool(
+                                restauracao_para_cct_re.get("restaurado")
+                            )
+                        except Exception as e:
+                            tela_para_cct_re = False
+                            print(
+                                "[SCH][RETORNO][CCT x SCH][WARN] "
+                                f"Falha na restauração: {e}"
+                            )
+                    else:
+                        tela_para_cct_re = False
+
+                    if executar_cct_re:
+                        try:
+                            _conferir_cct_sch_independente_re(
+                                driver=driver,
+                                wait=wait,
+                                req=req,
+                                pdf_cct=pdf_cct,
+                                dados_certificado_sch=dados_certificado_sch,
+                                resumo=resumo,
+                                tela_requerimento_restaurada=tela_para_cct_re,
+                            )
+                        except Exception as e:
+                            print(
+                                "[SCH][RETORNO][CCT x SCH][WARN] Falha na "
+                                f"conferência independente: {type(e).__name__}: {e}"
+                            )
+                            resumo["conferencia_sch_cct"] = {
+                                "status_geral": "erro",
+                                "motivo": f"{type(e).__name__}: {e}",
+                                "comparacoes": [],
+                                "divergencias": [],
+                                "campos_ausentes": [],
+                            }
 
                     # IMPORTANTE:
                     # analisar_retorno_para_estudo pode encerrar cedo quando
