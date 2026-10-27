@@ -830,6 +830,11 @@ def _html_comparacao_tabela_tecnica(resultado):
         )
     elif status == "divergente":
         mensagem = "Foram encontradas divergências na tabela técnica SCH x CCT."
+    elif status == "comparacao_parcial":
+        mensagem = (
+            "A comparação técnica NÃO foi concluída para todos os campos/tabelas "
+            "deste requerimento. As verificações disponíveis são parciais; revisar manualmente."
+        )
     else:
         mensagem = f"Status da comparação da tabela técnica: {status}"
 
@@ -863,9 +868,13 @@ def _html_comparacao_tabela_tecnica(resultado):
     linhas.append("</tbody></table>")
 
     if not divergencias:
-        linhas.append(
-            "<div class='ok'>Nenhuma divergência específica de tabela técnica foi registrada.</div>"
+        classe_sem_div = 'ok' if status == 'ok' else 'alerta'
+        texto_sem_div = (
+            'Nenhuma divergência foi identificada nos campos efetivamente comparados.'
+            if status == 'ok' else
+            'Não foi possível concluir toda a verificação técnica; ausência de divergências não comprova conformidade.'
         )
+        linhas.append(f"<div class='{classe_sem_div}'>{texto_sem_div}</div>")
         return "".join(linhas)
 
     linhas.extend(
@@ -1930,10 +1939,65 @@ def _html_retorno_por_escopo(resultado):
         return (
             f"<h2>Análise tradicional de RE — Requerimento {escape(str(numero))}</h2>"
             f"<p>Não executada: {escape(motivo)}. "
-            "Comparar Versões, Corrigir Minuta, Acompanhar Processo e aprovação automática "
-            "não foram acionados neste módulo.</p>"
+            "Comparar Versões, tratamento de minuta do RE e aprovação automática "
+            "não foram acionados pelo módulo tradicional. "
+            "Quando elegível, os preenchimentos da Análise Simplificada são apresentados "
+            "em seção independente abaixo.</p>"
         )
     return _html_retorno_para_estudo_bloco(resultado)
+
+
+
+def _html_preenchimento_simplificado_re(resultado):
+    """Mostra a execução de escrita distinta da conferência e do RE tradicional."""
+    preenchimento = resultado.get("preenchimento_analise_simplificada_re") or {}
+    if resultado.get("modo_analise_re") not in {"analise_simplificada", "ambos"}:
+        return ""
+
+    status = str(preenchimento.get("status") or "nao_executado")
+    motivo = str(preenchimento.get("motivo") or "Nenhuma ação de preenchimento executada.")
+    cobertura = resultado.get("cobertura_simplificada_re") or {}
+    diagnostico = resultado.get("diagnostico_estrutura_re") or {}
+    cobertura_html = ""
+    if resultado.get("modo_analise_re") == "analise_simplificada":
+        familia = ", ".join(str(f) for f in diagnostico.get("familias", [])) or "Não identificada"
+        cobertura_html = (
+            "<h3>Alcance da análise técnica (MVP)</h3>"
+            f"<p><b>Estrutura:</b> {escape(familia)} | "
+            f"<b>Status do preenchimento:</b> {escape(str(cobertura.get('status') or 'não verificado'))}. "
+            f"{escape(str(cobertura.get('motivo') or ''))}</p>"
+            "<p class='muted'>Somente tabelas RF de frequência e potência comprovadamente "
+            "comparadas com o CCT são elegíveis aos preenchimentos neste MVP. "
+            "Outras tabelas e textos exigem revisão; ausência de validação NÃO significa conformidade.</p>"
+        )
+    nomes = [
+        ("caracteristicas_tecnicas", "Características Técnicas e título das Secundárias"),
+        ("sar_minuta", "Corrigir Minuta — SAR"),
+        ("informacoes_adicionais", "Informações Adicionais — Acompanhar Processo"),
+    ]
+    partes = [
+        "<h2>Preenchimento de abas — regras de Em Análise</h2>",
+        cobertura_html,
+        f"<p><b>Status:</b> {escape(status)}. {escape(motivo)}</p>",
+        "<table><thead><tr><th>Aba/etapa</th><th>Resultado</th><th>Salvo</th><th>Observações</th></tr></thead><tbody>",
+    ]
+    for chave, nome in nomes:
+        etapa = preenchimento.get(chave) or {}
+        situacao = str(etapa.get("status") or (
+            "executada" if etapa.get("preenchido_automaticamente") else "nao_executada"
+        ))
+        salvo = "SIM" if etapa.get("salvo") else "NÃO / NÃO NECESSÁRIO"
+        msg = str(etapa.get("mensagem") or etapa.get("erro") or etapa.get("origem") or "")
+        partes.append(
+            "<tr>"
+            f"<td>{escape(nome)}</td><td>{escape(situacao)}</td>"
+            f"<td>{escape(salvo)}</td><td>{escape(msg)}</td>"
+            "</tr>"
+        )
+    partes.append("</tbody></table>")
+    partes.append("<p class='muted'>A conferência CCT x SCH e o preenchimento são registrados separadamente. "
+                  "A opção 4 não executa Comparar Versões nem aprovação automática.</p>")
+    return "".join(partes)
 
 
 def _html_resumo_conferencia_cct_re(resultados):
@@ -2010,6 +2074,7 @@ def _html_requerimento_retorno_para_estudo(resultado):
         {_html_retorno_por_escopo(resultado)}
 
         {_html_conferencia_bloco(resultado)}
+        {_html_preenchimento_simplificado_re(resultado)}
         {_html_validade_cct(resultado) if resultado.get("dados_pdf") else ""}
 
         <h2>Dados operacionais</h2>
@@ -2931,6 +2996,7 @@ def _html_consolidado_retorno_para_estudo(
 
         try:
             bloco += _html_conferencia_bloco(resultado)
+            bloco += _html_preenchimento_simplificado_re(resultado)
             if resultado.get("dados_pdf"):
                 bloco += _html_validade_cct(resultado)
         except Exception as e:

@@ -39,12 +39,18 @@ from funcoes_sch import (
 )
 from analise_requerimentos import analisar_requerimento
 from gerador_relatorio import gerar_req_report
+from diagnostico_estrutura_sch import diagnosticar_estrutura_atual, exibir_resumo_diagnostico
+from mvp_simplificada_re import (
+    avaliar_cobertura_mvp,
+    preencher_caracteristicas_conservadoras_re,
+    preencher_acompanhamento_seguro_re,
+)
 from caracteristicas_secundarias import (
     inferir_caracteristicas_secundarias,
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.9.2-re-cct-recente"
+VERSAO_SCRIPT = "0.8.9.5-re-simplificada-mvp"
 
 
 def _normalizar_texto(valor):
@@ -1034,8 +1040,46 @@ def _conferir_cct_sch_independente_re(
 
     # Estas DUAS funções são exatamente as já utilizadas em Em Análise.
     resultado = comparar_dados_sch_x_cct(req, dados_pdf)
-    avisar_resultado_conferencia_sch_cct(resultado)
     resumo["conferencia_sch_cct"] = resultado
+    # Inspeção somente leitura integrada à opção 4. Não cria opção no menu
+    # e não altera a decisão do RE tradicional nem a fila Em Análise.
+    if resumo.get("modo_analise_re") == "analise_simplificada":
+        try:
+            diagnostico = diagnosticar_estrutura_atual(driver, wait, req)
+            resumo["diagnostico_estrutura_re"] = diagnostico
+            exibir_resumo_diagnostico(diagnostico)
+        except Exception as exc:
+            resumo["diagnostico_estrutura_re"] = {
+                "status": "erro", "tabelas": [], "familias": [],
+                "motivo": f"{type(exc).__name__}: {exc}",
+            }
+        cobertura = avaliar_cobertura_mvp(
+            resumo["diagnostico_estrutura_re"], resultado, dados_pdf
+        )
+        resumo["cobertura_simplificada_re"] = cobertura
+        # Não anunciar conformidade técnica completa em estruturas que o
+        # comparador atual ainda não cobre (físicas, texto, intensidade,
+        # múltiplas tabelas e secundárias).
+        if not cobertura.get("apto_preenchimento"):
+            tabela = resultado.get("comparacao_tabela_tecnica") or {}
+            if tabela.get("status") in {"ok", "sem_tabela"}:
+                tabela["status_original_comparador"] = tabela["status"]
+                tabela["status"] = "comparacao_parcial"
+                tabela["motivo"] = (
+                    "Cobertura técnica limitada nesta versão; "
+                    + cobertura.get("motivo", "Revisão manual.")
+                )
+            if resultado.get("status_geral") == "ok":
+                resultado["status_geral"] = "parcial"
+            resultado["motivo"] = cobertura.get("motivo", "Cobertura técnica parcial.")
+        print(f"[SCH][RETORNO][MVP] {numero}: "
+              f"{cobertura['status']} | {cobertura['motivo']}")
+    if resultado.get("divergencias"):
+        avisar_resultado_conferencia_sch_cct(resultado)
+    else:
+        resultado["mensagens_humanas"] = []
+        print(f"[SCH][RETORNO][CCT x SCH] Dados gerais sem divergências detectadas; "
+              f"cobertura da conferência: {resultado.get('status_geral')}.")
     print(
         f"[SCH][RETORNO][CCT x SCH] {numero}: "
         f"{resultado.get('status_geral', 'indefinido')} | "
@@ -1043,6 +1087,166 @@ def _conferir_cct_sch_independente_re(
     )
     return resultado
 
+
+
+def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
+    """Executa no módulo simplificado RE as MESMAS rotinas da fila Em Análise.
+
+    Somente a opção 4 chama esta função. Nunca acessa Comparar Versões,
+    aprova o requerimento ou aplica a limpeza de minuta do RE tradicional.
+    Informação do OCD/Justificativa não deve ser alterada: a rotina de
+    Informações Adicionais existente escreve em Acompanhar Processo.
+    """
+    numero = _numero_requerimento(req)
+    dados_pdf = resumo.get("dados_pdf") or {}
+    conferencia = resumo.get("conferencia_sch_cct") or {}
+    resultado = {
+        "status": "nao_executado",
+        "motivo": "",
+        "executado": False,
+        "caracteristicas_tecnicas": {"status": "nao_executado"},
+        "sar_minuta": {"status": "nao_executado"},
+        "informacoes_adicionais": {"status": "nao_executado"},
+    }
+    resumo["preenchimento_analise_simplificada_re"] = resultado
+
+    # Falha fechada: nenhum campo editado sem CCT selecionado, parseado e
+    # uma conferência efetivamente concluída.
+    if (
+        not resumo.get("pdf_cct")
+        or not dados_pdf
+        or conferencia.get("status_geral") not in {"ok", "conforme", "divergente", "parcial"}
+    ):
+        resultado.update({
+            "status": "nao_executado_sem_conferencia_valida",
+            "motivo": "CCT ou conferência SCH x CCT indisponível; nenhuma aba foi modificada.",
+        })
+        print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: {resultado['motivo']}")
+        return resultado
+
+    # Não preencher a partir de certificado diferente do vigente no SCH,
+    # mesmo que seja o anexo mais recente. Manter divergência no relatório.
+    certificado_sch = str(
+        (resumo.get("dados_certificado_sch") or {}).get("numero_certificado")
+        or req.get("certificado") or ""
+    ).strip()
+    certificado_cct = str(dados_pdf.get("numero_certificado") or "").strip()
+    norm_cert = lambda x: re.sub(r"[^a-z0-9]+", "", _normalizar_texto(x))
+    if not certificado_sch or not certificado_cct or norm_cert(certificado_sch) != norm_cert(certificado_cct):
+        resultado.update({
+            "status": "bloqueado_certificado_nao_correspondente",
+            "motivo": "Não foi confirmada a correspondência entre o certificado do SCH e o CCT mais recente; revisão manual necessária.",
+            "certificado_sch": certificado_sch,
+            "certificado_cct": certificado_cct,
+        })
+        print(f"[SCH][RETORNO][PREENCHIMENTO][WARN] {numero}: {resultado['motivo']}")
+        return resultado
+
+    # Somente a família RF de frequência + potência foi validada para
+    # preenchimento automático neste primeiro MVP. As demais continuam
+    # recebendo conferência de dados gerais e relatório, sem qualquer escrita.
+    cobertura = resumo.get("cobertura_simplificada_re") or {}
+    if not cobertura.get("apto_preenchimento"):
+        resultado.update({
+            "status": "revisao_manual_estrutura",
+            "motivo": cobertura.get("motivo") or "Estrutura não validada para preenchimento automático nesta versão.",
+            "cobertura": cobertura,
+        })
+        print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: {resultado['motivo']}")
+        return resultado
+
+    def interromper(etapa, exc):
+        resultado[etapa] = {"status": "erro", "erro": f"{type(exc).__name__}: {exc}"}
+        resultado["status"] = "erro_parcial"
+        resultado["motivo"] = f"Falha na etapa {etapa}; etapas seguintes não executadas."
+        print(f"[SCH][RETORNO][PREENCHIMENTO][WARN] {numero}: {resultado['motivo']} {exc}")
+        return resultado
+
+    resultado["executado"] = True
+    print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: aplicando regras de Em Análise ao CCT mais recente.")
+
+    # 1) Características Técnicas: Observação + Título das Secundárias.
+    try:
+        caracteristicas = preencher_caracteristicas_conservadoras_re(
+            driver=driver, wait=wait, req=req,
+            anexos_baixados=resumo.get("anexos_baixados") or [],
+            dados_pdf=dados_pdf,
+        ) or {}
+        resultado["caracteristicas_tecnicas"] = caracteristicas
+        resumo["analise_rapida"] = caracteristicas
+        resumo["observacao_caracteristicas"] = caracteristicas.get("texto", "")
+        resumo["preenchimento_sch"]["caracteristicas"] = bool(
+            caracteristicas.get("preenchido_automaticamente") and caracteristicas.get("salvo")
+        )
+        resumo["caracteristicas_secundarias"] = caracteristicas.get(
+            "titulo_caracteristicas_secundarias", {}
+        )
+        if not caracteristicas.get("salvo") or not caracteristicas.get("confirmado_apos_salvar"):
+            resultado["status"] = "erro_parcial"
+            resultado["motivo"] = "Características Técnicas não tiveram salvamento e conferência confirmados; demais abas não foram alteradas."
+            return resultado
+    except Exception as exc:
+        return interromper("caracteristicas_tecnicas", exc)
+
+    # 2) Corrigir Minuta: somente SAR, conforme análise do CCT em Em Análise.
+    # A limpeza de Especificações Complementares do RE tradicional NÃO participa.
+    try:
+        sar = preencher_minuta_sar_se_necessario(
+            driver=driver, wait=wait, dados_pdf=dados_pdf
+        ) or {}
+        sar["modo"] = "analise_sar_cct_em_analise_re_simplificada"
+        resultado["sar_minuta"] = sar
+        resumo["sar_minuta"] = sar
+        resumo["resultado_minuta"] = sar
+        resumo["minuta"] = {
+            "preenchida": bool(sar.get("preenchido_automaticamente")),
+            "campo_limpo": False,
+            "alterada": bool(sar.get("preenchido_automaticamente")),
+            "salvo": bool(sar.get("salvo")),
+            "confirmado_apos_salvar": bool(sar.get("confirmado_apos_salvar")),
+            "status": sar.get("status", ""),
+            "mensagem": sar.get("mensagem", ""),
+            "frase": sar.get("frase", ""),
+            "modo": sar["modo"],
+        }
+        resumo["preenchimento_sch"]["minuta"] = bool(
+            sar.get("preenchido_automaticamente") and sar.get("salvo")
+        )
+        if sar.get("status") == "erro" or (sar.get("preencher_frase") and (
+            not sar.get("salvo")
+            or not sar.get("confirmado_apos_salvar")
+            or not sar.get("retornou_para_requerimento")
+        )):
+            resultado["status"] = "erro_parcial"
+            resultado["motivo"] = "SAR exigiu minuta, mas salvamento/retorno não foi confirmado; Acompanhar Processo não foi alterado."
+            return resultado
+    except Exception as exc:
+        return interromper("sar_minuta", exc)
+
+    # 3) Informações Adicionais: texto de Análise Simplificada em Acompanhar
+    # Processo, não na Justificativa do OCD nem na Descrição de RE.
+    try:
+        from funcoes_sch import TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES
+        informacoes = preencher_acompanhamento_seguro_re(
+            driver=driver, wait=wait,
+            frase=TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES,
+        ) or {}
+        resultado["informacoes_adicionais"] = informacoes
+        resumo["informacoes_adicionais"] = informacoes
+        resumo["preenchimento_sch"]["informacoes_adicionais"] = bool(
+            informacoes.get("preenchido_automaticamente") and informacoes.get("salvo")
+        )
+        if not informacoes.get("salvo") or not informacoes.get("confirmado_apos_salvar"):
+            resultado["status"] = "erro_parcial"
+            resultado["motivo"] = "Não foi possível confirmar o preenchimento de Acompanhar Processo."
+            return resultado
+    except Exception as exc:
+        return interromper("informacoes_adicionais", exc)
+
+    resultado["status"] = "concluido"
+    resultado["motivo"] = "Rotinas de Em Análise executadas na opção 4 de RE."
+    print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: preenchimento concluído.")
+    return resultado
 
 def executar_fluxo_sch(
     pasta_base,
@@ -1380,6 +1584,7 @@ def executar_fluxo_sch(
                 "texto_caracteristicas_secundarias": "",
                 "tabela_tecnica_sch": {},
                 "conferencia_sch_cct": {},
+                "preenchimento_analise_simplificada_re": {},
                 "retorno_para_estudo": {},
                 "escopo_modulos_re": dict(req.get("escopo_modulos_re") or {}) if fila_retorno else {},
                 "downloads_realizados": 0,
@@ -1396,21 +1601,20 @@ def executar_fluxo_sch(
                 "download_anexos_habilitado": bool(baixar_anexos_habilitado),
                 "preenchimento_sch": {
                     "minuta": False,
-                    "minuta_habilitada": True if fila_retorno else bool(preencher_minuta),
+                    "minuta_habilitada": (
+                        modo_analise_re in {"comparar_versoes", "analise_simplificada", "ambos"}
+                        if fila_retorno else bool(preencher_minuta)
+                    ),
                     "modo_minuta": (
-                        "limpeza_especificacoes_complementares"
+                        ("analise_sar_cct" if modo_analise_re == "analise_simplificada" else "limpeza_especificacoes_complementares")
                         if fila_retorno
                         else "analise_sar_cct"
                     ),
-                    "caracteristicas": (
-                        True
-                        if fila_retorno
-                        else bool(preencher_caracteristicas)
-                    ),
+                    "caracteristicas": False if fila_retorno else bool(preencher_caracteristicas),
                     "caracteristicas_secundarias_retorno": bool(
                         fila_retorno
                     ),
-                    "informacoes_adicionais": preencher_informacoes_adicionais and not fila_retorno,
+                    "informacoes_adicionais": False if fila_retorno else bool(preencher_informacoes_adicionais),
                 },
                 "minuta": {
                     "preenchida": False,
@@ -1628,6 +1832,16 @@ def executar_fluxo_sch(
                                 dados_certificado_sch=dados_certificado_sch,
                                 resumo=resumo, tela_requerimento_restaurada=True,
                             )
+                            if modo_analise_re == "analise_simplificada":
+                                _preencher_abas_com_regras_em_analise_no_re(
+                                    driver=driver, wait=wait, req=req, resumo=resumo,
+                                )
+                            else:
+                                resumo["preenchimento_analise_simplificada_re"] = {
+                                    "status": "nao_executado_modo_combinado",
+                                    "executado": False,
+                                    "motivo": "Modo combinado preserva as ações exclusivas do RE tradicional; preenchimentos de Em Análise não foram acionados.",
+                                }
                         resumo["status"] = "sucesso"
                         resumo["fim"] = datetime.now().isoformat()
                         resumo["downloads_realizados"] = contar_arquivos_requerimento(pasta_req)
@@ -1709,6 +1923,13 @@ def executar_fluxo_sch(
                                 "divergencias": [],
                                 "campos_ausentes": [],
                             }
+
+                    if executar_cct_re and modo_analise_re == "ambos":
+                        resumo["preenchimento_analise_simplificada_re"] = {
+                            "status": "nao_executado_modo_combinado",
+                            "executado": False,
+                            "motivo": "No modo combinado, ações de escrita permanecem sob as regras tradicionais de RE para evitar conflito com a minuta e Acompanhar Processo.",
+                        }
 
                     # IMPORTANTE:
                     # analisar_retorno_para_estudo pode encerrar cedo quando
