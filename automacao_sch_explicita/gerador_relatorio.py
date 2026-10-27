@@ -1966,12 +1966,18 @@ def _html_preenchimento_simplificado_re(resultado):
             f"<p><b>Estrutura:</b> {escape(familia)} | "
             f"<b>Status do preenchimento:</b> {escape(str(cobertura.get('status') or 'não verificado'))}. "
             f"{escape(str(cobertura.get('motivo') or ''))}</p>"
-            "<p class='muted'>Somente tabelas RF de frequência e potência comprovadamente "
-            "comparadas com o CCT são elegíveis aos preenchimentos neste MVP. "
-            "Outras tabelas e textos exigem revisão; ausência de validação NÃO significa conformidade.</p>"
+            "<p class='muted'>Observação, CTS, SAR e acompanhamento possuem verificações independentes. "
+            "Cobertura parcial das tabelas exige revisão; ausência de validação NÃO significa conformidade.</p>"
         )
+    ct = preenchimento.get("caracteristicas_tecnicas") or {}
+    preenchimento = dict(preenchimento)
+    preenchimento["observacao"] = dict(ct, status=(ct.get("observacao") or {}).get("status", ct.get("status", "nao_executado")))
+    preenchimento["cts"] = dict(ct.get("titulo_caracteristicas_secundarias") or {})
+    for campo in ("salvo", "confirmado_apos_salvar"):
+        preenchimento["cts"][campo] = ct.get(campo, False)
     nomes = [
-        ("caracteristicas_tecnicas", "Características Técnicas e título das Secundárias"),
+        ("observacao", "Características Técnicas — Observação"),
+        ("cts", "Título das Características Técnicas Secundárias"),
         ("sar_minuta", "Corrigir Minuta — SAR"),
         ("informacoes_adicionais", "Informações Adicionais — Acompanhar Processo"),
     ]
@@ -1986,7 +1992,7 @@ def _html_preenchimento_simplificado_re(resultado):
         situacao = str(etapa.get("status") or (
             "executada" if etapa.get("preenchido_automaticamente") else "nao_executada"
         ))
-        salvo = "SIM" if etapa.get("salvo") else "NÃO / NÃO NECESSÁRIO"
+        salvo = "SIM — CONFIRMADO" if etapa.get("salvo") and etapa.get("confirmado_apos_salvar") else "NÃO / NÃO NECESSÁRIO"
         msg = str(etapa.get("mensagem") or etapa.get("erro") or etapa.get("origem") or "")
         partes.append(
             "<tr>"
@@ -2268,6 +2274,9 @@ def _resultado_executivo_retorno(resultado):
 
     if pode_enviar:
         return "Apto para aprovação"
+
+    if resultado.get("modo_analise_re") == "analise_simplificada" and (resultado.get("conferencia_sch_cct") or {}).get("status_geral") in {"ok", "conforme", "parcial", "divergente"}:
+        return "Analisado — revisão manual"
 
     if not _comparacao_retorno_executada(retorno):
         return "Não analisado / Fora do escopo"
@@ -2707,6 +2716,9 @@ def _html_consolidado_retorno_para_estudo(
 
         if pode_enviar:
             return "Apto para aprovação"
+
+        if resultado.get("modo_analise_re") == "analise_simplificada" and (resultado.get("conferencia_sch_cct") or {}).get("status_geral") in {"ok", "conforme", "parcial", "divergente"}:
+            return "Analisado — revisão manual"
 
         if not _comparacao_retorno_executada(retorno):
             return "Não analisado / Fora do escopo"

@@ -8591,7 +8591,7 @@ def processar_corrigir_minuta_por_regras(
     return resultado
 
 
-def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
+def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf, preservar_existente=False):
     analise = analisar_sar_cct(dados_pdf)
 
     print(
@@ -8642,6 +8642,30 @@ def preencher_minuta_sar_se_necessario(driver, wait, dados_pdf):
             "//*[contains(normalize-space(), 'Especificações Complementares')]/following::div[contains(@class,'ql-editor')][1]",
             "//*[contains(normalize-space(), 'Especificacoes Complementares')]/following::div[contains(@class,'ql-editor')][1]",
         ]
+
+        if preservar_existente:
+            # Exclusivo da análise simplificada: manter especificações existentes.
+            entrar_iframe_detalhe_analise(driver, wait)
+            campos = []
+            for xpath in xpaths_minuta:
+                campos = [c for c in driver.find_elements(By.XPATH, xpath)
+                          if c.is_displayed() and c.is_enabled()]
+                if campos:
+                    break
+            if len(campos) != 1:
+                raise RuntimeError("Campo da minuta não identificado univocamente.")
+            anterior = _ler_valor_campo_minuta(driver, campos[0])
+            if anterior is None:
+                raise RuntimeError("Conteúdo da minuta não pôde ser lido.")
+            if _normalizar_texto_comparacao(analise["frase"]) in _normalizar_texto_comparacao(anterior):
+                voltou = voltar_da_tela_corrigir_minuta(driver, wait)
+                analise.update(status="preservado", preencher_frase=False,
+                               preenchido_automaticamente=False, salvo=False,
+                               confirmado_apos_salvar=False, retornou_para_requerimento=bool(voltou))
+                if not voltou:
+                    analise["status"] = "erro"
+                return analise
+            analise["frase"] = "\n".join(t for t in (anterior, analise["frase"]) if t)
 
         preenchido = _substituir_texto_campo(
             driver=driver,

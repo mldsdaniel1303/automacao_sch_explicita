@@ -1,8 +1,8 @@
 """Proteções específicas da opção 4 (RE simplificado).
 
 Não altera o comportamento de Em Análise nem do RE tradicional.
-O mapeamento não é feito pelo nome do produto: usa tabelas da tela e a
-cobertura real da conferência com o CCT.
+Cada ação possui sua própria regra; cobertura técnica parcial não autoriza
+nem bloqueia indiscriminadamente as demais ações.
 """
 from __future__ import annotations
 
@@ -16,45 +16,27 @@ def normalizar(texto):
 
 
 def avaliar_cobertura_mvp(diagnostico, conferencia, dados_pdf):
-    """Autorização conservadora de preenchimento na PRIMEIRA versão pública.
-
-    Apenas uma tabela RF de faixa + potência que efetivamente tenha sido
-    comparada com um CCT legível. Todo o restante continua no relatório,
-    para revisão, sem qualquer gravação de campos.
-    """
-    diagnostico = diagnostico or {}
-    conferencia = conferencia or {}
-    dados_pdf = dados_pdf or {}
-    base = {
-        'apto_preenchimento': False,
-        'familias': diagnostico.get('familias') or [],
-        'status': 'revisao_manual',
-        'motivo': '',
-        'comparacao_cct_sch_executada': conferencia.get('status_geral') in {'ok','parcial','divergente','conforme'},
-    }
-    if diagnostico.get('status') != 'coletado':
-        base['motivo'] = 'Estrutura técnica não identificada com segurança.'
-        return base
+    """Cobertura técnica independente das regras de cada preenchimento."""
+    diagnostico, conferencia, dados_pdf = diagnostico or {}, conferencia or {}, dados_pdf or {}
     tabs = diagnostico.get('tabelas') or []
-    if len(tabs) != 1 or tabs[0].get('familia') != 'rf_frequencia_potencia':
-        base['motivo'] = 'Estrutura sem suporte de preenchimento nesta versão: somente conferência geral e revisão manual.'
-        return base
-    comparacao = conferencia.get('comparacao_tabela_tecnica') or {}
-    if not (comparacao.get('status') == 'ok' and comparacao.get('usar_potencia') and
-            comparacao.get('linhas_sch', 0) and comparacao.get('linhas_cct', 0)):
-        base['motivo'] = 'A comparação de frequência e potência não foi confirmada integralmente.'
-        return base
-    if not str(dados_pdf.get('observacao_texto') or '').strip():
-        base['motivo'] = 'CCT sem regra segura de Observação: não utilizar frase genérica de radiação restrita.'
-        return base
-    base.update(status='habilitado_mvp', apto_preenchimento=True,
-                motivo='Tabela RF (frequência e potência) compatível com CCT, elegível para as rotinas existentes de Em Análise.')
-    return base
+    comp = conferencia.get('comparacao_tabela_tecnica') or {}
+    integral = bool(diagnostico.get('status') == 'coletado' and len(tabs) == 1
+        and tabs[0].get('familia') == 'rf_frequencia_potencia'
+        and comp.get('status') == 'ok' and comp.get('usar_potencia')
+        and comp.get('linhas_sch') and comp.get('linhas_cct'))
+    executada = conferencia.get('status_geral') in {'ok', 'parcial', 'divergente', 'conforme'}
+    return {'apto_preenchimento': executada, 'comparacao_tecnica_integral': integral,
+        'comparacao_cct_sch_executada': executada,
+        'familias': diagnostico.get('familias') or [],
+        'status': 'verificacoes_independentes',
+        'motivo': ('Conferência técnica integral.' if integral else
+                   'Conferência técnica parcial; tabelas exigem revisão manual.')
+                  + ' Preenchimentos dependem de regras próprias e segurança da tela.'}
 
 
 def compor_acompanhamento_preservado(existente, frase):
     """Retorna (novo_texto, precisa_adicionar). Nunca apaga texto anterior."""
-    existente = str(existente or '').strip()
+    existente = str(existente or '')
     frase = str(frase or '').strip()
     if not frase:
         return existente, False
@@ -84,52 +66,52 @@ def ler_observacao_atual_re(driver, wait):
 def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixados, dados_pdf):
     """Usa a função de Em Análise sem substituir observações pré-existentes."""
     from funcoes_sch import (
-        preencher_caracteristicas_tecnicas_com_analise,
+        preencher_observacao_caracteristicas, decidir_texto_observacao_por_cct,
         preencher_titulo_caracteristicas_secundarias_se_existir,
         salvar_caracteristicas_tecnicas,
     )
     atual = ler_observacao_atual_re(driver, wait)
     if not atual['localizado']:
         raise RuntimeError('Campo Observação não confirmado; nenhuma alteração realizada.')
-    if not atual['texto'].strip():
-        return preencher_caracteristicas_tecnicas_com_analise(
-            driver=driver, wait=wait, req=req, anexos_baixados=anexos_baixados,
-            dados_pdf=dados_pdf,
-        )
-    # Há observação: nunca chamar preenchimento que a substitui.
+    texto = atual['texto']
+    mudou = False
+    status_obs = 'preservada' if texto.strip() else 'revisao_manual'
+    # Sem regra extraída, a função compartilhada aplicaria fallback genérico.
+    if not texto.strip() and str(dados_pdf.get('observacao_texto') or '').strip():
+        analise = decidir_texto_observacao_por_cct(dados_pdf)
+        texto = analise['texto']
+        if not preencher_observacao_caracteristicas(driver, wait, texto):
+            raise RuntimeError('Observação não confirmada após preenchimento.')
+        mudou = True
+        status_obs = 'preenchida'
     titulo = preencher_titulo_caracteristicas_secundarias_se_existir(
         driver=driver, wait=wait, req=req, dados_pdf=dados_pdf,
     ) or {}
-    if titulo.get('status') in {'revisar', 'erro', 'erro_confirmacao'}:
-        return {
-            'status': 'revisao_manual_cts', 'texto': atual['texto'],
-            'preenchido_automaticamente': False,
-            'titulo_caracteristicas_secundarias': titulo,
-            'salvo': False, 'confirmado_apos_salvar': False,
-            'mensagem': 'Título de características secundárias inconclusivo; etapas seguintes bloqueadas.',
-        }
-    if titulo.get('preenchido') or titulo.get('corrigido'):
-        texto_titulo = titulo.get('titulo_esperado') or ''
+    if titulo.get('motivo') == 'campo_ja_correto':
+        titulo['status'] = 'preservado'
+    if titulo.get('status') in {'erro', 'erro_confirmacao'}:
+        raise RuntimeError('Não foi possível confirmar CTS; edição interrompida.')
+    mudou_titulo = bool(titulo.get('preenchido') or titulo.get('corrigido'))
+    salvamento = {}
+    if mudou or mudou_titulo:
         salvamento = salvar_caracteristicas_tecnicas(
-            driver, wait, texto_esperado=atual['texto'],
-            titulo_secundario_esperado=texto_titulo,
+            driver, wait, texto_esperado=texto,
+            titulo_secundario_esperado=titulo.get('titulo_esperado') or '',
         ) or {}
-        salvo = bool(salvamento.get('salvo'))
-        confirmado = bool(salvamento.get('confirmado_apos_salvar'))
-        status = 'titulo_cts_tratado' if salvo and confirmado else 'erro_confirmacao_cts'
-    else:
-        # nenhuma escrita; não se exige clicar em salvar
-        salvo = True
-        confirmado = True
-        status = 'observacao_preservada_sem_alteracao'
-    return {
-        'status': status, 'texto': atual['texto'],
+        if not salvamento.get('salvo') or not salvamento.get('confirmado_apos_salvar'):
+            raise RuntimeError('Salvamento de Características Técnicas não confirmado.')
+        verificada = ler_observacao_atual_re(driver, wait)
+        if not verificada['localizado'] or verificada['texto'] != texto:
+            raise RuntimeError('Observação não foi preservada/gravada integralmente após salvar.')
+    return {'status': status_obs, 'texto': texto,
+        'observacao': {'status': status_obs},
         'classificacao': dados_pdf.get('observacao_classificacao') or '',
-        'preenchido_automaticamente': False,
+        'preenchido_automaticamente': mudou,
         'titulo_caracteristicas_secundarias': titulo,
-        'salvo': salvo, 'confirmado_apos_salvar': confirmado,
-        'mensagem': 'Observação existente preservada integralmente.',
-    }
+        'salvo': bool(salvamento.get('salvo')),
+        'confirmado_apos_salvar': bool(salvamento.get('confirmado_apos_salvar')),
+        'sem_alteracao': not (mudou or mudou_titulo),
+        'mensagem': 'Observação e CTS avaliados independentemente.'}
 
 
 def preencher_acompanhamento_seguro_re(driver, wait, frase):

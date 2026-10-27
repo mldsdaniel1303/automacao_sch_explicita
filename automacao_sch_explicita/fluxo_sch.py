@@ -50,7 +50,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.9.5-re-simplificada-mvp"
+VERSAO_SCRIPT = "0.8.9.6-re-simplificada"
 
 
 def _normalizar_texto(valor):
@@ -256,6 +256,14 @@ def _tipo_produto_no_escopo_automatico_retorno(tipo_produto):
 # A conferência CCT x SCH tem escopo próprio e NÃO compartilha a lista
 # positiva de produtos utilizada por Comparar Versões/Corrigir Minuta.
 CATEGORIA_CCT = "Certificado de Conformidade Técnica - CCT"
+
+
+def _tipo_produto_permitido_simplificada(req):
+    """Lista exclusiva da opção 4; usa apenas a coluna real da fila."""
+    return _normalizar_texto((req or {}).get("tipo_produto", "")) in {
+        "estacao terminal de acesso", "estacao terminal de acesso (eta)",
+        "transceptor de radiacao restrita",
+    }
 
 
 def _escopo_conferencia_cct_re(req, dados_sch=None):
@@ -1044,6 +1052,11 @@ def _conferir_cct_sch_independente_re(
     # Inspeção somente leitura integrada à opção 4. Não cria opção no menu
     # e não altera a decisão do RE tradicional nem a fila Em Análise.
     if resumo.get("modo_analise_re") == "analise_simplificada":
+        for item in resultado.get("campos_ausentes", []):
+            item.update(diverge=False, status="inconclusivo", motivo="Campo ausente; revisão manual.")
+        resultado["divergencias"] = [i for i in resultado.get("divergencias", []) if i.get("diverge")]
+        if not resultado["divergencias"] and resultado.get("campos_ausentes"):
+            resultado["status_geral"] = "parcial"
         try:
             diagnostico = diagnosticar_estrutura_atual(driver, wait, req)
             resumo["diagnostico_estrutura_re"] = diagnostico
@@ -1060,7 +1073,7 @@ def _conferir_cct_sch_independente_re(
         # Não anunciar conformidade técnica completa em estruturas que o
         # comparador atual ainda não cobre (físicas, texto, intensidade,
         # múltiplas tabelas e secundárias).
-        if not cobertura.get("apto_preenchimento"):
+        if not cobertura.get("comparacao_tecnica_integral"):
             tabela = resultado.get("comparacao_tabela_tecnica") or {}
             if tabela.get("status") in {"ok", "sem_tabela"}:
                 tabela["status_original_comparador"] = tabela["status"]
@@ -1098,6 +1111,7 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
     Informações Adicionais existente escreve em Acompanhar Processo.
     """
     numero = _numero_requerimento(req)
+    resumo.setdefault("preenchimento_sch", {})
     dados_pdf = resumo.get("dados_pdf") or {}
     conferencia = resumo.get("conferencia_sch_cct") or {}
     resultado = {
@@ -1142,19 +1156,6 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
         print(f"[SCH][RETORNO][PREENCHIMENTO][WARN] {numero}: {resultado['motivo']}")
         return resultado
 
-    # Somente a família RF de frequência + potência foi validada para
-    # preenchimento automático neste primeiro MVP. As demais continuam
-    # recebendo conferência de dados gerais e relatório, sem qualquer escrita.
-    cobertura = resumo.get("cobertura_simplificada_re") or {}
-    if not cobertura.get("apto_preenchimento"):
-        resultado.update({
-            "status": "revisao_manual_estrutura",
-            "motivo": cobertura.get("motivo") or "Estrutura não validada para preenchimento automático nesta versão.",
-            "cobertura": cobertura,
-        })
-        print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: {resultado['motivo']}")
-        return resultado
-
     def interromper(etapa, exc):
         resultado[etapa] = {"status": "erro", "erro": f"{type(exc).__name__}: {exc}"}
         resultado["status"] = "erro_parcial"
@@ -1162,11 +1163,20 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
         print(f"[SCH][RETORNO][PREENCHIMENTO][WARN] {numero}: {resultado['motivo']} {exc}")
         return resultado
 
+    def confirmar_contexto():
+        from funcoes_sch import entrar_iframe_detalhe_analise
+        entrar_iframe_detalhe_analise(driver, wait)
+        texto = driver.find_element(By.TAG_NAME, "body").text
+        padrao = r"(?<![0-9])" + re.escape(numero).replace(r"/", r"\s*/\s*") + r"(?![0-9])"
+        if not numero or not re.search(padrao, texto):
+            raise RuntimeError("Identidade do requerimento não confirmada na tela; edição bloqueada.")
+
     resultado["executado"] = True
     print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: aplicando regras de Em Análise ao CCT mais recente.")
 
     # 1) Características Técnicas: Observação + Título das Secundárias.
     try:
+        confirmar_contexto()
         caracteristicas = preencher_caracteristicas_conservadoras_re(
             driver=driver, wait=wait, req=req,
             anexos_baixados=resumo.get("anexos_baixados") or [],
@@ -1181,7 +1191,7 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
         resumo["caracteristicas_secundarias"] = caracteristicas.get(
             "titulo_caracteristicas_secundarias", {}
         )
-        if not caracteristicas.get("salvo") or not caracteristicas.get("confirmado_apos_salvar"):
+        if not caracteristicas.get("sem_alteracao") and (not caracteristicas.get("salvo") or not caracteristicas.get("confirmado_apos_salvar")):
             resultado["status"] = "erro_parcial"
             resultado["motivo"] = "Características Técnicas não tiveram salvamento e conferência confirmados; demais abas não foram alteradas."
             return resultado
@@ -1191,8 +1201,9 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
     # 2) Corrigir Minuta: somente SAR, conforme análise do CCT em Em Análise.
     # A limpeza de Especificações Complementares do RE tradicional NÃO participa.
     try:
+        confirmar_contexto()
         sar = preencher_minuta_sar_se_necessario(
-            driver=driver, wait=wait, dados_pdf=dados_pdf
+            driver=driver, wait=wait, dados_pdf=dados_pdf, preservar_existente=True
         ) or {}
         sar["modo"] = "analise_sar_cct_em_analise_re_simplificada"
         resultado["sar_minuta"] = sar
@@ -1226,6 +1237,7 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
     # 3) Informações Adicionais: texto de Análise Simplificada em Acompanhar
     # Processo, não na Justificativa do OCD nem na Descrição de RE.
     try:
+        confirmar_contexto()
         from funcoes_sch import TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES
         informacoes = preencher_acompanhamento_seguro_re(
             driver=driver, wait=wait,
@@ -1439,6 +1451,12 @@ def executar_fluxo_sch(
             selecionados = []
             for req in requerimentos_processaveis:
                 if not isinstance(req, dict):
+                    continue
+                if modo_analise_re == "analise_simplificada" and not _tipo_produto_permitido_simplificada(req):
+                    item = dict(req)
+                    item.update(motivo="tipo_produto_fora_escopo_analise_simplificada",
+                                mensagem="Opção 4 aceita somente ETA e Transceptor de Radiação Restrita; ignorado antes de abrir e baixar documentos.")
+                    ignorados_tipo_produto_retorno.append(item)
                     continue
                 escopos = _escopos_para_modo_re(
                     _definir_escopos_re(req), modo_analise_re
