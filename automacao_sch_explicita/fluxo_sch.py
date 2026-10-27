@@ -44,7 +44,7 @@ from caracteristicas_secundarias import (
     gerar_texto_caracteristicas_secundarias,
 )
 
-VERSAO_SCRIPT = "0.8.9.1-re-modos"
+VERSAO_SCRIPT = "0.8.9.2-re-cct-recente"
 
 
 def _normalizar_texto(valor):
@@ -684,6 +684,84 @@ def _categorias_processadas(anexos_baixados):
             }
         )
     )
+
+
+def _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req):
+    """Seleciona o CCT pela data/hora real da tabela Anexos do SCH.
+
+    O instante do download (mtime do arquivo) NUNCA determina qual CCT e o
+    mais recente. Uma falha no download do CCT mais novo nao autoriza usar
+    um certificado anterior como se fosse o atual.
+    """
+    pasta_req = Path(pasta_req)
+    registros = []
+    for item in anexos_baixados or []:
+        if not isinstance(item, dict):
+            continue
+        categoria = _normalizar_texto(item.get("categoria"))
+        if "cct" not in categoria and "certificado de conformidade tecnica" not in categoria:
+            continue
+
+        data_texto = str(item.get("data_hora") or "").strip()
+        data = None
+        for formato in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+            try:
+                data = datetime.strptime(data_texto, formato)
+                break
+            except ValueError:
+                pass
+
+        try:
+            identificador = int(str(item.get("id") or "0").strip())
+        except (ValueError, TypeError):
+            identificador = 0
+
+        registros.append((data, identificador, item))
+
+    if registros:
+        # Sem data em um anexo, nao ha certeza de que ele nao e o mais novo.
+        if any(data is None for data, _, _ in registros):
+            return {
+                "status": "data_anexo_indisponivel",
+                "motivo": "Ha CCT sem Data-Hora confiavel na tabela de Anexos; selecao automatica suspensa.",
+                "arquivo": "",
+                "total_ccts": len(registros),
+            }
+
+        registros.sort(key=lambda reg: (reg[0], reg[1]), reverse=True)
+        _, _, ultimo = registros[0]
+        caminho = Path(str(ultimo.get("arquivo") or "")) if ultimo.get("arquivo") else None
+        if not caminho or not caminho.is_file() or caminho.suffix.lower() != ".pdf":
+            return {
+                "status": "cct_mais_recente_indisponivel",
+                "motivo": "O CCT mais recente foi identificado, mas seu PDF nao foi baixado/localizado. Nao usar um CCT anterior.",
+                "arquivo": "",
+                "id": ultimo.get("id", ""),
+                "data_hora": ultimo.get("data_hora", ""),
+                "nome_anexo": ultimo.get("nome_anexo", ""),
+                "total_ccts": len(registros),
+            }
+        return {
+            "status": "selecionado",
+            "motivo": "CCT escolhido pela Data-Hora da tabela de Anexos do SCH (ID como desempate).",
+            "arquivo": str(caminho),
+            "id": ultimo.get("id", ""),
+            "data_hora": ultimo.get("data_hora", ""),
+            "nome_anexo": ultimo.get("nome_anexo", ""),
+            "total_ccts": len(registros),
+        }
+
+    # Sem metadados da tabela do SCH nao e possivel garantir que o CCT
+    # presente na pasta seja o atual (pode ser de execucao antiga).
+    return {
+        "status": "sem_selecao_segura",
+        "motivo": (
+            "Nao ha metadados de CCT da tabela Anexos para determinar a versao mais recente. "
+            "Nao usar data de download nem PDF de execucao anterior por suposicao."
+        ),
+        "arquivo": "",
+        "total_ccts": 0,
+    }
 
 
 def _salvar_controle_downloads(
@@ -1484,10 +1562,30 @@ def executar_fluxo_sch(
                 # Comparar Versões não precisa localizar/analisar CCT, mesmo
                 # quando houver PDF antigo na pasta de outra execução.
                 deve_buscar_cct = (executar_cct_re if fila_retorno else True)
-                pdf_cct = (
-                    localizar_pdf_cct_do_requerimento(pasta_req, regras)
-                    if deve_buscar_cct else None
-                )
+                if fila_retorno and executar_cct_re:
+                    # RE simplificada: data/hora do ANEXO no SCH, nunca o
+                    # instante em que o Python fez o download dos PDFs.
+                    selecao_cct = _selecionar_cct_mais_recente_re(
+                        anexos_baixados, pasta_req
+                    )
+                    resumo["selecao_cct_re"] = selecao_cct
+                    pdf_cct = (
+                        Path(selecao_cct["arquivo"])
+                        if selecao_cct.get("arquivo") else None
+                    )
+                    print(
+                        f"[SCH][RETORNO][CCT] {numero}: "
+                        f"{selecao_cct['status']} | ID={selecao_cct.get('id', '')} | "
+                        f"Data-Hora={selecao_cct.get('data_hora', '')} | "
+                        f"Arquivo={selecao_cct.get('nome_anexo', '')}"
+                    )
+                    if not pdf_cct:
+                        print(f"[SCH][RETORNO][CCT][WARN] {selecao_cct['motivo']}")
+                else:
+                    pdf_cct = (
+                        localizar_pdf_cct_do_requerimento(pasta_req, regras)
+                        if deve_buscar_cct else None
+                    )
                 resumo["pdf_cct"] = str(pdf_cct) if pdf_cct else ""
 
                 # ==========================================================

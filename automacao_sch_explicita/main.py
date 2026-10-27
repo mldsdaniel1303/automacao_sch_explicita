@@ -1308,7 +1308,7 @@ def exibir_resumo_fluxo_completo(opcoes):
 
 
 
-def coletar_opcoes_retorno_padrao():
+def coletar_opcoes_retorno_padrao(modo_analise_re="comparar_versoes"):
 
     """
 
@@ -1328,7 +1328,7 @@ def coletar_opcoes_retorno_padrao():
 
     - registros por página: 100
 
-    - download de documentos opcionais: nenhum (CCT obrigatório no seu módulo)
+    - Comparar Versões: nenhum anexo; Análise Simplificada: somente CCT e RACT
 
     - navegador permanece aberto ao final
 
@@ -1338,7 +1338,7 @@ def coletar_opcoes_retorno_padrao():
 
     - pasta base da execução;
 
-    - permissão para aprovação automática quando o processo estiver apto.
+    - permissão para aprovação automática apenas no RE tradicional.
 
     """
 
@@ -1346,7 +1346,7 @@ def coletar_opcoes_retorno_padrao():
 
     linha()
 
-    print("RETORNO PARA ESTUDO — CONFIGURAÇÃO PADRÃO")
+    print("RETORNO PARA ESTUDO — " + ("PADRÃO / COMPARAR VERSÕES" if modo_analise_re == "comparar_versoes" else "ANÁLISE SIMPLIFICADA"))
 
     linha()
 
@@ -1372,9 +1372,10 @@ def coletar_opcoes_retorno_padrao():
 
     print("Registros por página: 100")
 
-    modo_analise_re = escolher_modo_analise_re()
-    if modo_analise_re is None:
-        return None
+    # O atalho 3 sempre usa Comparar Versões; o atalho 4 sempre usa CCT x SCH.
+    # A escolha dos dois módulos juntos permanece somente na configuração completa.
+    if modo_analise_re not in {"comparar_versoes", "analise_simplificada"}:
+        raise ValueError(f"Modo não permitido neste atalho: {modo_analise_re}")
     documentos_re = configurar_documentos_modo_re(modo_analise_re)
     print(f"Tipo escolhido: {MODOS_RE[modo_analise_re]}")
     print(f"Downloads: {documentos_re['descricao_categorias']}")
@@ -1455,7 +1456,7 @@ def coletar_opcoes_retorno_padrao():
 
 
 
-def executar_configuracao_retorno_padrao():
+def executar_configuracao_retorno_padrao(modo_analise_re="comparar_versoes"):
 
     """
 
@@ -1469,7 +1470,7 @@ def executar_configuracao_retorno_padrao():
 
     """
 
-    opcoes = coletar_opcoes_retorno_padrao()
+    opcoes = coletar_opcoes_retorno_padrao(modo_analise_re=modo_analise_re)
     if opcoes is None:
         return None
 
@@ -1477,7 +1478,7 @@ def executar_configuracao_retorno_padrao():
 
 
 
-    print("CONFIGURAÇÃO: PADRÃO — RETORNO PARA ESTUDO")
+    print("CONFIGURAÇÃO: " + ("RE TRADICIONAL / COMPARAR VERSÕES" if modo_analise_re == "comparar_versoes" else "RE / ANÁLISE SIMPLIFICADA"))
 
     print()
 
@@ -1517,7 +1518,7 @@ def executar_configuracao_retorno_padrao():
 
     linha()
 
-    print("INICIANDO AUTOMAÇÃO — RETORNO PARA ESTUDO / PADRÃO")
+    print("INICIANDO AUTOMAÇÃO — RETORNO PARA ESTUDO / " + ("COMPARAR VERSÕES" if modo_analise_re == "comparar_versoes" else "ANÁLISE SIMPLIFICADA"))
 
     linha()
 
@@ -1621,11 +1622,19 @@ def exibir_menu():
 
     print()
 
-    print("3. Retorno Para Estudo — PADRÃO")
+    print("3. Retorno Para Estudo — PADRÃO / COMPARAR VERSÕES")
 
-    print("   Chrome | Todos | 100 por página | CCT obrigatório")
+    print("   Chrome | Todos | 100 por página | SEM DOWNLOAD DE ANEXOS")
 
-    print("   O usuário escolhe somente pasta e aprovação automática")
+    print("   Tipos RE, Comparar Versões, minuta e aprovação quando apto")
+
+    print()
+
+    print("4. Retorno Para Estudo — ANÁLISE SIMPLIFICADA")
+
+    print("   Chrome | Todos | 100 por página | BAIXAR CCT E RACT")
+
+    print("   Conferência CCT x SCH | Sem Comparar Versões ou aprovação")
 
     print()
 
@@ -1779,7 +1788,7 @@ def main():
 
                 "\nEscolha uma opção: ",
 
-                {"0", "1", "2", "3"},
+                {"0", "1", "2", "3", "4"},
 
             )
 
@@ -1827,15 +1836,23 @@ def main():
 
             if opcao == "3":
 
-                executou = executar_configuracao_retorno_padrao()
-
-
+                executou = executar_configuracao_retorno_padrao(
+                    modo_analise_re="comparar_versoes"
+                )
 
                 if executou:
-
                     return 0
 
+                continue
 
+            if opcao == "4":
+
+                executou = executar_configuracao_retorno_padrao(
+                    modo_analise_re="analise_simplificada"
+                )
+
+                if executou:
+                    return 0
 
                 continue
 

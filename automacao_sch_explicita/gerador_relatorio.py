@@ -936,6 +936,18 @@ def _html_conferencia_bloco(resultado):
 
     blocos = ["<h2>Conferência SCH x CCT</h2>"]
 
+    selecao = resultado.get("selecao_cct_re") or {}
+    if selecao:
+        dados_selecao = [
+            ("Situação", selecao.get("status", "")),
+            ("Data-Hora do anexo no SCH", selecao.get("data_hora", "Não identificada")),
+            ("ID do anexo", selecao.get("id", "Não identificado")),
+            ("Nome do anexo", selecao.get("nome_anexo", "")),
+            ("Total de CCTs encontrados", selecao.get("total_ccts", 0)),
+            ("Critério / observação", selecao.get("motivo", "")),
+        ]
+        blocos.append(_criar_tabela_campos("Seleção do CCT mais recente", dados_selecao))
+
     if status_geral == "ok":
         blocos.append(
             "<div class='ok'>Sem incongruências entre os dados do SCH e do CCT.</div>"
