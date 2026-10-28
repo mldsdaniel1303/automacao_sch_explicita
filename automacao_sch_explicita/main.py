@@ -811,7 +811,10 @@ def escolher_acoes_da_fila(fila_sch, modo_analise_re=None):
             for tipo in tipos_fora_escopo:
                 print(f"- {tipo}")
     if simplificada:
-        print("[SIMPLIFICADA] Comparação independente CCT x SCH.")
+        print("[SIMPLIFICADA] Conferência e preenchimentos com regras de Em Análise.")
+        if modo_analise_re == "analise_simplificada":
+            print("[SIMPLIFICADA] Filtro próprio: ETA e Transceptor de Radiação Restrita.")
+            print("[SIMPLIFICADA] Observação, CTS, SAR e Acompanhar Processo quando aplicáveis.")
         print("[SIMPLIFICADA] Somente categorias CCT e RACT, quando produto elegível.")
         print("[SIMPLIFICADA] Exclui quatro tipos do art. 3º e modalidade Declaração de Conformidade.")
         print("[SIMPLIFICADA] Não executa aprovação automática.")
@@ -827,7 +830,7 @@ def escolher_acoes_da_fila(fila_sch, modo_analise_re=None):
 
     return {
 
-        # O filtro por tipo não participa da análise de Retorno Para Estudo.
+        # Cada modo de RE aplica seu filtro próprio no fluxo, sem o filtro genérico de Em Análise.
 
         "processar_apenas_radiacao_restrita": False,
 
@@ -1278,7 +1281,7 @@ def exibir_resumo_fluxo_completo(opcoes):
               ("Automático quando aplicável" if tradicional else "Não executar"))
 
         print("Marcação em Acompanhar Processo: " +
-              ("Automática e obrigatória no RE tradicional" if tradicional else "Não executar"))
+              ("Automática e obrigatória no RE tradicional" if tradicional else "Análise Simplificada, substituindo pela frase configurada"))
 
         print(
 
@@ -1384,7 +1387,11 @@ def coletar_opcoes_retorno_padrao(modo_analise_re="comparar_versoes"):
         print("Tratamento de Especificações Complementares: Automático quando aplicável")
         print("Marcação em Acompanhar Processo: Automática e obrigatória no RE tradicional")
     else:
-        print("Comparar Versões / Minuta / Acompanhar Processo: Não executar")
+        print("Filtro próprio: Estação Terminal de Acesso (ETA) e Transceptor de Radiação Restrita")
+        print("Características Técnicas e CTS: mesmas regras aplicáveis de Em Análise")
+        print("Corrigir Minuta: análise de SAR do CCT, preservando textos existentes")
+        print("Acompanhar Processo: registrar Análise Simplificada e confirmar salvamento")
+        print("Comparar Versões: Não executar")
 
     print("Manter navegador aberto ao final: Sim")
 

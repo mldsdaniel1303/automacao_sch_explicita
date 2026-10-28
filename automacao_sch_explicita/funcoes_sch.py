@@ -6203,45 +6203,27 @@ def _tabela_tem_valores_sar(tabela):
 
 
 def _texto_tem_valores_sar_em_contexto(texto):
-    texto = texto or ""
-    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
-
+    # Não pesquisar números nas próximas linhas de um cabeçalho SAR:
+    # uma tabela também contém potência, frequência e taxa de transmissão.
+    # No texto livre, exigir valor ligado ao rótulo ou unidade W/kg explícita.
+    texto = ';'.join(
+        ''.join(c for c in unicodedata.normalize('NFKD', linha)
+                if not unicodedata.combining(c)).lower()
+        for linha in str(texto or '').splitlines()
+    )
+    numero = r"([0-9]+(?:[.,][0-9]+)?)"
+    rotulo = r"\bsar(?:[ -]+(?:cabeca|head|corpo|body|tronco|limb|membro))?"
+    padroes = [
+        rotulo + r"(?:\s*\(w\s*/?\s*kg\))?\s*[:=]\s*" + numero,
+        rotulo + r"[^;]{0,45}?" + numero + r"\s*w\s*/\s*kg\b",
+    ]
     valores = []
-
-    for i, linha in enumerate(linhas):
-        linha_norm = _norm_sar(linha)
-
-        if "sar" not in linha_norm:
-            continue
-
-        if not any(
-            termo in linha_norm
-            for termo in [
-                "corpo",
-                "body",
-                "cabeca",
-                "head",
-                "w/kg",
-                "w kg",
-            ]
-        ):
-            continue
-
-        janela = " ".join(linhas[i:i + 30])
-
-        for numero in re.findall(r"\d+[,.]\d+", janela):
-            try:
-                valor_float = float(numero.replace(".", "").replace(",", "."))
-            except Exception:
-                continue
-
-            if 0 < valor_float <= 20:
-                valores.append(numero)
-
-    return {
-        "tem_sar": bool(valores),
-        "valores": valores,
-    }
+    for padrao in padroes:
+        for encontrado in re.finditer(padrao, texto):
+            numero_texto = encontrado.group(1)
+            if float(numero_texto.replace(',', '.')) > 0 and numero_texto not in valores:
+                valores.append(numero_texto)
+    return {"tem_sar": bool(valores), "valores": valores}
 
 
 

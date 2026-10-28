@@ -42,6 +42,7 @@ from gerador_relatorio import gerar_req_report
 from diagnostico_estrutura_sch import diagnosticar_estrutura_atual, exibir_resumo_diagnostico
 from mvp_simplificada_re import (
     avaliar_cobertura_mvp,
+    expandir_faixas_explicitas_re,
     preencher_caracteristicas_conservadoras_re,
     preencher_acompanhamento_seguro_re,
 )
@@ -364,8 +365,20 @@ def _extrair_modalidade_avaliacao_visivel_sch(driver):
     return ""
 
 
-def _definir_escopos_re(req):
-    """Marca módulos independentes SEM descartar o requerimento antecipadamente."""
+def _definir_escopos_re(req, modo=None):
+    """Cada opção consulta seu próprio filtro antes de abrir o requerimento."""
+    if modo == "analise_simplificada":
+        permitido = _tipo_produto_permitido_simplificada(req)
+        conferencia = _escopo_conferencia_cct_re(req)
+        return {
+            "analise_tradicional_re": False,
+            "comparacao_cct_sch": bool(permitido and conferencia["executar"]),
+            "motivo_comparacao_cct": (conferencia["motivo"] if permitido else
+                                      "tipo_produto_fora_escopo_analise_simplificada"),
+            "descricao_comparacao_cct": conferencia["descricao"],
+            "modalidade_confirmada": conferencia["modalidade_confirmada"],
+            "filtro_produtos": "analise_simplificada_eta_transceptor_rr",
+        }
     pode_tradicional = _tipo_produto_no_escopo_automatico_retorno(
         req.get("tipo_produto", "")
     ) and not _homologacao_ano_2026_ou_superior(req)
@@ -1047,7 +1060,11 @@ def _conferir_cct_sch_independente_re(
     resumo["tabela_tecnica_sch"] = req["tabela_tecnica_sch"]
 
     # Estas DUAS funções são exatamente as já utilizadas em Em Análise.
-    resultado = comparar_dados_sch_x_cct(req, dados_pdf)
+    req_comparacao, pdf_comparacao = req, dados_pdf
+    if resumo.get("modo_analise_re") == "analise_simplificada":
+        req_comparacao = dict(req, tabela_tecnica_sch=expandir_faixas_explicitas_re(req.get("tabela_tecnica_sch")))
+        pdf_comparacao = dict(dados_pdf, tabela_tecnica_cct=expandir_faixas_explicitas_re(dados_pdf.get("tabela_tecnica_cct")))
+    resultado = comparar_dados_sch_x_cct(req_comparacao, pdf_comparacao)
     resumo["conferencia_sch_cct"] = resultado
     # Inspeção somente leitura integrada à opção 4. Não cria opção no menu
     # e não altera a decisão do RE tradicional nem a fila Em Análise.
@@ -1146,7 +1163,7 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
     ).strip()
     certificado_cct = str(dados_pdf.get("numero_certificado") or "").strip()
     norm_cert = lambda x: re.sub(r"[^a-z0-9]+", "", _normalizar_texto(x))
-    if not certificado_sch or not certificado_cct or norm_cert(certificado_sch) != norm_cert(certificado_cct):
+    if not norm_cert(certificado_sch) or not norm_cert(certificado_cct) or norm_cert(certificado_sch) != norm_cert(certificado_cct):
         resultado.update({
             "status": "bloqueado_certificado_nao_correspondente",
             "motivo": "Não foi confirmada a correspondência entre o certificado do SCH e o CCT mais recente; revisão manual necessária.",
@@ -1164,12 +1181,22 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
         return resultado
 
     def confirmar_contexto():
-        from funcoes_sch import entrar_iframe_detalhe_analise
-        entrar_iframe_detalhe_analise(driver, wait)
-        texto = driver.find_element(By.TAG_NAME, "body").text
-        padrao = r"(?<![0-9])" + re.escape(numero).replace(r"/", r"\s*/\s*") + r"(?![0-9])"
-        if not numero or not re.search(padrao, texto):
-            raise RuntimeError("Identidade do requerimento não confirmada na tela; edição bloqueada.")
+        # O número do requerimento não é exibido no body de todas as abas.
+        # Relê a seção estruturada Dados Gerais com a rotina já utilizada
+        # na abertura: a identidade precisa continuar sendo a do CCT analisado.
+        atuais = extrair_dados_certificado_sch(driver, wait) or {}
+        certificado_atual = str(atuais.get("numero_certificado") or "").strip()
+        if not certificado_atual or norm_cert(certificado_atual) != norm_cert(certificado_sch):
+            raise RuntimeError("Certificado da tela atual não corresponde ao requerimento analisado; edição bloqueada.")
+        modelo_inicial = _normalizar_texto(req.get("modelo_sch_dados_gerais"))
+        modelo_atual = _normalizar_texto(atuais.get("modelo_sch_dados_gerais"))
+        if not modelo_inicial or not modelo_atual or modelo_atual != modelo_inicial:
+            raise RuntimeError("Modelos de Dados Gerais não confirmam o contexto original; edição bloqueada.")
+        resultado["contexto_confirmado"] = {
+            "requerimento": numero, "certificado": certificado_atual,
+            "modelo": atuais["modelo_sch_dados_gerais"],
+            "origem": "releitura_dados_gerais",
+        }
 
     resultado["executado"] = True
     print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: aplicando regras de Em Análise ao CCT mais recente.")
@@ -1223,7 +1250,7 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
         resumo["preenchimento_sch"]["minuta"] = bool(
             sar.get("preenchido_automaticamente") and sar.get("salvo")
         )
-        if sar.get("status") == "erro" or (sar.get("preencher_frase") and (
+        if sar.get("status") not in {"sar_aplicavel", "sar_nao_aplicavel", "revisar", "preenchido", "preservado"} or (sar.get("preencher_frase") and (
             not sar.get("salvo")
             or not sar.get("confirmado_apos_salvar")
             or not sar.get("retornou_para_requerimento")
@@ -1459,7 +1486,7 @@ def executar_fluxo_sch(
                     ignorados_tipo_produto_retorno.append(item)
                     continue
                 escopos = _escopos_para_modo_re(
-                    _definir_escopos_re(req), modo_analise_re
+                    _definir_escopos_re(req, modo=modo_analise_re), modo_analise_re
                 )
                 req["escopo_modulos_re"] = escopos
                 if escopos["analise_tradicional_re"] or escopos["comparacao_cct_sch"]:
@@ -1860,7 +1887,11 @@ def executar_fluxo_sch(
                                     "executado": False,
                                     "motivo": "Modo combinado preserva as ações exclusivas do RE tradicional; preenchimentos de Em Análise não foram acionados.",
                                 }
-                        resumo["status"] = "sucesso"
+                        preenchimento_re = resumo.get("preenchimento_analise_simplificada_re") or {}
+                        resumo["status"] = (
+                            "erro" if modo_analise_re == "analise_simplificada"
+                            and preenchimento_re.get("status") == "erro_parcial" else "sucesso"
+                        )
                         resumo["fim"] = datetime.now().isoformat()
                         resumo["downloads_realizados"] = contar_arquivos_requerimento(pasta_req)
                         _salvar_controle_downloads(

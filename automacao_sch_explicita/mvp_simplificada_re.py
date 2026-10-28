@@ -34,6 +34,32 @@ def avaliar_cobertura_mvp(diagnostico, conferencia, dados_pdf):
                   + ' Preenchimentos dependem de regras próprias e segurança da tela.'}
 
 
+def expandir_faixas_explicitas_re(tabela):
+    """Desdobra faixas explícitas ligadas por 'e' sem alterar os dados originais.
+
+    Evita perder 905–915 ao comparar uma célula '898,5 a 901 e 905 a 915'.
+    Aceita apenas a gramática completa de intervalos; textos ambíguos permanecem.
+    """
+    from funcoes_sch import _mapear_colunas_relevantes
+    tabela = tabela or {}
+    indice = _mapear_colunas_relevantes(tabela.get('cabecalho') or []).get('faixa_freq_tx')
+    linhas = []
+    numero = r"[0-9]+(?:[.,][0-9]+)?"
+    intervalo = numero + r"\s*(?:a|até|ate|[-–—])\s*" + numero
+    padrao = intervalo + r"(?:\s+e\s+" + intervalo + r")+"
+    for original in tabela.get('linhas') or []:
+        linha = list(original)
+        valor = str(linha[indice] or '').strip() if indice is not None and indice < len(linha) else ''
+        if re.fullmatch(padrao, valor, flags=re.I):
+            for faixa in re.split(r"\s+e\s+", valor, flags=re.I):
+                nova = list(linha)
+                nova[indice] = faixa
+                linhas.append(nova)
+        else:
+            linhas.append(linha)
+    return dict(tabela, linhas=linhas)
+
+
 def compor_acompanhamento_preservado(existente, frase):
     """Retorna (novo_texto, precisa_adicionar). Nunca apaga texto anterior."""
     existente = str(existente or '')
@@ -75,9 +101,17 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
         raise RuntimeError('Campo Observação não confirmado; nenhuma alteração realizada.')
     texto = atual['texto']
     mudou = False
+    analise = {}
     status_obs = 'preservada' if texto.strip() else 'revisao_manual'
-    # Sem regra extraída, a função compartilhada aplicaria fallback genérico.
-    if not texto.strip() and str(dados_pdf.get('observacao_texto') or '').strip():
+    # Reutiliza as frases de Em Análise. O padrão de radiação restrita
+    # também pode ser usado quando SCH e CCT confirmam explicitamente esse
+    # tipo; nunca transferir esse fallback para uma ETA sem regra no CCT.
+    regra_cct = bool(str(dados_pdf.get('observacao_texto') or '').strip())
+    rr_confirmada = all(
+        normalizar(fonte.get('tipo_produto')) == 'transceptor de radiacao restrita'
+        for fonte in (req or {}, dados_pdf)
+    )
+    if not texto.strip() and (regra_cct or rr_confirmada):
         analise = decidir_texto_observacao_por_cct(dados_pdf)
         texto = analise['texto']
         if not preencher_observacao_caracteristicas(driver, wait, texto):
@@ -89,7 +123,7 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
     ) or {}
     if titulo.get('motivo') == 'campo_ja_correto':
         titulo['status'] = 'preservado'
-    if titulo.get('status') in {'erro', 'erro_confirmacao'}:
+    if titulo.get('status') not in {'preservado', 'revisar', 'nao_aplicavel', 'preenchido', 'corrigido'}:
         raise RuntimeError('Não foi possível confirmar CTS; edição interrompida.')
     mudou_titulo = bool(titulo.get('preenchido') or titulo.get('corrigido'))
     salvamento = {}
@@ -105,17 +139,21 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
             raise RuntimeError('Observação não foi preservada/gravada integralmente após salvar.')
     return {'status': status_obs, 'texto': texto,
         'observacao': {'status': status_obs},
-        'classificacao': dados_pdf.get('observacao_classificacao') or '',
+        'classificacao': analise.get('classificacao') or dados_pdf.get('observacao_classificacao') or '',
+        'origem': analise.get('origem') or ('existente_sch' if atual['texto'].strip() else 'revisao_manual'),
+        'motivos': analise.get('motivos') or [],
         'preenchido_automaticamente': mudou,
         'titulo_caracteristicas_secundarias': titulo,
         'salvo': bool(salvamento.get('salvo')),
         'confirmado_apos_salvar': bool(salvamento.get('confirmado_apos_salvar')),
         'sem_alteracao': not (mudou or mudou_titulo),
-        'mensagem': 'Observação e CTS avaliados independentemente.'}
+        'mensagem': ('Observação existente preservada.' if atual['texto'].strip() else
+                     'Frase aplicável de Em Análise preenchida e confirmada.' if mudou else
+                     'CCT sem regra segura para Observação deste produto; revisão manual, sem aplicar frase genérica de Radiação Restrita à ETA.')}
 
 
 def preencher_acompanhamento_seguro_re(driver, wait, frase):
-    """Adiciona a frase da Portaria 2257 somente se ausente, preservando todo texto."""
+    """Substitui somente o textarea superior pela frase configurada e confirma."""
     from funcoes_sch import (
         clicar_aba_informacoes_adicionais,
         entrar_iframe_detalhe_analise,
@@ -126,6 +164,9 @@ def preencher_acompanhamento_seguro_re(driver, wait, frase):
         _localizar_checkbox_acompanhar_processo,
         _checkbox_esta_marcado,
     )
+    novo = str(frase or '').strip()
+    if not novo:
+        raise RuntimeError('Frase de acompanhamento vazia; nenhuma alteração realizada.')
     clicar_aba_informacoes_adicionais(driver, wait)
     entrar_iframe_detalhe_analise(driver, wait)
     # O textarea pode não existir enquanto o checkbox estiver desmarcado.
@@ -135,8 +176,8 @@ def preencher_acompanhamento_seguro_re(driver, wait, frase):
     entrar_iframe_detalhe_analise(driver, wait)
     campo = _localizar_textarea_acompanhar_processo(driver, wait, timeout=6)
     anterior = str(campo.get_attribute('value') or '')
-    novo, adicionar = compor_acompanhamento_preservado(anterior, frase)
-    if adicionar and not preencher_acompanhar_processo(driver, wait, novo):
+    alterar = anterior.strip() != novo
+    if alterar and not preencher_acompanhar_processo(driver, wait, novo):
         raise RuntimeError('A frase não foi confirmada no textarea Acompanhar Processo.')
     # Salva inclusive se a frase já existia mas a caixa estava desmarcada.
     salvo = bool(salvar_informacoes_adicionais(driver, wait))
@@ -146,15 +187,15 @@ def preencher_acompanhamento_seguro_re(driver, wait, frase):
     gravado = str(verificado.get_attribute('value') or '')
     caixa = _localizar_checkbox_acompanhar_processo(driver, wait, timeout=5)
     marcado = bool(caixa is not None and _checkbox_esta_marcado(caixa))
-    confirmado = (marcado and normalizar(frase) in normalizar(gravado) and
-                  (not anterior.strip() or normalizar(anterior) in normalizar(gravado)))
+    confirmado = marcado and gravado.strip() == novo
     return {
         'status': 'confirmado' if salvo and confirmado else 'erro_confirmacao',
-        'texto': frase, 'texto_anterior_preservado': bool(anterior.strip()),
-        'texto_ja_existia': not adicionar, 'adicionado': adicionar,
+        'texto': novo, 'texto_anterior_preservado': not alterar,
+        'texto_ja_existia': not alterar, 'adicionado': False,
+        'substituido': alterar,
         'preenchido_automaticamente': bool(salvo and confirmado),
         'salvo': salvo, 'confirmado_apos_salvar': confirmado,
         'modo_preenchimento': 'acompanhar_processo',
-        'mensagem': ('Frase já existente, sem duplicação.' if not adicionar else
-                     'Frase acrescentada preservando o conteúdo anterior.'),
+        'mensagem': ('Frase configurada já existente.' if not alterar else
+                     'Conteúdo substituído pela frase configurada da Análise Simplificada.'),
     }

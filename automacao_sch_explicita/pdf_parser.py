@@ -1861,6 +1861,18 @@ def parsear_certificado_pdf(caminho_pdf):
         ],
     )
 
+    # Layout Moderna: cabeçalho "Emissão 07/09/2026", sem "Data de".
+    # Captura direta para não associar o rótulo a datas de outras seções.
+    if not resultado["data_emissao"]:
+        emissao_direta = re.search(
+            r"\bemiss[aã]o\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, flags=re.I
+        )
+        if emissao_direta:
+            resultado["data_emissao"] = emissao_direta.group(1)
+    resultado["data_manutencao"] = _extrair_data_por_rotulo(
+        texto, [r"data de manuten[cç][aã]o"]
+    )
+
     resultado["data_validade"] = _extrair_data_por_rotulo(
         texto,
         [

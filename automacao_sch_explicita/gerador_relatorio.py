@@ -2038,6 +2038,25 @@ def _html_resumo_conferencia_cct_re(resultados):
             "</tr>"
         )
 
+    anexos_linhas = []
+    for resultado in resultados or []:
+        if resultado.get("modo_analise_re") != "analise_simplificada":
+            continue
+        for anexo in resultado.get("anexos_baixados") or []:
+            anexos_linhas.append("<tr>" + "".join(
+                f"<td>{escape(str(valor or 'Não informado'))}</td>" for valor in (
+                    _fmt_req(resultado), anexo.get("categoria"),
+                    anexo.get("nome_anexo"), anexo.get("status"), anexo.get("arquivo"),
+                )) + "</tr>")
+    anexos_html = (
+        "<h3>CCT e RACT — arquivos baixados ou reutilizados</h3>"
+        "<p>O status ja_existente indica arquivo local reutilizado, sem novo download. "
+        "A conferência do CCT utiliza o certificado selecionado pelos metadados do SCH.</p>"
+        "<table><thead><tr><th>Requerimento</th><th>Categoria</th><th>Anexo</th>"
+        "<th>Status do download</th><th>Arquivo local</th></tr></thead><tbody>"
+        + "".join(anexos_linhas) + "</tbody></table>"
+    ) if anexos_linhas else ""
+
     return (
         "<h2>Conferência CCT x SCH — módulo independente de RE</h2>"
         f"<p>Elegíveis: <b>{elegiveis}</b> | Conferências com resultado: "
@@ -2046,7 +2065,7 @@ def _html_resumo_conferencia_cct_re(resultados):
         "<table><thead><tr><th>Requerimento</th><th>Tipo de produto</th>"
         "<th>RE tradicional</th><th>Situação CCT x SCH</th><th>Observação</th>"
         "</tr></thead><tbody>"
-        + "".join(linhas) + "</tbody></table>"
+        + "".join(linhas) + "</tbody></table>" + anexos_html
     )
 
 
@@ -2588,6 +2607,77 @@ def _html_resumo_executivo_retorno_para_estudo(resultados):
 
 
 
+def _html_consolidado_simplificada_re(resultados, versao_script, inicio_execucao,
+                                      fim_execucao, ignorados_fora_escopo=None):
+    """Resumo documental da opção 4, independente dos critérios do RE tradicional."""
+    resultados = resultados or []
+    ignorados = ignorados_fora_escopo or []
+    linhas, detalhes = [], []
+    analisados = divergentes = inconclusivos = falhas = 0
+
+    def texto(valor):
+        return escape(str(valor or "Não informado"))
+
+    for indice, resultado in enumerate(resultados, 1):
+        req = resultado.get("requerimento") or {}
+        conferencia = resultado.get("conferencia_sch_cct") or {}
+        tabela = conferencia.get("comparacao_tabela_tecnica") or {}
+        datas = resultado.get("comparacao_datas_sch_cct") or {}
+        preenchimento = resultado.get("preenchimento_analise_simplificada_re") or {}
+        ausentes = conferencia.get("campos_ausentes") or []
+        divergencias = conferencia.get("divergencias") or []
+        analisados += conferencia.get("status_geral") in {"ok", "conforme", "parcial", "divergente"}
+        tem_divergencia = bool(divergencias or datas.get("status_geral") == "divergente")
+        divergentes += tem_divergencia
+        inconclusivos += bool(ausentes or conferencia.get("status_geral") == "parcial"
+                              or tabela.get("status") not in {"ok", "divergente"})
+        falhas += bool(resultado.get("status") == "erro" or preenchimento.get("status") == "erro_parcial")
+        anexos = resultado.get("anexos_baixados") or []
+        ccts = sum("cct" in str(a.get("categoria") or "").lower() for a in anexos)
+        racts = sum("ract" in str(a.get("categoria") or "").lower() for a in anexos)
+        linhas.append("<tr>" + "".join(f"<td>{texto(v)}</td>" for v in (
+            _fmt_req(resultado), req.get("tipo_produto"),
+            f"CCT: {ccts} / RACT: {racts}",
+            (resultado.get("dados_pdf") or {}).get("numero_certificado"),
+            conferencia.get("status_geral"), tabela.get("status"),
+            datas.get("status_geral"), len(divergencias), len(ausentes),
+            preenchimento.get("status"),
+        )) + "</tr>")
+        detalhes.append(
+            f"<div class='break'></div><h1>{indice}. Requerimento {texto(_fmt_req(resultado))}</h1>"
+            + _html_dados_sch(resultado)
+            + _html_conferencia_bloco(resultado)
+            + _html_validade_cct(resultado)
+            + _html_homologacoes_vinculadas(resultado)
+            + _html_situacao_sar(resultado)
+            + _html_preenchimento_simplificado_re(resultado)
+        )
+    cabecalhos = ("Requerimento", "Tipo de produto", "Anexos encontrados", "CCT selecionado",
+                  "Conferência CCT × SCH", "Tabela técnica", "Datas", "Divergências cadastrais/técnicas",
+                  "Campos inconclusivos", "Preenchimentos")
+    ignorados_html = _criar_tabela_campos("Requerimentos ignorados", [
+        (str(item.get("requerimento") or ""), item.get("mensagem") or item.get("motivo"))
+        for item in ignorados if isinstance(item, dict)
+    ]) if ignorados else ""
+    return (
+        "<!DOCTYPE html><html lang='pt-BR'><head><meta charset='utf-8'>"
+        "<title>Análise Simplificada — Retorno Para Estudo</title>" + _css() + "</head><body>"
+        "<h1>Análise Simplificada — Retorno Para Estudo</h1>"
+        f"<p class='muted'>Versão: {texto(versao_script)} | Início: {texto(inicio_execucao)} | Fim: {texto(fim_execucao)}</p>"
+        "<h2>Resumo da análise documental e técnica</h2>"
+        f"<p>Requerimentos: <b>{len(resultados)}</b> | Conferências realizadas: <b>{analisados}</b> | "
+        f"Com divergências: <b>{divergentes}</b> | Com pontos inconclusivos: <b>{inconclusivos}</b> | "
+        f"Com falhas de execução: <b>{falhas}</b> | Ignorados: <b>{len(ignorados)}</b>.</p>"
+        "<p>Os indicadores podem se sobrepor. Divergências de datas e detalhes das tabelas aparecem abaixo. "
+        "Concluir a execução não significa conformidade técnica. Campos ausentes exigem revisão manual.</p>"
+        "<table><thead><tr>" + "".join(f"<th>{texto(c)}</th>" for c in cabecalhos)
+        + "</tr></thead><tbody>" + "".join(linhas) + "</tbody></table>"
+        + _html_resumo_conferencia_cct_re(resultados)
+        + ignorados_html + "<h2>Detalhamento por requerimento</h2>"
+        + "".join(detalhes) + "</body></html>"
+    )
+
+
 def _html_consolidado_retorno_para_estudo(
     resultados,
     versao_script,
@@ -2606,6 +2696,11 @@ def _html_consolidado_retorno_para_estudo(
     """
 
     from html import escape
+
+    if resultados and all(r.get("modo_analise_re") == "analise_simplificada" for r in resultados):
+        return _html_consolidado_simplificada_re(
+            resultados, versao_script, inicio_execucao, fim_execucao, ignorados_fora_escopo
+        )
 
     resultados = resultados or []
     ignorados_fora_escopo = ignorados_fora_escopo or []
