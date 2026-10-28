@@ -1629,6 +1629,68 @@ def _linha_tecnica_cct_util(linha):
 
 
 
+def _extrair_tabela_tecnica_por_geometria(tabela):
+    """Reconstrói cabeçalhos em várias linhas sem deslocar células mescladas."""
+    bruto = tabela.extract() or []
+    if not bruto:
+        return None
+    cab_teste = [' '.join(str(l[i] or '') for l in bruto[:3] if i < len(l))
+                 for i in range(len(bruto[0]))]
+    if not _linha_parece_cabecalho_tecnico_cct(cab_teste):
+        return None
+    primeira = tabela.rows[0].cells
+    ancoras = [(i, (cel[0] + cel[2]) / 2) for i, cel in enumerate(primeira)
+               if cel and str(bruto[0][i] or '').strip()]
+    if len(ancoras) < 2:
+        return None
+    fim_cab = max(primeira[i][3] for i, _ in ancoras)
+    cabecalho = [''] * len(ancoras)
+    linhas = []
+    ultima_faixa = ''
+    for row, valores in zip(tabela.rows, bruto):
+        celulas = [''] * len(ancoras)
+        for cell, valor in zip(row.cells, valores):
+            if not cell or not str(valor or '').strip():
+                continue
+            centro = (cell[0] + cell[2]) / 2
+            coluna = min(range(len(ancoras)), key=lambda j: abs(ancoras[j][1] - centro))
+            celulas[coluna] = ' '.join(filter(None, (celulas[coluna],
+                                      re.sub(r'\s+', ' ', str(valor)).strip())))
+        topo = min((c[1] for c in row.cells if c), default=fim_cab)
+        if topo < fim_cab - 0.5:
+            cabecalho = [' '.join(filter(None, (a, b))) for a, b in zip(cabecalho, celulas)]
+            continue
+        # Ruído lateral ou rodapé não deve criar uma linha nem herdar faixa.
+        if not any(re.fullmatch(r'[0-9]+(?:[.,][0-9]+)?', c) for c in celulas[1:]):
+            continue
+        if re.search(r'[0-9]+(?:[.,][0-9]+)?\s*(?:a|[-–—])\s*[0-9]', celulas[0]):
+            ultima_faixa = celulas[0]
+        elif not celulas[0] and ultima_faixa:
+            celulas[0] = ultima_faixa
+        else:
+            continue
+        linhas.append(celulas)
+    return [cabecalho] + linhas if linhas else None
+
+
+def _chave_coluna_tecnica_cct(valor):
+    texto = _normalizar_texto(valor)
+    if 'eirp' in texto:
+        return 'potencia_eirp_' + ('mw' if '(mw)' in texto.replace(' ', '') else 'w')
+    if 'frequenc' in texto or 'frequency' in texto:
+        return 'frequencia_' + ('ghz' if 'ghz' in texto else 'mhz')
+    if 'potencia' in texto or 'output power' in texto:
+        return 'potencia_saida_' + ('mw' if '(mw)' in texto.replace(' ', '') else 'w')
+    if 'sar' in texto:
+        return 'sar_cabeca' if any(k in texto for k in ('cabeca', 'head')) else 'sar_corpo'
+    for chave, termos in [('emissao', ('emiss',)), ('modulacao', ('modula',)),
+                         ('tecnologia', ('tecnologia', 'technology')),
+                         ('taxa', ('taxa', 'transmission rate')), ('padrao', ('padrao', 'standard'))]:
+        if any(t in texto for t in termos):
+            return chave
+    return texto
+
+
 def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
     """
     Extrai e une todas as partes da tabela técnica do CCT.
@@ -1681,28 +1743,25 @@ def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
             "linhas": [],
         }
 
-    # Usa o cabeçalho mais completo entre todas as partes encontradas.
-    cabecalho_final = max(
-        [t.get("cabecalho", []) or [] for t in tabelas_tecnicas],
-        key=lambda cab: sum(1 for c in cab if _limpar_texto(c)),
-    )
-
-    total_colunas = len(cabecalho_final)
-    linhas_final = []
-
-    for tabela in tabelas_tecnicas:
-        for linha in tabela.get("linhas", []) or []:
-            linha = list(linha or [])
-
-            if total_colunas:
-                linha = linha + [""] * (total_colunas - len(linha))
-                linha = linha[:total_colunas]
-
-            if _linha_tecnica_cct_util(linha):
-                linhas_final.append(linha)
-
-    return _ajustar_tabela_extraida(cabecalho_final, linhas_final)
-
+    # Cada parte pode ter colunas distintas. Nunca alinhar pela posição.
+    chaves, cabecalho_final, linhas_final, origens = [], [], [], []
+    for parte in tabelas_tecnicas:
+        for cab in parte['cabecalho']:
+            chave = _chave_coluna_tecnica_cct(cab)
+            if chave not in chaves:
+                chaves.append(chave)
+                cabecalho_final.append(cab)
+    for indice, parte in enumerate(tabelas_tecnicas, 1):
+        mapa = [chaves.index(_chave_coluna_tecnica_cct(c)) for c in parte['cabecalho']]
+        for numero, linha in enumerate(parte['linhas'], 1):
+            nova = [''] * len(chaves)
+            for coluna, valor in zip(mapa, linha):
+                nova[coluna] = valor
+            linhas_final.append(nova)
+            origens.append({'parte': indice, 'linha': numero})
+    return {'cabecalho': cabecalho_final, 'linhas': linhas_final,
+            'partes_extraidas': len(tabelas_tecnicas), 'origens_linhas': origens,
+            'alinhamento_colunas': 'significado_do_cabecalho'}
 
 
 
@@ -1745,13 +1804,20 @@ def parsear_certificado_pdf(caminho_pdf):
 
     texto_total = []
     tabelas_brutas = []
+    tabelas_geometricas = []
+    paginas_tecnicas = []
 
     with pdfplumber.open(caminho_pdf) as pdf:
-        for page in pdf.pages:
+        for numero_pagina, page in enumerate(pdf.pages, 1):
             texto_total.append(page.extract_text() or "")
 
             try:
-                tabelas_brutas.extend(page.extract_tables() or [])
+                for tabela in page.find_tables():
+                    tabelas_brutas.append(tabela.extract() or [])
+                    geometrica = _extrair_tabela_tecnica_por_geometria(tabela)
+                    if geometrica:
+                        tabelas_geometricas.append(geometrica)
+                        paginas_tecnicas.append(numero_pagina)
             except Exception:
                 pass
 
@@ -1900,13 +1966,17 @@ def parsear_certificado_pdf(caminho_pdf):
     resultado["observacao_texto"] = obs["observacao_texto"]
     resultado["observacao_motivos"] = obs["observacao_motivos"]
 
-    tabela_cct_tabelas = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas)
+    tabela_cct_tabelas = _extrair_tabela_tecnica_cct_de_tabelas(tabelas_geometricas or tabelas_brutas)
+    if tabelas_geometricas:
+        tabela_cct_tabelas['paginas_origem'] = paginas_tecnicas
+        for origem in tabela_cct_tabelas.get('origens_linhas') or []:
+            origem['pagina'] = paginas_tecnicas[origem['parte'] - 1]
     tabela_cct_texto = _extrair_tabela_tecnica_cct_do_texto(texto)
 
     linhas_tabelas = len(tabela_cct_tabelas.get("linhas", []) or [])
     linhas_texto = len(tabela_cct_texto.get("linhas", []) or [])
 
-    if linhas_texto > linhas_tabelas:
+    if linhas_texto > linhas_tabelas and not tabelas_geometricas:
         tabela_cct = tabela_cct_texto
         tabela_cct["origem_extracao"] = "texto_completo"
     else:

@@ -3764,7 +3764,59 @@ def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=Fals
     return sorted(assinaturas)
 
 
+def _comparar_tabela_com_eirp(tabela_sch, tabela_cct):
+    """EIRP não é intercambiável com potência de saída sem regra explícita do SCH."""
+    cab = list(tabela_cct.get('cabecalho') or [])
+    indices_eirp = [i for i, c in enumerate(cab) if 'eirp' in _normalizar_texto_comparacao(c)]
+    if not indices_eirp:
+        return None
+    mapa = _mapear_colunas_relevantes(cab)
+    idx_freq = mapa.get('faixa_freq_tx')
+    if idx_freq is None:
+        return None
+    linhas = list(tabela_cct.get('linhas') or [])
+    faixas_eirp, inconclusivos = set(), []
+    for i, linha in enumerate(linhas):
+        if idx_freq >= len(linha) or not any(j < len(linha) and
+                _normalizar_decimal_tabela(linha[j]) for j in indices_eirp):
+            continue
+        faixa = _normalizar_faixa_frequencia_tabela(linha[idx_freq])
+        faixas_eirp.add(faixa)
+        origem = (tabela_cct.get('origens_linhas') or [])
+        inconclusivos.append({
+            'linha_cct': i + 1, 'pagina': origem[i].get('pagina', '') if i < len(origem) else '',
+            'faixa': linha[idx_freq], 'campo': 'Potência de saída × EIRP',
+            'potencia_saida_cct': linha[mapa['potencia_max_saida']] if 'potencia_max_saida' in mapa and mapa['potencia_max_saida'] < len(linha) else '',
+            'eirp_cct': ' / '.join(str(linha[j]) for j in indices_eirp if j < len(linha)),
+            'motivo': 'O SCH apresenta potência de saída; o CCT também contém EIRP. Confirmar a grandeza cadastrada antes de afirmar conformidade ou divergência.',
+        })
+    if not inconclusivos:
+        return None
+    # Retira a coluna EIRP para comparar apenas as faixas sem ambiguidade.
+    manter = [i for i in range(len(cab)) if i not in indices_eirp]
+    cct_filtrado = {'cabecalho': [cab[i] for i in manter], 'linhas': [
+        [l[j] if j < len(l) else '' for j in manter] for l in linhas
+        if idx_freq < len(l) and _normalizar_faixa_frequencia_tabela(l[idx_freq]) not in faixas_eirp]}
+    mapa_sch = _mapear_colunas_relevantes((tabela_sch or {}).get('cabecalho') or [])
+    idx_sch = mapa_sch.get('faixa_freq_tx')
+    sch_filtrado = dict(tabela_sch or {}, linhas=[l for l in (tabela_sch or {}).get('linhas') or []
+        if idx_sch is not None and idx_sch < len(l) and
+        _normalizar_faixa_frequencia_tabela(l[idx_sch]) not in faixas_eirp])
+    resultado = comparar_tabelas_tecnicas_sch_cct(sch_filtrado, cct_filtrado)
+    resultado.update(
+        status='divergente' if resultado.get('divergencias') else 'comparacao_parcial',
+        motivo='Comparação das faixas sem ambiguidade; potência de saída e EIRP exigem validação independente.',
+        inconclusivos=inconclusivos, linhas_totais_cct=len(linhas),
+        paginas_cct=tabela_cct.get('paginas_origem') or [],
+        linhas_revisao_manual=len(inconclusivos),
+    )
+    return resultado
+
+
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
+    resultado_eirp = _comparar_tabela_com_eirp(tabela_sch, tabela_cct or {})
+    if resultado_eirp is not None:
+        return resultado_eirp
     tem_potencia_sch = _tabela_tem_coluna_potencia(tabela_sch)
     tem_potencia_cct = _tabela_tem_coluna_potencia(tabela_cct)
 
@@ -4399,7 +4451,7 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
 
     if divergencias:
         status_geral = "divergente"
-    elif campos_ausentes:
+    elif campos_ausentes or comparacao_tabela.get("status") == "comparacao_parcial":
         status_geral = "parcial"
     else:
         status_geral = "ok"

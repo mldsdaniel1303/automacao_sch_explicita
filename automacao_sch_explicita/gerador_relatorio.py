@@ -867,6 +867,34 @@ def _html_comparacao_tabela_tecnica(resultado):
 
     linhas.append("</tbody></table>")
 
+    tabela_cct = (resultado.get('dados_pdf') or {}).get('tabela_tecnica_cct') or {}
+    paginas = tabela_cct.get('paginas_origem') or []
+    if paginas:
+        linhas.append(f"<p><b>Páginas do CCT reunidas:</b> {escape(', '.join(map(str, paginas)))}. "
+                      f"<b>Linhas extraídas:</b> {len(tabela_cct.get('linhas') or [])}. "
+                      "Colunas alinhadas pelo cabeçalho de cada parte.</p>")
+    if paginas:
+        linhas.append('<details><summary>Conferir as linhas extraídas do CCT, por página</summary>'
+                      '<table><thead><tr><th>Página</th><th>Linha</th>'
+                      + ''.join(f'<th>{escape(str(c))}</th>' for c in tabela_cct.get('cabecalho') or [])
+                      + '</tr></thead><tbody>')
+        origens = tabela_cct.get('origens_linhas') or []
+        for numero, valores in enumerate(tabela_cct.get('linhas') or [], 1):
+            origem = origens[numero - 1] if numero <= len(origens) else {}
+            linhas.append('<tr>' + f"<td>{escape(str(origem.get('pagina') or 'Não identificada'))}</td><td>{numero}</td>"
+                          + ''.join(f'<td>{escape(str(v or "—"))}</td>' for v in valores) + '</tr>')
+        linhas.append('</tbody></table></details>')
+
+    inconclusivos = comparacao.get('inconclusivos') or []
+    if inconclusivos:
+        linhas.append('<h4>Linhas que exigem revisão da grandeza de potência</h4>'
+                      '<table><thead><tr><th>Página CCT</th><th>Linha CCT</th><th>Faixa</th>'
+                      '<th>Potência de saída CCT (W)</th><th>EIRP CCT (W)</th><th>Motivo</th></tr></thead><tbody>')
+        for item in inconclusivos:
+            linhas.append('<tr>' + ''.join(f'<td>{escape(str(item.get(c) or "Não informado"))}</td>'
+                          for c in ('pagina','linha_cct','faixa','potencia_saida_cct','eirp_cct','motivo')) + '</tr>')
+        linhas.append('</tbody></table>')
+
     if not divergencias:
         classe_sem_div = 'ok' if status == 'ok' else 'alerta'
         texto_sem_div = (
