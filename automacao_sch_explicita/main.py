@@ -9,6 +9,7 @@ import sys
 
 
 from fluxo_sch import executar_fluxo_sch
+from versao import VERSAO_APLICATIVO
 
 from funcoes_sch import (
 
@@ -1615,7 +1616,7 @@ def exibir_menu():
 
     linha()
 
-    print("AUTOMAÇÃO SCH")
+    print(f"AUTOMAÇÃO SCH — v{VERSAO_APLICATIVO}")
 
     linha()
 
@@ -1904,6 +1905,12 @@ def main():
 
 
 if __name__ == "__main__":
+
+    # Verificação explícita e exclusivamente offline, fora das quatro opções.
+    # Não inicia navegador, login ou qualquer fluxo SCH.
+    if sys.argv[1:2] == ["--verificar-pacote"]:
+        from verificacao_pacote import verificar_cli
+        sys.exit(verificar_cli(sys.argv[2:]))
 
     codigo_saida = 0
 

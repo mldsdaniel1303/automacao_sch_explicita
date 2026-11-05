@@ -2577,7 +2577,8 @@ def mover_arquivo_para_requerimento(arquivo_origem, pasta_destino, nome_destino=
     return destino
 
 
-def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_download, categoria):
+def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_download, categoria,
+                                     ids_permitidos=None, forcar_download=False, alvo_esperado=None):
     pasta_req = Path(pasta_saida)
     pasta_categoria = pasta_req / nome_seguro(categoria)
     pasta_categoria.mkdir(parents=True, exist_ok=True)
@@ -2625,6 +2626,11 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
                 "status": "pendente",
             }
 
+            if ids_permitidos is not None and id_linha not in {str(x) for x in ids_permitidos}:
+                continue
+            if alvo_esperado and any(str(registro.get(k,'')) != str(alvo_esperado.get(k,'')) for k in ('id','data_hora','nome_anexo')):
+                raise RuntimeError('Metadados do anexo mudaram antes do download.')
+
             chave_doc = (
                 str(id_linha).strip(),
                 str(tipo_documento).strip().lower(),
@@ -2640,7 +2646,7 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
 
             nome_limpo_existente = nome_seguro(nome_anexo) or f"anexo_{i}"
             arquivos_existentes = list(pasta_categoria.glob(f"{nome_limpo_existente}.*"))
-            if arquivos_existentes:
+            if arquivos_existentes and not forcar_download:
                 registro["status"] = "ja_existente"
                 registro["arquivo"] = str(arquivos_existentes[0])
                 anexos_categoria.append(registro)
@@ -2653,6 +2659,10 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
                 ".//img/ancestor::a[1]",
                 ".//a",
             ]
+            if forcar_download:
+                # No fluxo confirmado não há fallback para links de ação
+                # de outras colunas (Recusar, excluir ou similares).
+                xpaths_download=[".//td[5]//a"]
 
             link = None
             for xp in xpaths_download:
@@ -2666,6 +2676,9 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
                 anexos_categoria.append(registro)
                 continue
 
+            if getattr(driver, 'somente_leitura', False) is True:
+                driver.autorizar_download_cct(link, registro)
+
             print(f"[SCH] Baixando anexo {i} da categoria {categoria}: {nome_anexo}")
 
             janela_principal = driver.current_window_handle
@@ -2677,7 +2690,7 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
 
             novas_abas = _capturar_novas_abas(driver, handles_antes, timeout=0.8)
 
-            if novas_abas:
+            if novas_abas and getattr(driver, 'somente_leitura', False) is not True:
                 fechar_abas_extras_sem_travar(
                     driver=driver,
                     aba_principal=janela_principal,
@@ -2689,7 +2702,7 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             novo_arquivo = esperar_novo_arquivo_baixado(
                 pasta_download,
                 arquivos_antes,
-                timeout=8,
+                timeout=45 if forcar_download else 8,
                 poll=0.08,
             )
 
@@ -2704,6 +2717,15 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
 
                 registro["status"] = "baixado"
                 registro["arquivo"] = str(arquivo_final)
+                if forcar_download:
+                    import hashlib
+                    from datetime import datetime, timezone
+                    registro['origem'] = 'download_sch_nesta_execucao'
+                    registro['sha256'] = hashlib.sha256(arquivo_final.read_bytes()).hexdigest()
+                    registro['download_confirmado'] = True
+                    registro['baixado_em_utc'] = datetime.now(timezone.utc).isoformat()
+                    registro['requerimento_origem'] = req.get('requerimento') or req.get('numero')
+                    registro['origem_tela'] = 'SCH / Anexos / Certificado de Conformidade Técnica - CCT'
                 print(f"[SCH] Baixado: {arquivo_final.name}")
             else:
                 registro["status"] = "nao_identificado"
@@ -2725,6 +2747,58 @@ def baixar_anexos_da_categoria_atual(driver, wait, req, pasta_saida, pasta_downl
             )
 
     return anexos_categoria
+
+
+SCRIPT_LINHAS_ANEXOS_RE = """return Array.from(arguments[0].querySelectorAll('tr')).map(r=>Array.from(r.children).filter(c=>c.tagName==='TD').map(c=>c.innerText)).filter(r=>r.length);"""
+
+
+def ler_linhas_anexos_re(driver, wait):
+    from selenium.common.exceptions import StaleElementReferenceException
+    from utils import _ajax_primefaces_pronto
+    for tentativa in range(3):
+        if getattr(driver,'somente_leitura',False) is True:
+            driver.verificar_contexto()
+        wait.until(_ajax_primefaces_pronto)
+        try:
+            return driver.execute_script(SCRIPT_LINHAS_ANEXOS_RE, localizar_tabela_anexos(driver,wait))
+        except StaleElementReferenceException:
+            if tentativa==2:
+                raise
+
+
+def listar_ccts_categoria_atual_re(driver, wait):
+    registros=[]
+    for v in ler_linhas_anexos_re(driver,wait):
+        if len(v)>=5 and 'certificado de conformidade tecnica' in _normalizar_texto_comparacao(v[1]):
+            registros.append({'categoria':'CCT','id':v[0].strip(),'tipo_documento':v[1],
+                              'detalhamento':v[2],'data_hora':v[3].strip(),'nome_anexo':v[4].strip(),'arquivo':''})
+    return registros
+
+
+def baixar_cct_mais_recente_confirmado_re(driver, wait, req, pasta_saida, pasta_download):
+    """Exclusivo opção 4: metadados atuais, novo download, sem cache por nome."""
+    from fluxo_sch import _selecionar_cct_mais_recente_re
+    clicar_aba_anexos(driver,wait)
+    clicar_categoria_anexo(driver,wait,'Certificado de Conformidade Técnica - CCT')
+    registros=listar_ccts_categoria_atual_re(driver,wait)
+    alvo=_selecionar_cct_mais_recente_re(registros,pasta_saida,exigir_arquivo=False)
+    if alvo.get('status')!='selecionado':
+        return alvo,registros
+    if getattr(driver,'somente_leitura',False) is True:
+        driver.definir_alvo_download_cct(alvo)
+    baixados=baixar_anexos_da_categoria_atual(driver,wait,req,pasta_saida,pasta_download,
+                 'Certificado de Conformidade Técnica - CCT',ids_permitidos=[str(alvo['id'])],
+                 forcar_download=True,alvo_esperado=alvo)
+    # Revalidar o mais recente: uma inclusão concorrente não autoriza usar o anterior.
+    atuais=listar_ccts_categoria_atual_re(driver,wait)
+    novo=_selecionar_cct_mais_recente_re(atuais,pasta_saida,exigir_arquivo=False)
+    if any(novo.get(k)!=alvo.get(k) for k in ('status','id','data_hora','nome_anexo')):
+        return {'status':'metadados_alterados','arquivo':'','motivo':'Anexos mudaram durante o download.'},baixados
+    for a in atuais:
+        encontrado=next((b for b in baixados if all(b.get(k)==a.get(k) for k in ('id','data_hora','nome_anexo'))),None)
+        if encontrado:
+            a.update(encontrado)
+    return _selecionar_cct_mais_recente_re(atuais,pasta_saida),atuais
 
 
 def baixar_todos_os_anexos_de_todas_as_categorias(
@@ -3765,58 +3839,35 @@ def _assinaturas_unicas_tabela(linhas, usar_potencia=True, usar_intensidade=Fals
 
 
 def _comparar_tabela_com_eirp(tabela_sch, tabela_cct):
-    """EIRP não é intercambiável com potência de saída sem regra explícita do SCH."""
-    cab = list(tabela_cct.get('cabecalho') or [])
-    indices_eirp = [i for i, c in enumerate(cab) if 'eirp' in _normalizar_texto_comparacao(c)]
-    if not indices_eirp:
+    """Preserva grandezas separadas e diagnostica coincidencias numericas por linha."""
+    from extracao_cct import coluna, comparar_correspondencias
+    if not any(coluna(c) == 'potencia_eirp' for c in tabela_cct.get('cabecalho') or []):
         return None
-    mapa = _mapear_colunas_relevantes(cab)
-    idx_freq = mapa.get('faixa_freq_tx')
-    if idx_freq is None:
-        return None
-    linhas = list(tabela_cct.get('linhas') or [])
-    faixas_eirp, inconclusivos = set(), []
-    for i, linha in enumerate(linhas):
-        if idx_freq >= len(linha) or not any(j < len(linha) and
-                _normalizar_decimal_tabela(linha[j]) for j in indices_eirp):
-            continue
-        faixa = _normalizar_faixa_frequencia_tabela(linha[idx_freq])
-        faixas_eirp.add(faixa)
-        origem = (tabela_cct.get('origens_linhas') or [])
-        inconclusivos.append({
-            'linha_cct': i + 1, 'pagina': origem[i].get('pagina', '') if i < len(origem) else '',
-            'faixa': linha[idx_freq], 'campo': 'Potência de saída × EIRP',
-            'potencia_saida_cct': linha[mapa['potencia_max_saida']] if 'potencia_max_saida' in mapa and mapa['potencia_max_saida'] < len(linha) else '',
-            'eirp_cct': ' / '.join(str(linha[j]) for j in indices_eirp if j < len(linha)),
-            'motivo': 'O SCH apresenta potência de saída; o CCT também contém EIRP. Confirmar a grandeza cadastrada antes de afirmar conformidade ou divergência.',
-        })
-    if not inconclusivos:
-        return None
-    # Retira a coluna EIRP para comparar apenas as faixas sem ambiguidade.
-    manter = [i for i in range(len(cab)) if i not in indices_eirp]
-    cct_filtrado = {'cabecalho': [cab[i] for i in manter], 'linhas': [
-        [l[j] if j < len(l) else '' for j in manter] for l in linhas
-        if idx_freq < len(l) and _normalizar_faixa_frequencia_tabela(l[idx_freq]) not in faixas_eirp]}
-    mapa_sch = _mapear_colunas_relevantes((tabela_sch or {}).get('cabecalho') or [])
-    idx_sch = mapa_sch.get('faixa_freq_tx')
-    sch_filtrado = dict(tabela_sch or {}, linhas=[l for l in (tabela_sch or {}).get('linhas') or []
-        if idx_sch is not None and idx_sch < len(l) and
-        _normalizar_faixa_frequencia_tabela(l[idx_sch]) not in faixas_eirp])
-    resultado = comparar_tabelas_tecnicas_sch_cct(sch_filtrado, cct_filtrado)
-    resultado.update(
-        status='divergente' if resultado.get('divergencias') else 'comparacao_parcial',
-        motivo='Comparação das faixas sem ambiguidade; potência de saída e EIRP exigem validação independente.',
-        inconclusivos=inconclusivos, linhas_totais_cct=len(linhas),
-        paginas_cct=tabela_cct.get('paginas_origem') or [],
-        linhas_revisao_manual=len(inconclusivos),
-    )
-    return resultado
+    return comparar_correspondencias(tabela_sch or {}, tabela_cct)
 
 
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
+    if (tabela_cct or {}).get('status_extracao') in {'falha_extracao', 'sem_texto_interpretavel'}:
+        return {'status':'erro_extracao', 'motivo':'CCT sem extração RF interpretável.',
+                'divergencias':[], 'inconclusivos':[{'motivo':'Falha de extração; revisão necessária.'}],
+                'campos_comparados':[]}
+    if (tabela_cct or {}).get('status_extracao') == 'sem_tabela_rf':
+        tem_sch = bool((tabela_sch or {}).get('linhas'))
+        return {'status': 'comparacao_parcial' if tem_sch else 'nao_aplicavel',
+                'motivo': 'CCT sem tabela RF; verificar o contexto do SCH.' if tem_sch else 'CCT e entrada SCH sem tabela RF comparável.',
+                'divergencias': [], 'inconclusivos': [{'motivo':'SCH apresenta linhas sem correspondência RF no CCT'}] if tem_sch else [],
+                'campos_comparados': [], 'linhas_sch':len((tabela_sch or {}).get('linhas') or []), 'linhas_cct':0}
     resultado_eirp = _comparar_tabela_com_eirp(tabela_sch, tabela_cct or {})
     if resultado_eirp is not None:
         return resultado_eirp
+    from extracao_cct import comparar_registros, comparar_correspondencias, normalizar, coluna
+    cabecalhos = [(t or {}).get('cabecalho') or [] for t in (tabela_sch,tabela_cct)]
+    if all(any('tecnolog' in normalizar(c) for c in cab) for cab in cabecalhos) and not any(
+            coluna(c) == 'intensidade_campo' for cab in cabecalhos for c in cab):
+        return comparar_correspondencias(tabela_sch or {}, tabela_cct or {})
+    normalizada = comparar_registros(tabela_sch or {}, tabela_cct or {})
+    if normalizada is not None:
+        return normalizada
     tem_potencia_sch = _tabela_tem_coluna_potencia(tabela_sch)
     tem_potencia_cct = _tabela_tem_coluna_potencia(tabela_cct)
 
@@ -4451,7 +4502,7 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
 
     if divergencias:
         status_geral = "divergente"
-    elif campos_ausentes or comparacao_tabela.get("status") == "comparacao_parcial":
+    elif campos_ausentes or comparacao_tabela.get("status") in {"comparacao_parcial", "erro_extracao"}:
         status_geral = "parcial"
     else:
         status_geral = "ok"
@@ -5224,6 +5275,36 @@ def escolher_titulo_caracteristicas_secundarias(
     )
 
     return str(diagnostico.get("titulo") or "").strip()
+
+
+SCRIPT_DIAGNOSTICO_CTS = """return {texto:document.body.innerText,
+  rotulos:Array.from(document.querySelectorAll('label,legend,th,td,span')).filter(e=>!e.children.length && /secund[aá]ri/i.test(e.textContent)).map(e=>({texto:e.textContent,visivel:!!e.getClientRects().length,para:e.getAttribute('for')})),
+  campos:Array.from(document.querySelectorAll('input:not([type=hidden]),textarea,select')).map(e=>({id:e.id,tag:e.tagName,tipo:e.type,visivel:!!e.getClientRects().length,habilitado:!e.disabled,rotulos:Array.from(e.labels||[]).map(l=>l.innerText),contexto:e.parentElement.innerText.slice(0,500)})),
+  navegacao:Array.from(document.querySelectorAll('button,a')).filter(e=>e.getClientRects().length).map(e=>e.innerText)};"""
+
+
+def diagnosticar_campo_cts_re(driver):
+    """Evidência da aba atual, sem navegação adicional nem alteração de conteúdo."""
+    evidencia=driver.execute_script(SCRIPT_DIAGNOSTICO_CTS)
+    campo=_localizar_campo_titulo_caracteristicas_secundarias(driver)
+    texto=_normalizar_texto_comparacao(evidencia.get('texto',''))
+    na_aba='caracteristicas tecnicas basicas' in texto or 'faixa de frequencias' in texto
+    rotulos=evidencia.get('rotulos') or []
+    indicio='secund' in texto or bool(rotulos) or any('secund' in _normalizar_texto_comparacao(c.get('contexto','')+' '.join(c.get('rotulos') or [])) for c in evidencia.get('campos',[]))
+    if campo:
+        # O seletor legado pode usar following::; confirmar o rótulo associado
+        # antes de permitir que a opção 4 reutilize a rotina de Em Análise.
+        ident=campo.get_attribute('id')
+        associado=any(c.get('id')==ident and any('caracteristicas tecnicas secundarias' in _normalizar_texto_comparacao(l) for l in c.get('rotulos',[])) for c in evidencia.get('campos',[]))
+        status='localizado_confirmado' if associado else 'revisar_identidade_campo'
+    elif na_aba and not indicio and not any('secund' in _normalizar_texto_comparacao(t) for t in evidencia.get('navegacao',[])):
+        status='nao_aplicavel_ausencia_confirmada'
+    else:
+        status='revisar_localizacao'
+    return {'status':status,'localizado':status=='localizado_confirmado',
+            'valor':campo.get_attribute('value') if campo and status=='localizado_confirmado' else None,
+            'motivo': 'Inventário da aba técnica e rotina compartilhada de Em Análise; não confundir Especificações Complementares com título CTS.',
+            'evidencia':evidencia}
 
 
 def _localizar_campo_titulo_caracteristicas_secundarias(driver, timeout=1.5):
@@ -9531,11 +9612,7 @@ def preencher_acompanhar_processo(driver, wait, texto):
     return False
 
 
-def salvar_informacoes_adicionais(driver, wait):
-    entrar_iframe_detalhe_analise(driver, wait)
-    esperar_tela_carregar(driver, 0.05)
-
-    xpaths_salvar = [
+XPATHS_SALVAR_INFORMACOES_ADICIONAIS = [
         "//button[normalize-space()='Salvar']",
         "//a[normalize-space()='Salvar']",
         "//input[(@type='submit' or @type='button') and normalize-space(@value)='Salvar']",
@@ -9543,6 +9620,12 @@ def salvar_informacoes_adicionais(driver, wait):
         "//span[normalize-space()='Salvar']/ancestor::a[1]",
         "//*[@title='Salvar']",
     ]
+
+
+def salvar_informacoes_adicionais(driver, wait):
+    entrar_iframe_detalhe_analise(driver, wait)
+    esperar_tela_carregar(driver, 0.05)
+    xpaths_salvar = XPATHS_SALVAR_INFORMACOES_ADICIONAIS
 
     botao = _achar_primeiro_elemento_visivel(
         driver,

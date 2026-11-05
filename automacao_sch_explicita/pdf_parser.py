@@ -431,6 +431,44 @@ def _extrair_data_por_rotulo(texto, rotulos):
 
 
 
+def _extrair_datas_cabecalho(texto):
+    """Lê datas rotuladas da capa, sem usar datas de linhas do histórico."""
+    meses = {m:i for i,m in enumerate(('janeiro','fevereiro','marco','abril','maio','junho',
+                                      'julho','agosto','setembro','outubro','novembro','dezembro'), 1)}
+    data = r'(\d{1,2}/\d{2}/\d{4}|\d{1,2}\s+de\s+\w+\s+de\s+\d{4})'
+    def formatar(valor):
+        if '/' in valor:
+            d,m,a = valor.split('/')
+        else:
+            d,m,a = re.split(r'\s+de\s+', _normalizar_texto(valor))
+            m = meses.get(m)
+            if m is None:
+                return ''
+        from datetime import date
+        try:
+            return date(int(a), int(m), int(d)).strftime('%d/%m/%Y')
+        except ValueError:
+            return ''
+    resultado = {}
+    for campo, rotulo in [('data_certificacao', r'(?:data (?:da|de) certifica[çc][aã]o|produto certificado desde)'),
+                           ('data_alteracao', r'data (?:da|de) altera[çc][aã]o'),
+                           ('data_emissao', r'(?:data (?:da|de) emiss[aã]o|emiss[aã]o)'),
+                           ('data_validade', r'(?:data (?:da|de) validade|v[aá]lido at[eé])')]:
+        m = re.search(rotulo + r'[^\d\n]{0,65}' + data, texto, re.I)
+        if m:
+            valor = formatar(m.group(1))
+            if valor:
+                resultado[campo] = valor
+    dupla = re.search(r'certifica[çc][aã]o inicial\s+v[aá]lido at[eé](.{0,200})', texto, re.I | re.S)
+    if dupla:
+        datas = re.findall(data, dupla.group(1), re.I)
+        if len(datas) == 2:
+            for campo, valor in zip(('data_certificacao', 'data_validade'), datas):
+                if formatar(valor):
+                    resultado[campo] = formatar(valor)
+    return resultado
+
+
 def _linhas_relevantes_por_palavras(texto, palavras, janela=2):
     """
     Procura linhas que contenham palavras-chave e retorna a linha encontrada
@@ -490,6 +528,10 @@ def extrair_numero_certificado_por_contexto(texto):
     Número do Certificado / Certificate Number / Certificate No.
     Evita pegar Description, Processo, Histórico etc.
     """
+    # Identificador repetido no cabeçalho; não aceitar o primeiro RE do corpo.
+    cab_cpqd = re.search(r'^\s*(CPQD\s*[-–]?\s*[A-Z]\s*[- ]?\s*\d{3,8})\s*$', texto or '', re.I | re.M)
+    if cab_cpqd:
+        return _limpar_numero_certificado(cab_cpqd.group(1))
     palavras = [
         "Número do Certificado",
         "Numero do Certificado",
@@ -785,6 +827,15 @@ def _limpar_modelo(valor):
 
 
 def _extrair_modelo_do_texto(linhas):
+    # Rótulo completo vem antes de "Modelo de avaliação da conformidade".
+    for idx, linha in enumerate(linhas or []):
+        m = re.fullmatch(r'\s*Modelo(?:\(s\))?\s*(?:/\s*Model)?\s*:\s*(.*)', linha, re.I)
+        if m:
+            if m.group(1).strip():
+                return _limpar_modelo(m.group(1))
+            for seguinte in linhas[idx+1:idx+4]:
+                if _normalizar_texto(seguinte) not in {'model', 'models'}:
+                    return _limpar_modelo(seguinte)
     for idx, linha in enumerate(linhas or []):
         linha_limpa = _limpar_texto(linha)
         linha_norm = _normalizar_texto(linha_limpa)
@@ -813,7 +864,7 @@ def _extrair_modelo_do_texto(linhas):
                 return valor
 
         # Caso: rótulo numa linha e valor na próxima.
-        if linha_norm in {"modelo", "model", "modelos", "models"}:
+        if linha_norm in {"modelo", "model", "modelos", "models", "modelo / model"}:
             for prox in (linhas or [])[idx + 1: idx + 4]:
                 prox_limpa = _limpar_modelo(prox)
 
@@ -828,6 +879,34 @@ def _extrair_modelo_do_texto(linhas):
                     return prox_limpa
 
     return ""
+
+
+def _extrair_empresas_por_geometria(page):
+    """Lê nomes sob rótulos isolados sem cruzar duas colunas ou a marca d'água."""
+    palavras = page.extract_words()
+    rotulos = []
+    for palavra in palavras:
+        nome = _normalizar_texto(palavra['text']).strip(':')
+        if nome not in {'fabricante', 'solicitante', 'requerente'}:
+            continue
+        anteriores = [p for p in palavras if abs(p['top']-palavra['top']) < 3 and p['x0'] < palavra['x0']]
+        if any(_normalizar_texto(p['text']) in {'nome', 'endereco', 'do'} for p in anteriores):
+            continue
+        rotulos.append((palavra, 'fabricante' if nome=='fabricante' else 'solicitante'))
+    resultado = {}
+    for palavra, campo in rotulos:
+        direita = min([p['x0']-3 for p,_ in rotulos if abs(p['top']-palavra['top']) < 3 and p['x0'] > palavra['x0']] + [page.width-30])
+        fundo = min([p['top']-3 for p,_ in rotulos if p['top'] > palavra['bottom']] + [palavra['bottom']+60])
+        if direita <= palavra['x0'] or fundo <= palavra['bottom']:
+            continue
+        texto = page.crop((palavra['x0'], palavra['bottom']+1, direita, fundo)).extract_text() or ''
+        for linha in texto.splitlines():
+            if _normalizar_texto(linha).strip(' /:') in {'applicant','manufacturer','requerente','solicitante','fabricante'}:
+                continue
+            if len(re.findall(r'[A-Za-z]', linha)) >= 5:
+                resultado[campo] = _limpar_texto(linha)
+                break
+    return resultado
 
 
 def _extrair_nome_empresa_apos_rotulo(linhas, rotulos):
@@ -1675,6 +1754,10 @@ def _extrair_tabela_tecnica_por_geometria(tabela):
 
 def _chave_coluna_tecnica_cct(valor):
     texto = _normalizar_texto(valor)
+    from extracao_cct import coluna, unidade
+    semantica = coluna(valor)
+    if semantica != 'nao_interpretado':
+        return semantica + '_' + (unidade(valor) or 'unidade_ausente')
     if 'eirp' in texto:
         return 'potencia_eirp_' + ('mw' if '(mw)' in texto.replace(' ', '') else 'w')
     if 'frequenc' in texto or 'frequency' in texto:
@@ -1767,6 +1850,8 @@ def _extrair_tabela_tecnica_cct_de_tabelas(tabelas_brutas):
 
 def parsear_certificado_pdf(caminho_pdf):
     resultado = {
+        "diagnostico_extracao": {"status": "falha_extracao", "alertas": [],
+                                 "paginas_examinadas": 0},
         "numero_certificado": "",
         "homologacao": "",
         "modelo": "",
@@ -1790,15 +1875,18 @@ def parsear_certificado_pdf(caminho_pdf):
     }
 
     if pdfplumber is None:
+        resultado['diagnostico_extracao']['alertas'].append('pdfplumber não instalado.')
         print("[PDF][WARN] pdfplumber não instalado.")
         return resultado
 
     if not caminho_pdf:
+        resultado['diagnostico_extracao']['alertas'].append('Caminho do PDF ausente.')
         return resultado
 
     caminho_pdf = Path(caminho_pdf)
 
     if not caminho_pdf.exists():
+        resultado['diagnostico_extracao']['alertas'].append('Arquivo não encontrado.')
         print(f"[PDF][WARN] Arquivo não encontrado: {caminho_pdf}")
         return resultado
 
@@ -1806,25 +1894,67 @@ def parsear_certificado_pdf(caminho_pdf):
     tabelas_brutas = []
     tabelas_geometricas = []
     paginas_tecnicas = []
+    empresas_geometria = {}
+    from extracao_cct import (montar_tabelas, extrair_complementar, qualidade, registros, reconstruir,
+                              unidade, coluna, extrair_estruturas, extrair_secoes,
+                              extrair_caracteristicas_eletricas, extrair_modelos_part_numbers)
+    candidatos = []
+    alertas_extracao = []
 
-    with pdfplumber.open(caminho_pdf) as pdf:
+    try:
+        documento = pdfplumber.open(caminho_pdf)
+    except Exception as exc:
+        resultado['diagnostico_extracao']['alertas'].append(f'PDF não pôde ser aberto: {type(exc).__name__}.')
+        return resultado
+    with documento as pdf:
         for numero_pagina, page in enumerate(pdf.pages, 1):
-            texto_total.append(page.extract_text() or "")
+            try:
+                texto_total.append(page.extract_text() or "")
+            except Exception as exc:
+                texto_total.append('')
+                alertas_extracao.append(f'Página {numero_pagina}: falha de leitura textual ({type(exc).__name__}).')
+            if numero_pagina == 1 and hasattr(page, 'extract_words'):
+                try:
+                    empresas_geometria = _extrair_empresas_por_geometria(page)
+                except Exception as exc:
+                    alertas_extracao.append(f'Nomes empresariais sem recuperação geométrica: {type(exc).__name__}.')
 
             try:
                 for tabela in page.find_tables():
-                    tabelas_brutas.append(tabela.extract() or [])
+                    bruto = tabela.extract() or []
+                    tabelas_brutas.append(bruto)
                     geometrica = _extrair_tabela_tecnica_por_geometria(tabela)
+                    x0, topo, x1, _ = tabela.bbox
+                    contexto = page.crop((x0, max(page.bbox[1], topo - 60), x1, topo)).extract_text() if topo > page.bbox[1] else ''
+                    candidatos.append({'pagina': numero_pagina, 'bruto': geometrica or bruto,
+                                       'bruto_original': bruto,
+                                       'estrategia': 'pdfplumber_linhas',
+                                       'continuacao_explicita': bool(re.search(r'\bcontinua(?:ção|cao|tion)\b', contexto or '', re.I))})
                     if geometrica:
                         tabelas_geometricas.append(geometrica)
                         paginas_tecnicas.append(numero_pagina)
-            except Exception:
-                pass
+            except Exception as exc:
+                alertas_extracao.append(f'Página {numero_pagina}: {type(exc).__name__} na extração por linhas.')
+            # Alinhamento textual é complementar à geometria, na mesma página.
+            if not any(c['pagina'] == numero_pagina and montar_tabelas([c]) for c in candidatos):
+                try:
+                    for bruto in page.extract_tables({'vertical_strategy': 'text', 'horizontal_strategy': 'text'}):
+                        candidatos.append({'pagina': numero_pagina, 'bruto': bruto,
+                                           'estrategia': 'pdfplumber_texto',
+                                           'continuacao_explicita': False})
+                except Exception as exc:
+                    alertas_extracao.append(f'Página {numero_pagina}: {type(exc).__name__} no alinhamento textual.')
 
     texto = "\n".join(texto_total)
     texto_limpo = _limpar_texto(texto)
     linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
     resultado["texto_completo"] = texto
+    estruturas = extrair_estruturas(candidatos)
+    secoes = extrair_secoes(texto_total)
+    resultado['estruturas_documento'] = estruturas
+    resultado['secoes_documento'] = secoes
+    resultado['caracteristicas_eletricas'] = extrair_caracteristicas_eletricas(secoes)
+    resultado['modelos_part_numbers'] = extrair_modelos_part_numbers(estruturas)
 
     campos_tabela = _extrair_campos_cct_de_tabelas(tabelas_brutas)
 
@@ -1857,6 +1987,8 @@ def parsear_certificado_pdf(caminho_pdf):
             ["MODELO", "MODEL"],
         )
     )
+    if any(rotulo in _normalizar_texto(resultado['modelo']) for rotulo in ('nome comercial', 'trade name')):
+        resultado['modelo'] = _extrair_modelo_do_texto(linhas)
 
     resultado["fabricante"] = campos_tabela.get("fabricante") or _extrair_nome_empresa_apos_rotulo(
         linhas,
@@ -1892,6 +2024,7 @@ def parsear_certificado_pdf(caminho_pdf):
             "APPLICANT",
         ],
     )
+    resultado.update(empresas_geometria)
 
     tipo_tabela = campos_tabela.get("tipo_produto", "")
 
@@ -1913,6 +2046,16 @@ def parsear_certificado_pdf(caminho_pdf):
         texto,
         resultado["tipo_produto"],
     )
+    if not resultado['tipo_produto']:
+        for i, linha in enumerate(linhas):
+            if re.match(r'(?i)^tipo de produto\s*:', linha):
+                resultado['tipo_produto'] = linha.split(':', 1)[1].strip()
+                if not resultado['tipo_produto']:
+                    for seguinte in linhas[i+1:i+4]:
+                        if _normalizar_texto(seguinte) not in {'type of product', 'tipo de produto'}:
+                            resultado['tipo_produto'] = seguinte
+                            break
+                break
 
     resultado["regulamentos"] = campos_tabela.get("regulamentos", "") or _extrair_regulamentos_do_texto(texto)
 
@@ -1950,6 +2093,7 @@ def parsear_certificado_pdf(caminho_pdf):
             "data validade",
         ],
     )
+    resultado.update(_extrair_datas_cabecalho(texto_total[0] if texto_total else ''))
 
     if resultado["homologacao"] in {
         item.get("codigo_anatel")
@@ -1960,6 +2104,11 @@ def parsear_certificado_pdf(caminho_pdf):
 
     if not resultado["ocd"]:
         resultado["ocd"] = _extrair_ocd_do_texto(texto, linhas)
+    # Nomes impressos completos têm prioridade sobre referências a termos de OCD.
+    for nome in ('Moderna Tecnologia LTDA', 'NCC Certificações do Brasil Ltda', 'FUNDAÇÃO CPQD'):
+        if _normalizar_texto(nome) in _normalizar_texto(texto):
+            resultado['ocd'] = nome
+            break
 
     obs = _classificar_observacao_cct(texto)
     resultado["observacao_classificacao"] = obs["observacao_classificacao"]
@@ -1983,6 +2132,83 @@ def parsear_certificado_pdf(caminho_pdf):
         tabela_cct = tabela_cct_tabelas
         tabela_cct["origem_extracao"] = "pdfplumber_extract_tables"
 
+    # Cada tabela mantém seu contexto. A visão legada reúne colunas por significado,
+    # sem declarar que duas tabelas distintas sejam continuações uma da outra.
+    tabelas = montar_tabelas(candidatos)
+    paginas_cobertas = {p for t in tabelas for p in t['paginas_origem']}
+    paginas_suspeitas = {i for i, t in enumerate(texto_total, 1)
+                         if re.search(r'frequenc|frequency', _normalizar_texto(t))
+                         and re.search(r'potencia maxima de saida|potencia de saida|output power|intensidade de campo|potencia eirp', _normalizar_texto(t))}
+    outro_contexto_tecnico = bool(resultado['caracteristicas_eletricas'] or resultado['modelos_part_numbers'])
+    if (not tabelas and texto.strip() and not outro_contexto_tecnico) or paginas_suspeitas - paginas_cobertas or any(qualidade(t)[2] < 0 or qualidade(t)[0] < qualidade(t)[1] for t in tabelas):
+        try:
+            alternativas = montar_tabelas(extrair_complementar(caminho_pdf))
+            for alternativa in alternativas:
+                mesma = [t for t in tabelas if t['paginas_origem'] == alternativa['paginas_origem']
+                         and [_chave_coluna_tecnica_cct(c) for c in t['cabecalho']] ==
+                             [_chave_coluna_tecnica_cct(c) for c in alternativa['cabecalho']]]
+                if mesma:
+                    anterior = max(mesma, key=qualidade)
+                    if qualidade(alternativa) > qualidade(anterior):
+                        tabelas[tabelas.index(anterior)] = alternativa
+                elif not any(t['paginas_origem'] == alternativa['paginas_origem'] for t in tabelas):
+                    tabelas.append(alternativa)
+                else:
+                    alertas_extracao.append('Extratores discordam da estrutura na mesma página; revisar manualmente.')
+        except (ImportError, AttributeError, RuntimeError, ValueError) as exc:
+            alertas_extracao.append(f'Complemento PyMuPDF indisponível: {type(exc).__name__}.')
+    tabelas, avisos_continuidade, reconstruidas = reconstruir(tabelas)
+    alertas_extracao.extend(avisos_continuidade)
+    if tabelas:
+        chaves, cabecalho, corpo, origens = [], [], [], []
+        for tab in tabelas:
+            for c in tab['cabecalho']:
+                chave = _chave_coluna_tecnica_cct(c)
+                if chave not in chaves:
+                    chaves.append(chave)
+                    cabecalho.append(c)
+        for tab in tabelas:
+            for l, origem in zip(tab['linhas'], tab['origens_linhas']):
+                nova = [''] * len(chaves)
+                for c, v in zip(tab['cabecalho'], l):
+                    nova[chaves.index(_chave_coluna_tecnica_cct(c))] = v
+                corpo.append(nova)
+                origens.append(origem)
+        tabela_cct = {'cabecalho': cabecalho, 'linhas': corpo, 'origens_linhas': origens,
+                      'paginas_origem': sorted({p for t in tabelas for p in t['paginas_origem']}),
+                      'origem_extracao': ', '.join(dict.fromkeys(t['origem_extracao'] for t in tabelas)),
+                      'tabelas_identificadas': tabelas}
+    regs, descartadas = registros(tabela_cct)
+    if qualidade(tabela_cct)[1] < len(regs):
+        alertas_extracao.append('Registros técnicos duplicados: associação exige revisão manual.')
+    if not tabelas and tabela_cct.get('linhas'):
+        alertas_extracao.append('Extração legada sem proveniência completa; revisar associações de frequência e potência.')
+    campos = [_chave_coluna_tecnica_cct(c) for c in tabela_cct.get('cabecalho') or []]
+    sem_rf = not regs and not paginas_suspeitas and bool(resultado['caracteristicas_eletricas'] or resultado['modelos_part_numbers'])
+    resultado['diagnostico_extracao'] = {
+        'status': ('sem_texto_interpretavel' if not texto.strip() else 'sem_tabela_rf' if sem_rf else 'falha_extracao' if not regs else
+                   'ambigua' if alertas_extracao else 'parcial' if descartadas or qualidade(tabela_cct)[0] < len(regs) or paginas_suspeitas - {p for t in tabelas for p in t['paginas_origem']} else 'valida'),
+        'paginas_examinadas': len(texto_total), 'tabelas_encontradas': len(estruturas),
+        'candidatos_extracao': len(candidatos),
+        'tabelas_tecnicas': len(tabelas), 'paginas_utilizadas': tabela_cct.get('paginas_origem', []),
+        'linhas_recuperadas': len(tabela_cct.get('linhas') or []),
+        'linhas_aproveitaveis': len({r['linha_origem'] for r in regs if any(r[k] is not None for k in ('potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m'))}),
+        'intervalos_normalizados': len(regs), 'linhas_descartadas': descartadas,
+        'cabecalhos': tabela_cct.get('cabecalho', []), 'campos_identificados': campos,
+        'estrategia': tabela_cct.get('origem_extracao'), 'alertas': alertas_extracao,
+        'unidades_reconhecidas': sorted({unidade(c) for c in tabela_cct.get('cabecalho') or [] if unidade(c)}),
+        'campos_nao_interpretados': [c for c in tabela_cct.get('cabecalho') or [] if coluna(c) == 'nao_interpretado'],
+        'indicios_layout': [nome for nome in ('cpqd', 'ncc', 'moderna') if re.search(r'\b' + nome + r'\b', texto, re.I)],
+        'tabelas_reconstruidas': reconstruidas,
+        'comparabilidade_rf': 'nao_aplicavel' if sem_rf else 'disponivel' if regs else 'inconclusiva',
+        'tipos_tabelas': {tipo:sum(t['tipo'] == tipo for t in estruturas) for tipo in sorted({t['tipo'] for t in estruturas})},
+        'tipos_secoes': {tipo:sum(t['tipo'] == tipo for t in secoes) for tipo in sorted({t['tipo'] for t in secoes})},
+        'registros_eletricos': len(resultado['caracteristicas_eletricas']),
+        'registros_modelos_part_numbers': len(resultado['modelos_part_numbers']),
+        'limitacoes': ['Modulação, tecnologia, emissão, taxa e SAR linha a linha não são validados pela extração.'],
+    }
+    tabela_cct['registros_normalizados'] = regs
+    tabela_cct['status_extracao'] = resultado['diagnostico_extracao']['status']
     resultado["tabela_tecnica_cct"] = tabela_cct
 
     print(
@@ -1993,5 +2219,5 @@ def parsear_certificado_pdf(caminho_pdf):
         f"origem={tabela_cct.get('origem_extracao')}"
     )
 
-    print(f"[PDF] Dados extraídos de {caminho_pdf.name}: {resultado}")
+    print(f"[PDF] {caminho_pdf.name}: {resultado['diagnostico_extracao']['status']}")
     return resultado

@@ -1072,7 +1072,11 @@ def analisar_requerimento(pasta_req, req, resumo=None):
     texto_total_partes = []
 
     for pdf in pdfs:
-        texto = _extrair_texto_pdf(pdf)
+        cct_anterior = resumo.get('pdf_cct')
+        if cct_anterior and Path(cct_anterior).resolve() == pdf.resolve() and dados_pdf.get('texto_completo'):
+            texto = dados_pdf['texto_completo']
+        else:
+            texto = _extrair_texto_pdf(pdf)
         textos_por_pdf[pdf] = texto
         texto_total_partes.append(texto)
 

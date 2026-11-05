@@ -868,6 +868,30 @@ def _html_comparacao_tabela_tecnica(resultado):
     linhas.append("</tbody></table>")
 
     tabela_cct = (resultado.get('dados_pdf') or {}).get('tabela_tecnica_cct') or {}
+    nao_validados = comparacao.get('campos_nao_validados') or []
+    if nao_validados:
+        linhas.append('<p><b>Limites da comparação:</b> '+escape(' '.join(nao_validados))+'</p>')
+    detalhes = comparacao.get('detalhes_correspondencias') or []
+    if detalhes:
+        if comparacao.get('origem_sch'):
+            linhas.append('<p><b>Fonte dos dados SCH:</b> '+escape(str(comparacao['origem_sch']))+'</p>')
+        linhas.append('<h4>Valores de saída e EIRP por correspondência</h4><p>Coincidência numérica não comprova identidade da linha nem equivalência de grandezas.</p>'
+                      '<table><thead><tr><th>Linha SCH</th><th>Faixa MHz</th><th>Potência SCH W</th>'
+                      '<th>Página / linha CCT</th><th>Saída CCT W</th><th>EIRP CCT W</th>'
+                      '<th>SAR Corpo SCH W/kg</th><th>SAR Corpo CCT W/kg</th><th>Resultado / motivo</th></tr></thead><tbody>')
+        for detalhe in detalhes:
+            for candidato in detalhe.get('candidatos') or [{}]:
+                valores = (detalhe.get('linha_sch'), detalhe.get('faixa'), detalhe.get('potencia_sch'),
+                           f"{candidato.get('pagina', '—')} / {candidato.get('linha_cct', '—')}",
+                           candidato.get('potencia_saida_cct'), candidato.get('eirp_cct'),
+                           detalhe.get('sar_corpo_sch_w_kg'), candidato.get('sar_corpo_cct_w_kg'),
+                           f"{detalhe.get('resultado')}: {detalhe.get('motivo')} "
+                           f"Coincide saída: {candidato.get('coincide_saida')}; coincide EIRP: {candidato.get('coincide_eirp')}; "
+                           f"SAR no candidato: {candidato.get('coincide_sar_corpo')}; par identificado: {detalhe.get('correspondencia_identificada')}")
+                linhas.append('<tr>'+''.join('<td>'+escape(str(v) if v is not None else '—')+'</td>' for v in valores)+'</tr>')
+        linhas.append('</tbody></table><details><summary>Valores originais e contexto das correspondências</summary><pre>')
+        import json
+        linhas.append(escape(json.dumps(detalhes, ensure_ascii=False, indent=2))+'</pre></details>')
     paginas = tabela_cct.get('paginas_origem') or []
     if paginas:
         linhas.append(f"<p><b>Páginas do CCT reunidas:</b> {escape(', '.join(map(str, paginas)))}. "
@@ -886,6 +910,14 @@ def _html_comparacao_tabela_tecnica(resultado):
         linhas.append('</tbody></table></details>')
 
     inconclusivos = comparacao.get('inconclusivos') or []
+    if inconclusivos:
+        genericos = [item for item in inconclusivos if 'linha_cct' not in item]
+        if genericos:
+            linhas.append(_criar_tabela_campos('Correspondências que exigem revisão manual', [
+                (str(item.get('faixa') or item.get('linha') or item.get('lado') or 'Tabela'),
+                 str(item.get('campo') or '') + ': ' + str(item.get('motivo') or 'Correspondência inconclusiva'))
+                for item in genericos]))
+        inconclusivos = [item for item in inconclusivos if 'linha_cct' in item]
     if inconclusivos:
         linhas.append('<h4>Linhas que exigem revisão da grandeza de potência</h4>'
                       '<table><thead><tr><th>Página CCT</th><th>Linha CCT</th><th>Faixa</th>'
@@ -1034,6 +1066,17 @@ def _html_conferencia_bloco(resultado):
 
     # Nova seção detalhada da comparação da tabela técnica.
     # Mostra se a tabela SCH x CCT foi OK, divergente ou não encontrada.
+    diagnostico = (resultado.get('dados_pdf') or {}).get('diagnostico_extracao')
+    if diagnostico:
+        import json
+        blocos.append('<details><summary>Diagnóstico da extração do CCT</summary><pre>'
+                      + escape(json.dumps(diagnostico, ensure_ascii=False, indent=2)) + '</pre></details>')
+        dados = resultado.get('dados_pdf') or {}
+        estruturas = {campo:dados[campo] for campo in ('estruturas_documento', 'secoes_documento',
+                      'caracteristicas_eletricas', 'modelos_part_numbers') if dados.get(campo)}
+        if estruturas:
+            blocos.append('<details><summary>Estruturas e características extraídas (não comparadas com o SCH)</summary><pre>'
+                          + escape(json.dumps(estruturas, ensure_ascii=False, indent=2)) + '</pre></details>')
     blocos.append(_html_comparacao_tabela_tecnica(resultado))
 
     blocos.append(

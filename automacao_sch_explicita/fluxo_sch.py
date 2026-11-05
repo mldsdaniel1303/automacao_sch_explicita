@@ -713,7 +713,7 @@ def _categorias_processadas(anexos_baixados):
     )
 
 
-def _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req):
+def _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req, exigir_arquivo=True):
     """Seleciona o CCT pela data/hora real da tabela Anexos do SCH.
 
     O instante do download (mtime do arquivo) NUNCA determina qual CCT e o
@@ -758,7 +758,7 @@ def _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req):
         registros.sort(key=lambda reg: (reg[0], reg[1]), reverse=True)
         _, _, ultimo = registros[0]
         caminho = Path(str(ultimo.get("arquivo") or "")) if ultimo.get("arquivo") else None
-        if not caminho or not caminho.is_file() or caminho.suffix.lower() != ".pdf":
+        if exigir_arquivo and (not caminho or not caminho.is_file() or caminho.suffix.lower() != ".pdf"):
             return {
                 "status": "cct_mais_recente_indisponivel",
                 "motivo": "O CCT mais recente foi identificado, mas seu PDF nao foi baixado/localizado. Nao usar um CCT anterior.",
@@ -771,7 +771,7 @@ def _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req):
         return {
             "status": "selecionado",
             "motivo": "CCT escolhido pela Data-Hora da tabela de Anexos do SCH (ID como desempate).",
-            "arquivo": str(caminho),
+            "arquivo": str(caminho) if caminho else "",
             "id": ultimo.get("id", ""),
             "data_hora": ultimo.get("data_hora", ""),
             "nome_anexo": ultimo.get("nome_anexo", ""),
@@ -789,6 +789,50 @@ def _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req):
         "arquivo": "",
         "total_ccts": 0,
     }
+
+
+def confirmar_identidade_cct_baixado_re(selecao, anexos, dados_sch, req):
+    """Valida bytes novos e identidade antes de autorizar dependências do CCT."""
+    import hashlib
+    import pdfplumber
+    resultado={'status':'bloqueado','selecao':selecao,'motivos':[]}
+    try:
+        if selecao.get('status')!='selecionado':
+            raise ValueError('CCT mais recente não disponível.')
+        registros=[a for a in anexos if all(a.get(k)==selecao.get(k) for k in ('id','data_hora','nome_anexo','arquivo'))]
+        if len(registros)!=1 or registros[0].get('origem')!='download_sch_nesta_execucao' or registros[0].get('download_confirmado') is not True:
+            raise ValueError('Sem evidência de novo download do anexo selecionado; nome local não confirma origem.')
+        arquivo=Path(selecao['arquivo']).resolve()
+        hash_atual=hashlib.sha256(arquivo.read_bytes()).hexdigest()
+        resultado.update(arquivo=str(arquivo),sha256=hash_atual,origem=registros[0]['origem'])
+        if hash_atual!=registros[0].get('sha256'):
+            raise ValueError('Hash do arquivo mudou após o download.')
+        with pdfplumber.open(arquivo) as pdf:
+            if not pdf.pages:
+                raise ValueError('PDF sem páginas.')
+            resultado['paginas']=len(pdf.pages)
+            for pagina in pdf.pages:
+                pagina.extract_text()
+        dados=parsear_certificado_pdf(arquivo)
+        from funcoes_sch import _comparar_modelos_sch_x_cct
+        certificado_sch=dados_sch.get('numero_certificado') or req.get('certificado')
+        modelo_sch=dados_sch.get('modelo_sch_dados_gerais') or req.get('modelo_sch_dados_gerais')
+        norm=lambda v: re.sub(r'[^a-z0-9]','',_normalizar_texto(v))
+        modelo=_comparar_modelos_sch_x_cct(modelo_sch,dados.get('modelo'))
+        resultado.update(arquivo=str(arquivo),sha256=hash_atual,origem=registros[0]['origem'],
+                         certificado_sch=certificado_sch,certificado_pdf=dados.get('numero_certificado'),
+                         modelo=modelo,leitura_pdf='ok',dados_pdf=dados,
+                         datas=comparar_datas_certificado_sch_x_cct(dados_sch,dados))
+        if not norm(certificado_sch) or norm(certificado_sch)!=norm(dados.get('numero_certificado')):
+            raise ValueError('Número do certificado não corresponde ao SCH.')
+        if modelo.get('status')!='ok':
+            raise ValueError('Modelo não confirmado integralmente com o SCH.')
+        if hashlib.sha256(arquivo.read_bytes()).hexdigest()!=hash_atual:
+            raise ValueError('Arquivo mudou durante a leitura.')
+        resultado['status']='confirmado'
+    except Exception as exc:
+        resultado['motivos'].append(f'{type(exc).__name__}: {exc}')
+    return resultado
 
 
 def _salvar_controle_downloads(
@@ -1052,7 +1096,11 @@ def _conferir_cct_sch_independente_re(
         )
 
     try:
-        req["tabela_tecnica_sch"] = extrair_tabela_tecnica_sch(driver, wait)
+        if resumo.get("modo_analise_re") == "analise_simplificada":
+            from diagnostico_estrutura_sch import extrair_tabela_dom_para_comparacao
+            req["tabela_tecnica_sch"] = extrair_tabela_dom_para_comparacao(driver, wait)
+        else:
+            req["tabela_tecnica_sch"] = extrair_tabela_tecnica_sch(driver, wait)
     except Exception as exc:
         print(f"[SCH][RETORNO][CCT x SCH][WARN] Tabela técnica indisponível: {exc}")
         req["tabela_tecnica_sch"] = {"cabecalho": [], "linhas": []}
@@ -1119,7 +1167,8 @@ def _conferir_cct_sch_independente_re(
 
 
 
-def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
+def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo,
+                                             simulacao=False, estado_simulacao=None):
     """Executa no módulo simplificado RE as MESMAS rotinas da fila Em Análise.
 
     Somente a opção 4 chama esta função. Nunca acessa Comparar Versões,
@@ -1127,6 +1176,10 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
     Informação do OCD/Justificativa não deve ser alterada: a rotina de
     Informações Adicionais existente escreve em Acompanhar Processo.
     """
+    if simulacao:
+        from simulacao_simplificada_re import DriverSomenteLeitura
+        if not isinstance(driver,DriverSomenteLeitura):
+            raise RuntimeError('Simulação exige a barreira de somente leitura; driver sem proteção recusado.')
     numero = _numero_requerimento(req)
     resumo.setdefault("preenchimento_sch", {})
     dados_pdf = resumo.get("dados_pdf") or {}
@@ -1140,6 +1193,21 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
         "informacoes_adicionais": {"status": "nao_executado"},
     }
     resumo["preenchimento_analise_simplificada_re"] = resultado
+
+    # A execução normal da opção 4 exige prova de download e identidade.
+    # Simulações antigas/offline continuam testáveis, sem autorização de escrita.
+    if not simulacao or (estado_simulacao or {}).get('exigir_download_real'):
+        prova=resumo.get('confirmacao_cct_re') or {}
+        import hashlib
+        try:
+            valido=(prova.get('status')=='confirmado'
+                    and Path(prova['arquivo']).resolve()==Path(resumo['pdf_cct']).resolve()
+                    and hashlib.sha256(Path(prova['arquivo']).read_bytes()).hexdigest()==prova['sha256'])
+        except (KeyError,OSError,TypeError):
+            valido=False
+        if not valido:
+            resultado.update(status='bloqueado_identidade_download',motivo='Novo download e identidade do CCT não confirmados; nenhuma escrita autorizada.')
+            return resultado
 
     # Falha fechada: nenhum campo editado sem CCT selecionado, parseado e
     # uma conferência efetivamente concluída.
@@ -1197,6 +1265,18 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo):
             "modelo": atuais["modelo_sch_dados_gerais"],
             "origem": "releitura_dados_gerais",
         }
+
+    if simulacao:
+        try:
+            confirmar_contexto()
+            from mvp_simplificada_re import planejar_acoes_simplificadas
+            plano = planejar_acoes_simplificadas(req,resumo,estado_simulacao or {})
+            resultado.update(plano)
+            resultado.update(simulacao=True,executado=False,gravacoes_executadas=0,
+                             contexto_confirmado=resultado.get('contexto_confirmado'))
+            return resultado
+        except Exception as exc:
+            return interromper('contexto_simulacao',exc)
 
     resultado["executado"] = True
     print(f"[SCH][RETORNO][PREENCHIMENTO] {numero}: aplicando regras de Em Análise ao CCT mais recente.")
@@ -1786,6 +1866,10 @@ def executar_fluxo_sch(
                     categorias_para_requerimento = list(categorias_anexos_ativas)
                     download_requerimento_habilitado = baixar_anexos_habilitado
                 regras_anexos_requerimento = dict(regras)
+                download_confirmado_opcao4 = bool(fila_retorno and executar_cct_re and modo_analise_re == 'analise_simplificada')
+                if download_confirmado_opcao4:
+                    # CCT é baixado separadamente, sem reutilização por nome.
+                    categorias_para_requerimento = [c for c in categorias_para_requerimento if c != CATEGORIA_CCT]
                 if fila_retorno or categorias_anexos_informadas:
                     regras_anexos_requerimento["categorias_anexos"] = categorias_para_requerimento
 
@@ -1814,9 +1898,18 @@ def executar_fluxo_sch(
                 if fila_retorno and executar_cct_re:
                     # RE simplificada: data/hora do ANEXO no SCH, nunca o
                     # instante em que o Python fez o download dos PDFs.
-                    selecao_cct = _selecionar_cct_mais_recente_re(
-                        anexos_baixados, pasta_req
-                    )
+                    if download_confirmado_opcao4:
+                        from funcoes_sch import baixar_cct_mais_recente_confirmado_re
+                        selecao_cct, registros_cct = baixar_cct_mais_recente_confirmado_re(
+                            driver,wait,req,pasta_req,pasta_download)
+                        anexos_baixados.extend(registros_cct)
+                        resumo['anexos_baixados']=anexos_baixados
+                        prova=confirmar_identidade_cct_baixado_re(selecao_cct,registros_cct,dados_certificado_sch or {},req)
+                        resumo['confirmacao_cct_re']=prova
+                        if prova.get('status')!='confirmado':
+                            selecao_cct=dict(selecao_cct,arquivo='',status='identidade_cct_nao_confirmada',motivo='; '.join(prova['motivos']))
+                    else:
+                        selecao_cct = _selecionar_cct_mais_recente_re(anexos_baixados, pasta_req)
                     resumo["selecao_cct_re"] = selecao_cct
                     pdf_cct = (
                         Path(selecao_cct["arquivo"])

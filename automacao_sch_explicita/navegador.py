@@ -225,6 +225,9 @@ def criar_driver(
     pasta_saida=None,
     pasta_download=None,
     timeout_padrao=15,
+    caminho_driver=None,
+    caminho_navegador=None,
+    debugger_address=None,
 ):
     """
     Retorna:
@@ -249,14 +252,28 @@ def criar_driver(
         navegador = _perguntar_navegador()
 
     navegador = _normalizar_navegador(navegador)
+    if caminho_driver:
+        caminho_driver = Path(caminho_driver).expanduser().resolve()
+        if not caminho_driver.is_file():
+            raise FileNotFoundError(f'WebDriver não encontrado: {caminho_driver}')
 
     if navegador == "chrome":
-        options = _criar_opcoes_chrome(downloads)
-        driver = _criar_driver_chrome(options)
+        options = webdriver.ChromeOptions() if debugger_address else _criar_opcoes_chrome(downloads)
+        if caminho_navegador and not debugger_address:
+            options.binary_location = str(Path(caminho_navegador).resolve())
+        if debugger_address:
+            options.debugger_address = debugger_address
+        driver = (webdriver.Chrome(service=ChromeService(str(caminho_driver)),options=options)
+                  if caminho_driver else _criar_driver_chrome(options))
 
     elif navegador == "edge":
-        options = _criar_opcoes_edge(downloads)
-        driver = _criar_driver_edge(options)
+        options = webdriver.EdgeOptions() if debugger_address else _criar_opcoes_edge(downloads)
+        if caminho_navegador and not debugger_address:
+            options.binary_location = str(Path(caminho_navegador).resolve())
+        if debugger_address:
+            options.debugger_address = debugger_address
+        driver = (webdriver.Edge(service=EdgeService(str(caminho_driver)),options=options)
+                  if caminho_driver else _criar_driver_edge(options))
 
     else:
         raise ValueError(f"Navegador inválido: {navegador}")

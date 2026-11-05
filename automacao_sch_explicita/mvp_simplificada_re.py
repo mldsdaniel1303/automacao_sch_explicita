@@ -23,6 +23,7 @@ def avaliar_cobertura_mvp(diagnostico, conferencia, dados_pdf):
     integral = bool(diagnostico.get('status') == 'coletado' and len(tabs) == 1
         and tabs[0].get('familia') == 'rf_frequencia_potencia'
         and comp.get('status') == 'ok' and comp.get('usar_potencia')
+        and not comp.get('campos_nao_validados')
         and comp.get('linhas_sch') and comp.get('linhas_cct'))
     executada = conferencia.get('status_geral') in {'ok', 'parcial', 'divergente', 'conforme'}
     return {'apto_preenchimento': executada, 'comparacao_tecnica_integral': integral,
@@ -69,6 +70,81 @@ def compor_acompanhamento_preservado(existente, frase):
     if normalizar(frase) in normalizar(existente):
         return existente, False
     return ('\n'.join(p for p in (existente, frase) if p)), True
+
+
+def planejar_acoes_simplificadas(req, resumo, estado):
+    """Plano puro da opção 4; usa os mesmos decisores de Observação, CTS e SAR."""
+    from fluxo_sch import _tipo_produto_permitido_simplificada
+    from funcoes_sch import (decidir_texto_observacao_por_cct,diagnosticar_titulo_caracteristicas_secundarias,
+                            analisar_sar_cct,TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES)
+    dados=resumo.get('dados_pdf') or {}
+    if not _tipo_produto_permitido_simplificada(req):
+        return {'status':'bloqueado_tipo_produto','motivo':'Produto fora do escopo existente da opção 4.',
+                'campos_que_seriam_alterados':[],'acoes_bloqueadas':['Todos os preenchimentos: produto não permitido.']}
+    obs=estado.get('observacao') or {}
+    cts=estado.get('cts') or {}
+    acomp=estado.get('acompanhar') or {}
+    sugestao_obs=decidir_texto_observacao_por_cct(dados)
+    titulo=diagnosticar_titulo_caracteristicas_secundarias(req=req,dados_pdf=dados,contexto_sch=cts.get('contexto') or {})
+    sar=analisar_sar_cct(dados)
+    acoes=[];preservados=[];bloqueadas=[]
+    if not obs.get('localizado'):
+        decisao_obs='revisar_campo_nao_confirmado';bloqueadas.append('Observação: campo não confirmado.')
+    elif str(obs.get('texto') or '').strip():
+        decisao_obs='preservar_existente';preservados.append('Observação')
+    elif dados.get('observacao_texto') or all(normalizar(x.get('tipo_produto'))=='transceptor de radiacao restrita' for x in (req,dados)):
+        decisao_obs='preencher_e_confirmar_salvamento'
+        acoes.append({'campo':'Observação','atual':obs.get('texto'),'sugerido':sugestao_obs['texto'],'salvar_e_confirmar':True})
+    else:
+        decisao_obs='revisar_sem_regra_segura';bloqueadas.append('Observação: ausência de regra segura da opção 4.')
+    sugerido=titulo.get('titulo') or ''
+    if cts.get('status') in {'revisar_localizacao','revisar_identidade_campo'}:
+        decisao_cts='revisar_localizacao_sem_alterar';bloqueadas.append('CTS: identidade/localização não confirmada; nenhuma edição deste campo.')
+    elif not cts.get('localizado'):
+        decisao_cts='nao_aplicavel_campo_ausente'
+    elif not sugerido:
+        decisao_cts='revisar_sem_evidencia_segura';bloqueadas.append('CTS: sem evidência suficiente para título.')
+    elif str(cts.get('valor') or '').strip()==sugerido.strip():
+        decisao_cts='preservar_existente';preservados.append('CTS')
+    else:
+        decisao_cts='corrigir_ou_preencher_e_confirmar_salvamento'
+        acoes.append({'campo':'CTS','atual':cts.get('valor'),'sugerido':sugerido,'salvar_e_confirmar':True})
+    if sar.get('preencher_frase'):
+        decisao_minuta='avaliar_minuta_preservando_existente_antes_de_preencher'
+        bloqueadas.append('Corrigir Minuta: inspeção adicional necessária; simulação não abre o editor nem aplica frase.')
+    else:
+        decisao_minuta='nao_abrir_nem_alterar_minuta'
+        preservados.append('Corrigir Minuta / Especificações Complementares')
+    frase=TEXTO_INFORMACOES_ADICIONAIS_ANALISE_SIMPLES
+    if not acomp.get('localizado'):
+        decisao_acomp='revisar_campo_superior_nao_confirmado';bloqueadas.append('Acompanhar Processo: campo superior não confirmado; não supor valor vazio.')
+    else:
+        alterar=str(acomp.get('valor') or '').strip()!=frase.strip()
+        decisao_acomp='substituir_texto_marcar_salvar_e_confirmar' if alterar else 'preservar_texto_confirmar_marcacao_e_salvamento'
+        if alterar:
+            acoes.append({'campo':'Texto superior Acompanhar Processo','atual':acomp.get('valor'),'sugerido':frase,'salvar_e_confirmar':True})
+        else:
+            preservados.append('Texto superior Acompanhar Processo')
+        if acomp.get('marcado') is False:
+            acoes.append({'campo':'Marcação Acompanhar Processo','atual':False,'sugerido':True,'salvar_e_confirmar':True})
+    comp=(resumo.get('conferencia_sch_cct') or {}).get('comparacao_tabela_tecnica') or {}
+    return {'status':'simulado','comparacao_parcial_bloqueia_globalmente':False,
+            'motivo':'Status parcial é aceito no gate real; cada ação tem regra e confirmação próprias.',
+            'situacoes_tecnicas':{'divergencia_comprovada':bool(comp.get('divergencias')),
+                'extracao':(dados.get('diagnostico_extracao') or {}).get('status'),
+                'correspondencias_ambiguas':(comp.get('resumo_correspondencias') or {}).get('linhas_ambiguas'),
+                'coincidencias_apenas_eirp':(comp.get('resumo_correspondencias') or {}).get('coincidencias_numericas_apenas_eirp'),
+                'equivalencia_saida_eirp_confirmada':False,'status_comparacao':comp.get('status')},
+            'observacao':{'atual':obs,'sugestao':sugestao_obs,'decisao':decisao_obs},
+            'cts':{'atual':cts,'sugerido':sugerido,'origem_e_criterios':titulo,'decisao':decisao_cts},
+            'sar':sar,'corrigir_minuta':{'decisao':decisao_minuta,'frase_generica_autorizada':bool(sar.get('preencher_frase'))},
+            'acompanhar_processo':{'atual':acomp,'sugerido':frase,'decisao':decisao_acomp,
+                'limite':'A rotina real salva inclusive com texto já igual; a simulação não salva nem confirma gravação.'},
+            'campos_que_seriam_alterados':acoes,'campos_preservados':preservados,
+            'acoes_bloqueadas':bloqueadas+['Todas as gravações: modo de simulação.','Aprovação automática: não participa da opção 4.'],
+            'acoes_independentes_prontas':[a for a in acoes if a['campo']!='CTS' or cts.get('status')=='localizado_confirmado'],
+            'pronto_para_escrita_controlada':bool(estado.get('exigir_download_real') and estado.get('identidade_cct_confirmada') and cts.get('status')=='nao_aplicavel_ausencia_confirmada' and acomp.get('localizado') and acomp.get('checkbox_encontrado') and obs.get('localizado') and not comp.get('divergencias')),
+            'limite_prontidao':'Prontidão refere-se apenas às ações independentes listadas, com identidade do novo download e campos confirmados. Não equivale a conformidade integral nem comprova salvamento. Escrita exige autorização posterior restrita ao requerimento selecionado.'}
 
 
 def ler_observacao_atual_re(driver, wait):
@@ -118,9 +194,15 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
             raise RuntimeError('Observação não confirmada após preenchimento.')
         mudou = True
         status_obs = 'preenchida'
-    titulo = preencher_titulo_caracteristicas_secundarias_se_existir(
-        driver=driver, wait=wait, req=req, dados_pdf=dados_pdf,
-    ) or {}
+    from funcoes_sch import diagnosticar_campo_cts_re
+    evidencia_cts=diagnosticar_campo_cts_re(driver)
+    if evidencia_cts['status']=='localizado_confirmado':
+        titulo = preencher_titulo_caracteristicas_secundarias_se_existir(
+            driver=driver, wait=wait, req=req, dados_pdf=dados_pdf,
+        ) or {}
+    else:
+        titulo={'status':'nao_aplicavel' if evidencia_cts['status']=='nao_aplicavel_ausencia_confirmada' else 'revisar',
+                'preenchido':False,'motivo':evidencia_cts['motivo'],'diagnostico_localizacao':evidencia_cts}
     if titulo.get('motivo') == 'campo_ja_correto':
         titulo['status'] = 'preservado'
     if titulo.get('status') not in {'preservado', 'revisar', 'nao_aplicavel', 'preenchido', 'corrigido'}:
@@ -154,48 +236,8 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
 
 def preencher_acompanhamento_seguro_re(driver, wait, frase):
     """Substitui somente o textarea superior pela frase configurada e confirma."""
-    from funcoes_sch import (
-        clicar_aba_informacoes_adicionais,
-        entrar_iframe_detalhe_analise,
-        marcar_acompanhar_processo,
-        preencher_acompanhar_processo,
-        salvar_informacoes_adicionais,
-        _localizar_textarea_acompanhar_processo,
-        _localizar_checkbox_acompanhar_processo,
-        _checkbox_esta_marcado,
-    )
+    from controles_acompanhar import executar_acompanhamento_opcao4
     novo = str(frase or '').strip()
     if not novo:
         raise RuntimeError('Frase de acompanhamento vazia; nenhuma alteração realizada.')
-    clicar_aba_informacoes_adicionais(driver, wait)
-    entrar_iframe_detalhe_analise(driver, wait)
-    # O textarea pode não existir enquanto o checkbox estiver desmarcado.
-    # Primeiro habilita o acompanhamento; só depois lê TODO o texto existente.
-    if not marcar_acompanhar_processo(driver, wait):
-        raise RuntimeError('Acompanhar Processo não foi marcado.')
-    entrar_iframe_detalhe_analise(driver, wait)
-    campo = _localizar_textarea_acompanhar_processo(driver, wait, timeout=6)
-    anterior = str(campo.get_attribute('value') or '')
-    alterar = anterior.strip() != novo
-    if alterar and not preencher_acompanhar_processo(driver, wait, novo):
-        raise RuntimeError('A frase não foi confirmada no textarea Acompanhar Processo.')
-    # Salva inclusive se a frase já existia mas a caixa estava desmarcada.
-    salvo = bool(salvar_informacoes_adicionais(driver, wait))
-    clicar_aba_informacoes_adicionais(driver, wait)
-    entrar_iframe_detalhe_analise(driver, wait)
-    verificado = _localizar_textarea_acompanhar_processo(driver, wait, timeout=6)
-    gravado = str(verificado.get_attribute('value') or '')
-    caixa = _localizar_checkbox_acompanhar_processo(driver, wait, timeout=5)
-    marcado = bool(caixa is not None and _checkbox_esta_marcado(caixa))
-    confirmado = marcado and gravado.strip() == novo
-    return {
-        'status': 'confirmado' if salvo and confirmado else 'erro_confirmacao',
-        'texto': novo, 'texto_anterior_preservado': not alterar,
-        'texto_ja_existia': not alterar, 'adicionado': False,
-        'substituido': alterar,
-        'preenchido_automaticamente': bool(salvo and confirmado),
-        'salvo': salvo, 'confirmado_apos_salvar': confirmado,
-        'modo_preenchimento': 'acompanhar_processo',
-        'mensagem': ('Frase configurada já existente.' if not alterar else
-                     'Conteúdo substituído pela frase configurada da Análise Simplificada.'),
-    }
+    return executar_acompanhamento_opcao4(driver, wait, novo)
