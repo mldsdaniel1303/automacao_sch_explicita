@@ -1,4 +1,5 @@
 selenium
 webdriver-manager
 pdfplumber
+PyMuPDF>=1.24,<2
 pyinstaller
