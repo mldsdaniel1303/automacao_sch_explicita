@@ -164,7 +164,10 @@ class ValidacaoAjaxTests(unittest.TestCase):
         criar.assert_not_called()
     def test_modelo_institucional_permanece_desautorizado(self):
         raiz=Path(__file__).resolve().parents[1]
-        auth=b.ler_json(raiz/'docs/autorizacao_ajax_01553_25.modelo.json')
+        caminho=raiz/'docs/autorizacao_ajax_01553_25.modelo.json'
+        if not caminho.is_file():
+            self.skipTest('Modelo institucional privado ausente na distribuição de testes.')
+        auth=b.ler_json(caminho)
         self.assertIs(auth['autorizado'],False)
         with self.assertRaises(b.Cancelado):v.validar_autorizacao(auth)
 

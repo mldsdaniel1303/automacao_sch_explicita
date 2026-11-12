@@ -44,6 +44,8 @@ class DistribuicaoTests(unittest.TestCase):
 
     def test_autoteste_tres_ccts_inclui_carregador_sem_rf(self):
         pasta=Path(__file__).resolve().parents[1]/'tests/fixtures/ccts'
+        if not (pasta/'CPQD-i_12407_NOV_00A X.pdf').is_file():
+            self.skipTest('Teste local: PDFs reais privados ausentes.')
         with patch('navegador.criar_driver') as navegador,redirect_stdout(StringIO()):
             r=verificar.verificar(pasta)
         self.assertEqual(r['status'],'ok',r.get('falhas'))

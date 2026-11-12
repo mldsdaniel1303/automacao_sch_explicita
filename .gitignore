@@ -7,3 +7,17 @@ build/
 dist/
 __pycache__/
 *.pyc
+
+# Dados reais do SCH: uso estritamente local, sem publicacao automatica.
+/dados_locais/
+/tests_local/
+/tests/fixtures/ccts/
+/diagnostico_sch/
+/validacao_*/
+/req_report/
+/requerimentos/
+/relatorio_execucao.*
+*.pdf
+# Documentos legados incluem resultados internos; publicar só revisão sanitizada.
+/docs/*
+!/docs/VALIDACAO_FINAL_LEITURA.md

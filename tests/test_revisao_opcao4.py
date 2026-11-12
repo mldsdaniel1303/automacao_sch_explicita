@@ -103,7 +103,8 @@ class RevisaoTests(unittest.TestCase):
         import copy
         import diagnostico_estrutura_sch as diag
         raiz=Path(__file__).resolve().parents[1]
-        fixture=json.loads((raiz/'tests/fixtures/ccts/sch_cpqd_transcricao_capturas.json').read_text(encoding='utf-8'))
+        from fixtures_sinteticas import tabela_sintetica
+        fixture=tabela_sintetica()
         tab=dict(fixture,total_linhas=35,total_colunas=6)
         for alteracao, ok in [({},True),({'total_linhas':0},False),
                 ({'paginacao_detectada':[{}]},False),({'virtualizacao_detectada':True},False),

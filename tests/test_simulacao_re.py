@@ -187,6 +187,7 @@ class SimulacaoTests(unittest.TestCase):
         guard.verificar_contexto=Mock()
         alvo={'id':'32','data_hora':'05/09/2026 00:20','nome_anexo':'CCT','tipo_documento':'Certificado de Conformidade Técnica - CCT'}
         e=Mock();e.id='arquivo32';e.tag_name='a';e.text='CCT'
+        e.get_attribute.side_effect=lambda nome: 'https://sistemasnet.anatel.gov.br/mosaico/sch/download?id=123' if nome=='href' else None
         elemento=sim.ElementoLeitura(e,guard)
         vinculo={'tag':'A','celula':4,'linha':['32',alvo['tipo_documento'],'',alvo['data_hora'],'CCT']}
         bruto.execute_script.return_value=vinculo
