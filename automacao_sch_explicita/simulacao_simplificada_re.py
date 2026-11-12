@@ -106,17 +106,31 @@ class DriverSomenteLeitura:
         self.verificar_contexto()
         if not self._alvo_download or any(str(registro.get(k,''))!=v for k,v in self._alvo_download.items()):
             self.bloquear('download_fora_do_anexo_selecionado')
+        url=self._validar_link_get_cct(elemento)
         vinculo=self.execute_script(SCRIPT_VINCULO_DOWNLOAD,elemento)
         esperado=[registro['id'],registro['tipo_documento'],registro.get('detalhamento',''),registro['data_hora'],registro['nome_anexo']]
         linha=vinculo.get('linha',[])
         if vinculo.get('tag')!='A' or vinculo.get('celula')!=4 or len(linha)<5 or any(linha[i].strip()!=esperado[i].strip() for i in (0,1,3,4)):
             self.bloquear('link_download_sem_identidade_confirmada')
-        self._downloads[elemento.id]=vinculo
+        self._downloads[elemento.id]={'vinculo':vinculo,'url':url}
+
+    def _validar_link_get_cct(self, elemento):
+        from urllib.parse import urlsplit,parse_qs
+        href=elemento.get_attribute('href')
+        if not isinstance(href,str) or elemento.get_attribute('onclick') not in (None,''):
+            self.bloquear('download_com_handler_ou_url_nao_confirmada')
+        u=urlsplit(href);q=parse_qs(u.query)
+        if (u.scheme!='https' or u.netloc!='sistemasnet.anatel.gov.br'
+                or u.path!='/mosaico/sch/download' or len(q.get('id',[]))!=1
+                or not q['id'][0].isdigit()):
+            self.bloquear('link_nao_e_get_de_download_cct')
+        return href
 
     def clicar_download_cct(self, elemento):
         self.verificar_contexto()
         anterior=self._downloads.pop(elemento.id)
-        if self.execute_script(SCRIPT_VINCULO_DOWNLOAD,elemento)!=anterior:
+        if (self._validar_link_get_cct(elemento)!=anterior['url']
+                or self.execute_script(SCRIPT_VINCULO_DOWNLOAD,elemento)!=anterior['vinculo']):
             self.bloquear('link_download_alterado')
         self.eventos.append({'acao':'download_cct_somente_leitura','anexo':self._alvo_download})
         self._driver.execute_script('arguments[0].click();',self.desembrulhar(elemento))
@@ -201,7 +215,7 @@ class DriverSomenteLeitura:
         self.bloquear('driver.'+nome)
 
 
-def preparar_guard(driver, contexto):
+def preparar_guard(driver, contexto, leituras_adicionais=()):
     import funcoes_sch as s
     import utils
     from diagnostico_estrutura_sch import _SCRIPT_TABELAS_COMPLETAS
@@ -218,6 +232,7 @@ def preparar_guard(driver, contexto):
         s._localizar_textarea_acompanhar_processo,s._contexto_tabela_secundaria_sch,
         utils._documento_pronto,utils._ajax_primefaces_pronto])
     guard.registrar_leituras([s._localizar_checkbox_acompanhar_processo,s._checkbox_esta_marcado])
+    guard.registrar_leituras(leituras_adicionais)
     guard._selado=True
     return guard
 

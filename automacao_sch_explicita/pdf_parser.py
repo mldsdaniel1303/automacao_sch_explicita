@@ -529,9 +529,14 @@ def extrair_numero_certificado_por_contexto(texto):
     Evita pegar Description, Processo, Histórico etc.
     """
     # Identificador repetido no cabeçalho; não aceitar o primeiro RE do corpo.
-    cab_cpqd = re.search(r'^\s*(CPQD\s*[-–]?\s*[A-Z]\s*[- ]?\s*\d{3,8})\s*$', texto or '', re.I | re.M)
-    if cab_cpqd:
-        return _limpar_numero_certificado(cab_cpqd.group(1))
+    # Exige linha isolada na capa, não uma referência CPQD no corpo/histórico.
+    capa = '\n'.join((texto or '').splitlines()[:40])
+    cpqd = re.findall(r'^\s*(CPQD(?:\s*[-–]?\s*[A-Z])?\s+\d{3,8})\s*$', capa, re.I | re.M)
+    cpqd = list(dict.fromkeys(_limpar_numero_certificado(v) for v in cpqd))
+    if len(cpqd) > 1:
+        raise ValueError('Identidade CPQD ambígua na capa: múltiplos certificados.')
+    if cpqd:
+        return cpqd[0]
     palavras = [
         "Número do Certificado",
         "Numero do Certificado",
@@ -939,6 +944,17 @@ def _extrair_nome_empresa_apos_rotulo(linhas, rotulos):
                 return prox_limpa
 
     return ""
+
+
+def _empresa_em_rotulo_bilingue(linhas, papel):
+    """Nome na mesma linha do rótulo composto, sem consumir endereço em inglês."""
+    for linha in linhas:
+        m = re.match(r'^\s*Nome\s+e\s+endere[çc]o\s+do\s+' + papel + r'\s*:?\s+(.+)$', linha, re.I)
+        if m:
+            valor = m.group(1).strip()
+            if not re.search(r'(?i)name and address|\b(?:rua|avenida|cnpj|cep)\b', valor):
+                return valor
+    return ''
 
 
 
@@ -1708,48 +1724,114 @@ def _linha_tecnica_cct_util(linha):
 
 
 
-def _extrair_tabela_tecnica_por_geometria(tabela):
-    """Reconstrói cabeçalhos em várias linhas sem deslocar células mescladas."""
+class _TabelaGeometrica(list):
+    pass
+
+
+def _separar_tabelas_geometricas(tabela):
+    """Separa um quadro externo quando ele contém novos cabeçalhos técnicos."""
+    from types import SimpleNamespace
+    from extracao_cct import coluna
+    raw = tabela.extract() or []
+    cortes = [0]
+    for i, linha in enumerate(raw[1:], 1):
+        campos = [coluna(v) if len(str(v or '')) < 200 else '' for v in linha]
+        if any(c.startswith('frequencia') for c in campos) and any(
+                c in campos for c in ('potencia_saida','potencia_eirp','potencia_conduzida','intensidade_campo')):
+            # É o primeiro cabeçalho após o cabeçalho/capa do quadro, ou outro quadro.
+            if any(re.fullmatch(r'[0-9]+(?:[.,][0-9]+)*', str(v or '').strip())
+                   for l in raw[cortes[-1]:i] for v in l):
+                cortes.append(i)
+    if len(cortes) == 1:
+        return [tabela]
+    partes = []
+    for a, b in zip(cortes, cortes[1:]+[len(raw)]):
+        trecho = raw[a:b]
+        partes.append(SimpleNamespace(rows=tabela.rows[a:b], bbox=tabela.bbox, page=getattr(tabela,'page',None),
+                                      extract=lambda trecho=trecho: trecho))
+    return partes
+
+
+def _extrair_tabela_tecnica_por_geometria(tabela, referencia=None):
+    """Reconstruct only cells whose PDF rectangles cover the logical row."""
+    from extracao_cct import coluna, NUM
     bruto = tabela.extract() or []
-    if not bruto:
-        return None
-    cab_teste = [' '.join(str(l[i] or '') for l in bruto[:3] if i < len(l))
-                 for i in range(len(bruto[0]))]
-    if not _linha_parece_cabecalho_tecnico_cct(cab_teste):
-        return None
-    primeira = tabela.rows[0].cells
-    ancoras = [(i, (cel[0] + cel[2]) / 2) for i, cel in enumerate(primeira)
-               if cel and str(bruto[0][i] or '').strip()]
-    if len(ancoras) < 2:
-        return None
-    fim_cab = max(primeira[i][3] for i, _ in ancoras)
-    cabecalho = [''] * len(ancoras)
-    linhas = []
-    ultima_faixa = ''
+    celulas = {}
     for row, valores in zip(tabela.rows, bruto):
-        celulas = [''] * len(ancoras)
-        for cell, valor in zip(row.cells, valores):
-            if not cell or not str(valor or '').strip():
+        for bbox, valor in zip(row.cells, valores):
+            if bbox and str(valor or '').strip():
+                celulas[tuple(bbox)] = str(valor).strip()
+    numericas = [(b, v) for b, v in celulas.items() if re.fullmatch(NUM, v)]
+    if not numericas:
+        return None
+    inicio = min(b[1] for b, _ in numericas)
+    largura_tabela = max(b[2] for b in celulas) - min(b[0] for b in celulas)
+    grupos = []
+    for b, v in sorted(celulas.items(), key=lambda item: (item[0][1], item[0][0])):
+        if b[1] >= inicio or len(v) > 220 or b[2]-b[0] > .75*largura_tabela:
+            continue
+        x = (b[0]+b[2])/2
+        grupo = next((g for g in grupos if abs(g['x']-x) < 8), None)
+        if grupo is None:
+            grupo = {'x':x, 'textos':[], 'bbox':b}; grupos.append(grupo)
+        if v not in grupo['textos']:
+            grupo['textos'].append(v)
+    grupos.sort(key=lambda g:g['x'])
+    cab = [' '.join(g['textos']) for g in grupos]
+    campos = [coluna(c) for c in cab]
+    medicao = next((i for i,c in enumerate(campos) if c in {'potencia_saida','potencia_conduzida','potencia_eirp','intensidade_campo'}), None)
+    continuacao = False
+    if (medicao is None or not any(c.startswith('frequencia') for c in campos)) and referencia is not None:
+        grupos = referencia.colunas_geometria
+        cab = list(referencia[0])
+        campos = [coluna(c) for c in cab]
+        medicao = next((i for i,c in enumerate(campos) if c in {'potencia_saida','potencia_conduzida','potencia_eirp','intensidade_campo'}), None)
+        continuacao = True
+    if medicao is None or not any(c.startswith('frequencia') for c in campos):
+        return None
+    medicoes = {i for i,c in enumerate(campos) if c in
+                {'potencia_saida','potencia_conduzida','potencia_eirp','intensidade_campo'}}
+    bases = [(b,v) for b,v in numericas
+             if min(range(len(grupos)), key=lambda i:abs(grupos[i]['x']-(b[0]+b[2])/2)) in medicoes]
+    # Saída e EIRP podem ocupar a mesma linha: não duplicar a linha física.
+    bases = list({(round(b[1],2), round(b[3],2)):(b,v) for b,v in bases}.values())
+    saida = _TabelaGeometrica([cab]); saida.origens_geometria = []
+    saida.colunas_geometria = grupos
+    saida.cabecalho_por_alinhamento = continuacao
+    for base, _ in sorted(bases, key=lambda item:item[0][1]):
+        y = (base[1]+base[3])/2
+        valores, campos_origem, alinhada = [], [], True
+        for g in grupos:
+            candidatas = [(b,v) for b,v in celulas.items() if b[0] <= g['x'] <= b[2] and b[1] <= y < b[3]]
+            candidatas.sort(key=lambda par:(par[0][2]-par[0][0])*(par[0][3]-par[0][1]))
+            if candidatas:
+                bbox, valor = candidatas[0]
+                if continuacao and abs((bbox[0]+bbox[2])/2 - g['x']) > 3:
+                    alinhada = False
+                valores.append(valor)
+                campos_origem.append({'bbox':list(bbox), 'valor_original':valor,
+                                      'criterio':'retangulo_cobre_centro_da_linha'})
+            else:
+                valor = ''
+                pagina = getattr(tabela, 'page', None)
+                bbox = (g['bbox'][0], base[1], g['bbox'][2], base[3])
+                if pagina is not None and coluna(cab[len(valores)]) == 'frequencia':
+                    from extracao_cct import intervalos
+                    impresso = pagina.crop(bbox).extract_text() or ''
+                    if intervalos(impresso, cab[len(valores)]):
+                        valor = impresso
+                valores.append(valor)
+                campos_origem.append({'bbox':list(bbox), 'valor_original':valor,
+                                      'criterio':'texto_impresso_na_coluna_e_linha'} if valor else None)
+        if continuacao:
+            from extracao_cct import intervalos
+            indice_freq = next((i for i,c in enumerate(campos) if c == 'frequencia'), None)
+            if not alinhada or indice_freq is None or not intervalos(valores[indice_freq],cab[indice_freq]):
                 continue
-            centro = (cell[0] + cell[2]) / 2
-            coluna = min(range(len(ancoras)), key=lambda j: abs(ancoras[j][1] - centro))
-            celulas[coluna] = ' '.join(filter(None, (celulas[coluna],
-                                      re.sub(r'\s+', ' ', str(valor)).strip())))
-        topo = min((c[1] for c in row.cells if c), default=fim_cab)
-        if topo < fim_cab - 0.5:
-            cabecalho = [' '.join(filter(None, (a, b))) for a, b in zip(cabecalho, celulas)]
-            continue
-        # Ruído lateral ou rodapé não deve criar uma linha nem herdar faixa.
-        if not any(re.fullmatch(r'[0-9]+(?:[.,][0-9]+)?', c) for c in celulas[1:]):
-            continue
-        if re.search(r'[0-9]+(?:[.,][0-9]+)?\s*(?:a|[-–—])\s*[0-9]', celulas[0]):
-            ultima_faixa = celulas[0]
-        elif not celulas[0] and ultima_faixa:
-            celulas[0] = ultima_faixa
-        else:
-            continue
-        linhas.append(celulas)
-    return [cabecalho] + linhas if linhas else None
+        if any(valores):
+            saida.append(valores)
+            saida.origens_geometria.append({'bbox_linha':list(base),'campos':campos_origem})
+    return saida if len(saida)>1 else None
 
 
 def _chave_coluna_tecnica_cct(valor):
@@ -1907,7 +1989,9 @@ def parsear_certificado_pdf(caminho_pdf):
         resultado['diagnostico_extracao']['alertas'].append(f'PDF não pôde ser aberto: {type(exc).__name__}.')
         return resultado
     with documento as pdf:
+        geometria_anterior, pagina_geometria = None, None
         for numero_pagina, page in enumerate(pdf.pages, 1):
+            referencia = geometria_anterior if pagina_geometria == numero_pagina-1 else None
             try:
                 texto_total.append(page.extract_text() or "")
             except Exception as exc:
@@ -1920,14 +2004,22 @@ def parsear_certificado_pdf(caminho_pdf):
                     alertas_extracao.append(f'Nomes empresariais sem recuperação geométrica: {type(exc).__name__}.')
 
             try:
-                for tabela in page.find_tables():
+                for indice_quadro, indice_parte, tabela in [
+                        (i, j, parte) for i, quadro in enumerate(page.find_tables(), 1)
+                        for j, parte in enumerate(_separar_tabelas_geometricas(quadro), 1)]:
                     bruto = tabela.extract() or []
                     tabelas_brutas.append(bruto)
-                    geometrica = _extrair_tabela_tecnica_por_geometria(tabela)
+                    geometrica = _extrair_tabela_tecnica_por_geometria(tabela, referencia=referencia)
+                    if geometrica:
+                        geometria_anterior, pagina_geometria = geometrica, numero_pagina
                     x0, topo, x1, _ = tabela.bbox
                     contexto = page.crop((x0, max(page.bbox[1], topo - 60), x1, topo)).extract_text() if topo > page.bbox[1] else ''
                     candidatos.append({'pagina': numero_pagina, 'bruto': geometrica or bruto,
+                                       'tabela_fisica': indice_quadro, 'parte_quadro': indice_parte,
                                        'bruto_original': bruto,
+                                       'origens_geometria': getattr(geometrica, 'origens_geometria', []),
+                                       'cabecalho_origem_pagina': numero_pagina-1 if getattr(geometrica, 'cabecalho_por_alinhamento', False) else numero_pagina,
+                                       'contexto': contexto or '',
                                        'estrategia': 'pdfplumber_linhas',
                                        'continuacao_explicita': bool(re.search(r'\bcontinua(?:ção|cao|tion)\b', contexto or '', re.I))})
                     if geometrica:
@@ -2025,6 +2117,10 @@ def parsear_certificado_pdf(caminho_pdf):
         ],
     )
     resultado.update(empresas_geometria)
+    for papel, campo in [('fabricante', 'fabricante'), ('solicitante', 'solicitante')]:
+        nome_rotulado = _empresa_em_rotulo_bilingue(linhas, papel)
+        if nome_rotulado:
+            resultado[campo] = nome_rotulado
 
     tipo_tabela = campos_tabela.get("tipo_produto", "")
 
@@ -2192,7 +2288,7 @@ def parsear_certificado_pdf(caminho_pdf):
         'candidatos_extracao': len(candidatos),
         'tabelas_tecnicas': len(tabelas), 'paginas_utilizadas': tabela_cct.get('paginas_origem', []),
         'linhas_recuperadas': len(tabela_cct.get('linhas') or []),
-        'linhas_aproveitaveis': len({r['linha_origem'] for r in regs if any(r[k] is not None for k in ('potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m'))}),
+        'linhas_aproveitaveis': len({r['linha_origem'] for r in regs if any(r[k] is not None for k in ('potencia_saida_w', 'potencia_eirp_w', 'potencia_conduzida_w', 'intensidade_campo_uv_m'))}),
         'intervalos_normalizados': len(regs), 'linhas_descartadas': descartadas,
         'cabecalhos': tabela_cct.get('cabecalho', []), 'campos_identificados': campos,
         'estrategia': tabela_cct.get('origem_extracao'), 'alertas': alertas_extracao,

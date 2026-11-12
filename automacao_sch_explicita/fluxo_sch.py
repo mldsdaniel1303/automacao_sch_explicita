@@ -1081,6 +1081,7 @@ def _conferir_cct_sch_independente_re(
         datas = comparar_datas_certificado_sch_x_cct(
             dados_certificado_sch=dados_certificado_sch,
             dados_pdf=dados_cct_datas_brutos,
+            distinguir_eventos=resumo.get("modo_analise_re") == "analise_simplificada",
         )
     except Exception as exc:
         datas = {
@@ -1112,7 +1113,10 @@ def _conferir_cct_sch_independente_re(
     if resumo.get("modo_analise_re") == "analise_simplificada":
         req_comparacao = dict(req, tabela_tecnica_sch=expandir_faixas_explicitas_re(req.get("tabela_tecnica_sch")))
         pdf_comparacao = dict(dados_pdf, tabela_tecnica_cct=expandir_faixas_explicitas_re(dados_pdf.get("tabela_tecnica_cct")))
-    resultado = comparar_dados_sch_x_cct(req_comparacao, pdf_comparacao)
+    if resumo.get("modo_analise_re") == "analise_simplificada":
+        resultado = comparar_dados_sch_x_cct(req_comparacao, pdf_comparacao, modo_simplificado=True)
+    else:
+        resultado = comparar_dados_sch_x_cct(req_comparacao, pdf_comparacao)
     resumo["conferencia_sch_cct"] = resultado
     # Inspeção somente leitura integrada à opção 4. Não cria opção no menu
     # e não altera a decisão do RE tradicional nem a fila Em Análise.

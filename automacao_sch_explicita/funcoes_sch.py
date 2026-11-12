@@ -3025,7 +3025,7 @@ def avaliar_validade_cct(dados_pdf):
     return resultado
 
 
-def comparar_datas_certificado_sch_x_cct(dados_certificado_sch, dados_pdf):
+def comparar_datas_certificado_sch_x_cct(dados_certificado_sch, dados_pdf, distinguir_eventos=False):
     """
     Compara as datas do certificado no SCH com as datas extraídas do CCT.
 
@@ -3058,6 +3058,12 @@ def comparar_datas_certificado_sch_x_cct(dados_certificado_sch, dados_pdf):
         or dados_pdf.get("data_validade")
         or ""
     )
+    eventos = {k: dados_pdf.get(k) or '' for k in
+               ('data_certificacao', 'data_emissao', 'data_alteracao', 'data_validade')}
+    evento = 'data_emissao'
+    if distinguir_eventos and eventos['data_certificacao']:
+        emissao_cct_bruta = eventos['data_certificacao']
+        evento = 'data_certificacao'
 
     def comparar_um_campo(nome_campo, valor_sch, valor_cct):
         data_sch = _converter_data_br(valor_sch)
@@ -3114,6 +3120,10 @@ def comparar_datas_certificado_sch_x_cct(dados_certificado_sch, dados_pdf):
             validade_cct_bruta,
         ),
     ]
+    if distinguir_eventos:
+        comparacoes[0]['evento_cct_comparado'] = evento
+        comparacoes[0]['datas_cct_por_evento'] = eventos
+        comparacoes[0]['evidencia_sch_original'] = dados_certificado_sch.get('texto_bloco', '')
 
     divergencias = [
         item for item in comparacoes
@@ -3846,6 +3856,144 @@ def _comparar_tabela_com_eirp(tabela_sch, tabela_cct):
     return comparar_correspondencias(tabela_sch or {}, tabela_cct)
 
 
+def comparar_conjunto_tabelas_simplificado(sch, cct):
+    """Associa tabelas por família/faixas explícitas, nunca pela posição visual."""
+    from extracao_cct import registros, coluna, comparar_registros
+    sch, cct = sch or {}, cct or {}
+    tabelas_sch = sch.get('tabelas') or ([sch] if sch.get('linhas') else [])
+    tabelas_cct = cct.get('tabelas_identificadas') or ([cct] if cct.get('linhas') else [])
+    def familia(t):
+        return 'intensidade' if any(coluna(c) == 'intensidade_campo' for c in t.get('cabecalho', [])) else 'potencia'
+    def faixas(t):
+        return {(r['frequencia_inicial_mhz'], r['frequencia_final_mhz']) for r in registros(t)[0]}
+    def tecnologias_celulares(t, linha):
+        from extracao_cct import normalizar
+        valores = [v for c,v in zip(t.get('cabecalho',[]),linha) if 'tecnolog' in normalizar(c)]
+        return set(re.findall(r'\b(?:wcdma|hsdpa|hsupa|gsm|gprs|edge|lte)\b',normalizar(' '.join(valores))))
+    fs, fc = [faixas(t) for t in tabelas_sch], [faixas(t) for t in tabelas_cct]
+    candidatos = {j: [i for i, a in enumerate(tabelas_sch)
+                      if familia(a) == familia(b) and fs[i] & fc[j]
+                      and (not a.get('secao') or not b.get('secao') or a['secao'] == b['secao'])]
+                  for j, b in enumerate(tabelas_cct)}
+    problemas, divergencias, resultados, campos = [], [], [], set()
+    for j, ids in candidatos.items():
+        if len(ids) != 1:
+            problemas.append({'tabela_cct': j+1, 'candidatas_sch': [i+1 for i in ids],
+                              'motivo': 'tabela_sem_correspondencia' if not ids else 'correspondencia_entre_tabelas_ambigua'})
+    for i, a in enumerate(tabelas_sch):
+        partes, cobertas = [], set()
+        for j, b in enumerate(tabelas_cct):
+            if candidatos[j] != [i]:
+                continue
+            linhas, origens = [], []
+            for n, linha in enumerate(a.get('linhas') or []):
+                unidade_linha = dict(a, linhas=[linha], origens_linhas=[])
+                if faixas(unidade_linha) & fc[j]:
+                    linhas.append(linha)
+                    origem = (a.get('origens_linhas') or [])[n] if n < len(a.get('origens_linhas') or []) else {'linha':n+1}
+                    origens.append(dict(origem, tabela_sch=i+1, linha_sch=origem.get('linha',n+1)))
+            entrada = dict(a, linhas=linhas, origens_linhas=origens)
+            if familia(a) == 'intensidade' or any(coluna(c) == 'potencia_conduzida' for c in a.get('cabecalho', []) + b.get('cabecalho', [])):
+                comp = comparar_registros(entrada, b, grandezas_separadas=True)
+            else:
+                comp = comparar_tabelas_tecnicas_sch_cct(entrada, b)
+                # A unicidade numa página não prova unicidade entre partes do CCT.
+                outras_faixas = set().union(*(fc[k] for k in range(len(tabelas_cct))
+                                             if k!=j and candidatos[k]==[i]))
+                detalhes = comp.get('detalhes_correspondencias') or []
+                nao_identificadas = set()
+                for detalhe in detalhes:
+                    faixa = tuple(detalhe.get('faixa') or [])
+                    agregada = tecnologias_celulares(a,detalhe.get('original_sch') or [])
+                    tecnica_cct = tecnologias_celulares(b,detalhe.get('original_cct') or [])
+                    motivo = ('faixa_repetida_entre_partes_cct' if faixa in outras_faixas else
+                              'tecnologias_agrupadas_sem_regra_de_agregacao' if len(agregada)>1 and agregada!=tecnica_cct else '')
+                    if motivo:
+                        nao_identificadas.add(detalhe.get('linha_sch'))
+                        if 'sar_resultado' in detalhe:
+                            detalhe['sar_resultado_antes_reclassificacao'] = detalhe['sar_resultado']
+                            detalhe['sar_resultado'] = 'nao_comparado'
+                        detalhe.update(correspondencia_identificada=False,resultado='correspondencia_ambigua',motivo=motivo)
+                        comp.setdefault('inconclusivos',[]).append({'linha_sch':detalhe.get('linha_sch'),'motivo':motivo})
+                reclassificadas=[];mantidas=[]
+                for div in comp.get('divergencias') or []:
+                    if div.get('linha') in nao_identificadas or (not detalhes and tuple(div.get('faixa') or []) in outras_faixas):
+                        reclassificadas.append(dict(div,motivo_reclassificacao='identidade_do_par_nao_comprovada_no_conjunto'))
+                    else:
+                        mantidas.append(div)
+                if reclassificadas:
+                    comp['divergencias_reclassificadas_como_inconclusivas']=reclassificadas
+                    comp.setdefault('inconclusivos',[]).append({'motivo':'pareamento_entre_partes_exige_revisao','quantidade':len(reclassificadas)})
+                if nao_identificadas or reclassificadas:
+                    comp['divergencias']=mantidas
+                    comp['status']='divergente' if mantidas else 'comparacao_parcial'
+                    if detalhes:
+                        # O resumo deve refletir a identidade no conjunto, não a
+                        # unicidade provisória encontrada numa página isolada.
+                        comp['resumo_antes_reclassificacao'] = dict(comp.get('resumo_correspondencias') or {})
+                        comp['resumo_correspondencias'] = {
+                            'pares_identificados': sum(d.get('correspondencia_identificada') is True for d in detalhes),
+                            'linhas_ambiguas': sum(d.get('resultado') == 'correspondencia_ambigua' for d in detalhes),
+                            'coincidencias_numericas_saida': sum(bool(d.get('coincide_saida')) for d in detalhes),
+                            'coincidencias_numericas_apenas_eirp': sum(bool(d.get('coincide_eirp')) and not d.get('coincide_saida') for d in detalhes),
+                            'sar_comparado_em_par_identificado': sum(d.get('correspondencia_identificada') is True and d.get('sar_resultado') in {'coincidente','divergente'} for d in detalhes)}
+                        campos_confirmados = set()
+                        for d in detalhes:
+                            if d.get('correspondencia_identificada') is not True:
+                                continue
+                            campos_confirmados.update(('frequencia_inicial_mhz','frequencia_final_mhz'))
+                            if d.get('resultado') in {'coincidente_saida','divergente_saida'}:
+                                campos_confirmados.add('potencia_saida_w')
+                            if d.get('sar_resultado') in {'coincidente','divergente'}:
+                                campos_confirmados.add('sar_corpo_w_kg')
+                        comp['campos_comparados'] = sorted(campos_confirmados)
+                        comp['usar_potencia'] = 'potencia_saida_w' in campos_confirmados
+                # SAR cabeça/corpo só são comparados adicionalmente quando há valor
+                # real e correspondência única. Não desempatar tecnologia por SAR.
+                regs_sar = registros(entrada)[0] + registros(b)[0]
+                if any(r.get(k) is not None for r in regs_sar for k in ('sar_cabeca_w_kg','sar_corpo_w_kg')):
+                    detalhes = comp.get('detalhes_correspondencias') or []
+                    pares_confirmados = not detalhes or all(d.get('correspondencia_identificada') is True for d in detalhes)
+                    sar = (comparar_registros(entrada, b, grandezas_separadas=True) or {}) if pares_confirmados else {
+                        'status':'comparacao_parcial','divergencias':[],
+                        'inconclusivos':[{'motivo':'identidade_das_linhas_nao_confirmada_para_sar'}]}
+                    comp['sar_por_correspondencia_unica'] = sar
+                    sar_div = [v for v in sar.get('divergencias', []) if v.get('coluna','').startswith('sar_')]
+                    comp.setdefault('divergencias', []).extend(sar_div)
+                    if sar_div:
+                        comp['status'] = 'divergente'
+                    if not any(c.startswith('sar_') for c in sar.get('campos_comparados', [])):
+                        problemas.append({'tabela_sch':i+1,'tabela_cct':j+1,'motivo':'sar_sem_correspondencia_unica'})
+            comp = comp or {'status': 'comparacao_parcial', 'divergencias': [], 'inconclusivos': [{'motivo':'grandezas_nao_interpretadas'}]}
+            partes.append({'tabela_cct': j+1, 'paginas_cct': b.get('paginas_origem', []),
+                           'familia': familia(b), 'comparacao': comp})
+            cobertas |= fs[i] & fc[j]
+            campos.update(comp.get('campos_comparados') or [])
+            divergencias.extend(dict(v, tabela_sch=i+1, tabela_cct=j+1) for v in comp.get('divergencias') or [])
+            if comp.get('status') not in {'ok', 'nao_aplicavel'}:
+                problemas.append({'tabela_sch':i+1, 'tabela_cct':j+1, 'motivo':comp.get('status'),
+                                  'detalhes':comp.get('inconclusivos', [])})
+        if not partes or fs[i] - cobertas or registros(a)[1]:
+            problemas.append({'tabela_sch':i+1, 'motivo':'cobertura_sch_incompleta',
+                              'faixas_nao_associadas':sorted(fs[i]-cobertas)})
+        resultados.append({'tabela_sch': i+1, 'familia': a.get('familia') or familia(a),
+                           'secao':a.get('secao'), 'cabecalho': a.get('cabecalho'),
+                           'linhas_sch':len(a.get('linhas') or []), 'partes_cct':partes})
+    if not tabelas_sch or not tabelas_cct:
+        problemas.append({'motivo':'tabelas_ausentes'})
+    if cct.get('status_extracao') in {'parcial','ambigua','falha_extracao','sem_texto_interpretavel'}:
+        problemas.append({'motivo':'extracao_cct_' + cct['status_extracao']})
+    return {'status':'divergente' if divergencias else 'comparacao_parcial' if problemas else 'ok',
+            'motivo':'Comparações independentes por tabela, família, faixa e grandeza.',
+            'tabelas':resultados, 'divergencias':divergencias, 'inconclusivos':problemas,
+            'campos_comparados':sorted(campos), 'conformidade_integral':False,
+            'campos_nao_validados':['Cobertura integral do certificado e associações ambíguas exigem revisão.'],
+            'linhas_sch':sum(len(t.get('linhas') or []) for t in tabelas_sch),
+            'linhas_cct':sum(len(t.get('linhas') or []) for t in tabelas_cct),
+            'usar_potencia':any('potencia' in c.lower() for c in campos),
+            'usar_intensidade':any('intensidade' in c.lower() for c in campos)}
+
+
 def comparar_tabelas_tecnicas_sch_cct(tabela_sch, tabela_cct):
     if (tabela_cct or {}).get('status_extracao') in {'falha_extracao', 'sem_texto_interpretavel'}:
         return {'status':'erro_extracao', 'motivo':'CCT sem extração RF interpretável.',
@@ -4442,7 +4590,7 @@ def _modelo_generico_ou_incompleto(valor):
     return False
 
 
-def comparar_dados_sch_x_cct(req, dados_pdf):
+def comparar_dados_sch_x_cct(req, dados_pdf, modo_simplificado=False):
     req = req or {}
     dados_pdf = dados_pdf or {}
 
@@ -4477,13 +4625,21 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         ),
     ]
 
+    if modo_simplificado:
+        # Só ignora espaçamento/pontuação; não usa similaridade nem remove palavras.
+        fabricante = next(c for c in comparacoes if c.get('campo') == 'fabricante')
+        valores = [str(x or '') for x in (req.get('fabricante'), dados_pdf.get('fabricante'))]
+        chaves = [re.sub(r'[^a-z0-9]', '', _normalizar_texto_comparacao(x)) for x in valores]
+        if all(chaves) and chaves[0] == chaves[1]:
+            fabricante.update(status='ok', diverge=False, criterio='nome_integral_sem_espacos_ou_pontuacao')
     divergencias = [item for item in comparacoes if item.get("diverge")]
     campos_ausentes = [
         item for item in comparacoes
         if item.get("status") in {"ausente_nos_dois", "ausente_em_um_dos_lados"}
     ]
 
-    comparacao_tabela = comparar_tabelas_tecnicas_sch_cct(
+    comparador = comparar_conjunto_tabelas_simplificado if modo_simplificado else comparar_tabelas_tecnicas_sch_cct
+    comparacao_tabela = comparador(
         req.get("tabela_tecnica_sch"),
         dados_pdf.get("tabela_tecnica_cct"),
     )
@@ -4507,7 +4663,7 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
     else:
         status_geral = "ok"
 
-    return {
+    retorno = {
         "status_geral": status_geral,
         "comparacoes": comparacoes,
         "divergencias": divergencias,
@@ -4515,6 +4671,9 @@ def comparar_dados_sch_x_cct(req, dados_pdf):
         "comparacao_tabela_tecnica": comparacao_tabela,
         "requerimento": req.get("requerimento", ""),
     }
+    if modo_simplificado:
+        retorno.update(modo_comparacao='simplificada', conformidade_integral=False)
+    return retorno
 
 
 def avisar_resultado_conferencia_sch_cct(resultado):
@@ -4523,6 +4682,11 @@ def avisar_resultado_conferencia_sch_cct(resultado):
     divergencias = resultado.get("divergencias", []) or []
 
     if not divergencias:
+        if resultado.get('modo_comparacao') == 'simplificada' and resultado.get('conformidade_integral') is False:
+            mensagem = 'Conferência limitada aos campos comparados; conformidade integral não declarada. Revisar pontos inconclusivos.'
+            print(f'[SCH][ANALISE SIMPLIFICADA] {requerimento}: {mensagem}')
+            resultado['mensagens_humanas'] = [mensagem]
+            return
         print(f"[SCH] Conferência SCH x CCT OK no requerimento {requerimento}.")
         resultado["mensagens_humanas"] = []
         return

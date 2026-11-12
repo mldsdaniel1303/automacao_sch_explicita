@@ -792,6 +792,7 @@ def _criar_tabela_comparacao(resultado):
 
 
 def _html_comparacao_tabela_tecnica(resultado):
+    import json
     conferencia = _fmt_conferencia(resultado)
     comparacao = conferencia.get("comparacao_tabela_tecnica") or {}
 
@@ -868,6 +869,16 @@ def _html_comparacao_tabela_tecnica(resultado):
     linhas.append("</tbody></table>")
 
     tabela_cct = (resultado.get('dados_pdf') or {}).get('tabela_tecnica_cct') or {}
+    for tabela in comparacao.get('tabelas') or []:
+        linhas.append('<h4>Tabela SCH '+escape(str(tabela.get('tabela_sch')))+' — '+escape(str(tabela.get('familia')))+
+                      '</h4><p>Cabeçalhos originais: '+escape(' | '.join(tabela.get('cabecalho') or []))+'</p>')
+        if not tabela.get('partes_cct'):
+            linhas.append('<p>Sem correspondência única comprovada no CCT. Revisão manual.</p>')
+        for parte in tabela.get('partes_cct') or []:
+            linhas.append('<p>Tabela CCT '+escape(str(parte.get('tabela_cct')))+'; páginas '+escape(str(parte.get('paginas_cct')))+
+                          '; status '+escape(str((parte.get('comparacao') or {}).get('status')))+'.</p>')
+            linhas.append('<details><summary>Correspondências e grandezas desta tabela</summary><pre>'+escape(
+                json.dumps(parte.get('comparacao'), ensure_ascii=False, indent=2, default=str))+'</pre></details>')
     nao_validados = comparacao.get('campos_nao_validados') or []
     if nao_validados:
         linhas.append('<p><b>Limites da comparação:</b> '+escape(' '.join(nao_validados))+'</p>')
@@ -2701,7 +2712,8 @@ def _html_consolidado_simplificada_re(resultados, versao_script, inicio_execucao
         tem_divergencia = bool(divergencias or datas.get("status_geral") == "divergente")
         divergentes += tem_divergencia
         inconclusivos += bool(ausentes or conferencia.get("status_geral") == "parcial"
-                              or tabela.get("status") not in {"ok", "divergente"})
+                              or tabela.get("status") not in {"ok", "divergente"}
+                              or tabela.get('inconclusivos') or tabela.get('conformidade_integral') is False)
         falhas += bool(resultado.get("status") == "erro" or preenchimento.get("status") == "erro_parcial")
         anexos = resultado.get("anexos_baixados") or []
         ccts = sum("cct" in str(a.get("categoria") or "").lower() for a in anexos)

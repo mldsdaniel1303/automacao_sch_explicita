@@ -43,12 +43,16 @@ def expandir_faixas_explicitas_re(tabela):
     """
     from funcoes_sch import _mapear_colunas_relevantes
     tabela = tabela or {}
+    if tabela.get('tabelas'):
+        return dict(tabela, tabelas=[expandir_faixas_explicitas_re(t) for t in tabela['tabelas']])
     indice = _mapear_colunas_relevantes(tabela.get('cabecalho') or []).get('faixa_freq_tx')
-    linhas = []
+    linhas, origens = [], []
     numero = r"[0-9]+(?:[.,][0-9]+)?"
     intervalo = numero + r"\s*(?:a|até|ate|[-–—])\s*" + numero
     padrao = intervalo + r"(?:\s+e\s+" + intervalo + r")+"
-    for original in tabela.get('linhas') or []:
+    for numero_origem, original in enumerate(tabela.get('linhas') or [], 1):
+        anteriores = tabela.get('origens_linhas') or []
+        origem = dict(anteriores[numero_origem-1]) if numero_origem <= len(anteriores) else {'linha': numero_origem}
         linha = list(original)
         valor = str(linha[indice] or '').strip() if indice is not None and indice < len(linha) else ''
         if re.fullmatch(padrao, valor, flags=re.I):
@@ -56,9 +60,11 @@ def expandir_faixas_explicitas_re(tabela):
                 nova = list(linha)
                 nova[indice] = faixa
                 linhas.append(nova)
+                origens.append(dict(origem, faixa_original=valor))
         else:
             linhas.append(linha)
-    return dict(tabela, linhas=linhas)
+            origens.append(origem)
+    return dict(tabela, linhas=linhas, origens_linhas=origens)
 
 
 def compor_acompanhamento_preservado(existente, frase):

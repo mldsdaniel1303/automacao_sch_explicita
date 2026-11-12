@@ -24,7 +24,8 @@ def identidade(numero='01553/25'):
 class CapturaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.fixture = json.loads((RAIZ/'tests/fixtures/ccts/sch_cpqd_transcricao_capturas.json').read_text(encoding='utf-8'))
+        from fixtures_sinteticas import tabela_sintetica
+        cls.fixture = tabela_sintetica()
 
     def tabela(self):
         return {'cabecalho':self.fixture['cabecalho'], 'cabecalho_visivel':self.fixture['cabecalho'],

@@ -224,7 +224,13 @@ for (const tabela of document.querySelectorAll('table')) {
   const paginacao = Array.from(tabela.parentElement.querySelectorAll('a,button,select'))
     .filter(e => visible(e) && /pagin|proxim|next|seguinte/i.test(String(e.id)+' '+String(e.className)+' '+String(e.title)+' '+String(e.innerText)))
     .map(e => ({tag:e.tagName, texto:e.innerText || '', id:e.id || ''}));
-  saida.push({identificador_html:tabela.id || '', cabecalho: cabecalho.map(c => c.texto_original),
+  const marcadores = Array.from(document.querySelectorAll('legend,h1,h2,h3,h4,label,strong,b,span'))
+    .filter(e => visible(e) && String(e.textContent||'').length < 120 &&
+      /caracteristicas.*(?:basicas|secundarias)|funcionalidade adicional/.test(norm(e.textContent)) &&
+      !!(e.compareDocumentPosition(tabela) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const contexto = marcadores.length ? marcadores[marcadores.length-1].textContent : '';
+  const secao = /secundarias|funcionalidade adicional/.test(norm(contexto)) ? 'secundarias' : /basicas/.test(norm(contexto)) ? 'basicas' : null;
+  saida.push({identificador_html:tabela.id || '', secao, contexto_secao:contexto, cabecalho: cabecalho.map(c => c.texto_original),
     cabecalho_visivel:cabecalho.map(c => c.texto_visivel), celulas_cabecalho:cabecalho,
     linhas:linhas.map(r => r.celulas.map(c => c.texto_original)),
     linhas_visiveis:linhas.map(r => r.celulas.map(c => c.texto_visivel)), linhas_dom:linhas,
@@ -258,9 +264,26 @@ def extrair_tabela_dom_para_comparacao(driver, wait):
                   classificar_tabela_tecnica(t.get('cabecalho')) in {
                       'rf_frequencia_potencia', 'rf_intensidade_distancia',
                       'rf_intensidade_sem_distancia', 'rf_outros_campos'}]
-    if len(candidatas) != 1:
-        raise RuntimeError(f'Esperada uma tabela RF comparável; encontradas {len(candidatas)}.')
-    tabela = candidatas[0]
+    if not candidatas:
+        raise RuntimeError('Nenhuma tabela RF comparável encontrada.')
+    for ordem, tabela in enumerate(candidatas, 1):
+        _validar_tabela_dom_completa(tabela)
+        tabela['familia'] = classificar_tabela_tecnica(tabela.get('cabecalho'))
+        tabela['ordem_dom'] = ordem
+        tabela['origem'] = 'SCH_DOM'
+    # Compatibilidade da tabela única; a coleção nunca concatena cabeçalhos distintos.
+    resultado = dict(candidatas[0]) if len(candidatas) == 1 else {'cabecalho': [], 'linhas': []}
+    resultado['tabelas'] = candidatas
+    resultado['total_tabelas'] = len(candidatas)
+    resultado['total_linhas'] = sum(t['total_linhas'] for t in candidatas)
+    return resultado
+
+
+def _validar_tabela_dom_completa(tabela):
+    if any(not c.get('visivel', True) for c in tabela.get('celulas_cabecalho') or []):
+        raise RuntimeError('Cabeçalhos ocultos: captura completa não confirmada.')
+    if any(not r.get('visivel', True) for r in tabela.get('linhas_dom') or []):
+        raise RuntimeError('Linhas ocultas: captura completa não confirmada.')
     if tabela.get('paginacao_detectada') or tabela.get('virtualizacao_detectada'):
         raise RuntimeError('Tabela paginada/virtualizada: completude não confirmada.')
     colunas = len(tabela['cabecalho'])
@@ -274,7 +297,6 @@ def extrair_tabela_dom_para_comparacao(driver, wait):
            for row in tabela.get('linhas_dom',[]) for c in row.get('celulas',[])):
         raise RuntimeError('Células mescladas exigem revisão; não inferir correspondência.')
     print(f'[SCH][OPCAO4] Captura DOM: {len(linhas)} linhas, {colunas} colunas; valores originais preservados.')
-    return tabela
 
 
 def confirmar_identidade(bruto, esperado):

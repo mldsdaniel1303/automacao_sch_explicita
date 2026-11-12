@@ -18,6 +18,10 @@ def coluna(texto):
         return 'intensidade_campo'
     if 'distancia' in t or 'distance' in t:
         return 'distancia'
+    if 'sar' in t:
+        return 'sar_cabeca' if 'cabeca' in t or 'head' in t else 'sar_corpo' if 'corpo' in t or 'body' in t else 'nao_interpretado'
+    if ('potencia' in t or 'power' in t) and ('conduzida' in t or 'conducted' in t):
+        return 'potencia_conduzida'
     if any(p in t for p in ('radiada', 'irradiada', 'conduzida', 'conducted', 'radiated')):
         return 'nao_interpretado'
     if ('potencia' in t or 'power' in t) and ('saida' in t or 'output' in t or 'tx power' in t or 'transmit power' in t):
@@ -42,6 +46,8 @@ def numero(texto):
 
 
 def unidade(texto):
+    if re.search(r'(?i)W\s*/\s*kg', str(texto)):
+        return 'w/kg'
     m = re.search(r'(?i)(?<![a-zµμ])(GHz|MHz|kHz|dBm|mW|W|[µμu]V/m|mV/m|cm|mm|m)\b', str(texto))
     return m.group().lower().replace('µ', 'u').replace('μ', 'u') if m else ''
 
@@ -52,7 +58,8 @@ def escalar(valor, cabecalho, campo):
     if not m:
         return None
     u = unidade(m.group(2) or '') or unidade(cabecalho)
-    fatores = ({'ghz': 1000, 'mhz': 1, 'khz': .001} if campo.startswith('frequencia') else
+    fatores = ({'w/kg': 1} if campo.startswith('sar_') else
+               {'ghz': 1000, 'mhz': 1, 'khz': .001} if campo.startswith('frequencia') else
                {'w': 1, 'mw': .001} if campo.startswith('potencia') else
                {'uv/m': 1, 'mv/m': 1000} if campo == 'intensidade_campo' else
                {'m': 1, 'cm': .01, 'mm': .001})
@@ -72,6 +79,11 @@ def intervalos(valor, cabecalho):
     partes = re.split(r'\s+(?:e|and)\s+|\s*;\s*', t)
     saida = []
     for parte in partes:
+        if re.fullmatch(r'\s*' + NUM + r'\s*', parte):
+            n = escalar(parte, u, 'frequencia')
+            if n is not None and n >= 0:
+                saida.append((n, n))
+                continue
         m = re.fullmatch(r'\s*(' + NUM + r')\s*(?:a|até|ate|to|[-–—])\s*(' + NUM + r')\s*', parte, re.I)
         if not m:
             return []
@@ -111,6 +123,7 @@ def registros(tabela):
             r['pagina_origem'] = r.get('pagina')
             r['tabela_origem'] = r.get('tabela')
             for campo, sufixo in [('potencia_saida', 'w'), ('potencia_eirp', 'w'),
+                                   ('potencia_conduzida', 'w'), ('sar_corpo', 'w_kg'), ('sar_cabeca', 'w_kg'),
                                    ('intensidade_campo', 'uv_m'), ('distancia', 'm')]:
                 r[campo + '_' + sufixo] = escalar(dados[campo][1], dados[campo][0], campo) if campo in dados else None
             saida.append(r)
@@ -120,9 +133,9 @@ def registros(tabela):
 def qualidade(tabela):
     regs, rejeitadas = registros(tabela)
     chaves = ('frequencia_inicial_mhz', 'frequencia_final_mhz', 'potencia_saida_w',
-              'potencia_eirp_w', 'intensidade_campo_uv_m', 'distancia_m')
+              'potencia_eirp_w', 'potencia_conduzida_w', 'intensidade_campo_uv_m', 'distancia_m')
     unicos = {tuple(r[k] for k in chaves) for r in regs}
-    uteis = sum(any(v is not None for v in chave[2:5]) for chave in unicos)
+    uteis = sum(any(v is not None for v in chave[2:6]) for chave in unicos)
     return (uteis, len(unicos), -len(rejeitadas) - (len(regs) - len(unicos)))
 
 
@@ -132,10 +145,10 @@ def extrair_complementar(caminho):
     saida = []
     with pymupdf.open(str(caminho)) as pdf:
         for pagina, page in enumerate(pdf, 1):
-            for tabela in page.find_tables().tables:
+            for indice_tabela, tabela in enumerate(page.find_tables().tables, 1):
                 x0, topo, x1, _ = tabela.bbox
                 contexto = page.get_text('text', clip=(x0, max(0, topo-60), x1, topo))
-                saida.append({'pagina': pagina, 'bruto': tabela.extract(), 'estrategia': 'pymupdf_linhas',
+                saida.append({'pagina': pagina, 'tabela_fisica':indice_tabela, 'bruto': tabela.extract(), 'estrategia': 'pymupdf_linhas',
                               'continuacao_explicita': bool(re.search(r'\bcontinua(?:ção|cao|tion)\b', contexto, re.I))})
     return saida
 
@@ -152,15 +165,19 @@ def montar_tabelas(candidatos):
                 cab = [' '.join(str(l[i] or '') for l in pedaco if i < len(l)).strip()
                        for i in range(max(map(len, pedaco)))]
                 campos = [coluna(c) for c in cab]
-                if not any(c.startswith('frequencia') for c in campos) or not any(c in campos for c in ('potencia_saida', 'potencia_eirp', 'intensidade_campo')):
+                if not any(c.startswith('frequencia') for c in campos) or not any(c in campos for c in ('potencia_saida', 'potencia_conduzida', 'potencia_eirp', 'intensidade_campo')):
                     continue
                 corpo = bruto[inicio+altura:]
                 # Não absorve uma linha de dados como parte do cabeçalho.
                 if altura > 1 and any(re.search(r'\d', str(v or '')) and coluna(v) == 'nao_interpretado' for v in pedaco[-1]):
                     continue
                 tab = {'cabecalho': cab, 'linhas': [], 'origens_linhas': [],
+                       'contexto': candidato.get('contexto', ''),
                        'paginas_origem': [candidato['pagina']], 'origem_extracao': candidato['estrategia'],
                        'continuacao_explicita': candidato.get('continuacao_explicita', False)}
+                contexto_secao = normalizar(candidato.get('contexto', ''))
+                tab['secao'] = ('secundarias' if 'secundarias' in contexto_secao or 'funcionalidade adicional' in contexto_secao
+                                else 'basicas' if 'basicas' in contexto_secao else None)
                 for numero_linha, linha in enumerate(corpo, inicio+altura+1):
                     if [coluna(c) for c in linha] == campos:
                         continue
@@ -168,6 +185,13 @@ def montar_tabelas(candidatos):
                         continue
                     tab['linhas'].append([str(c or '').strip() for c in linha])
                     tab['origens_linhas'].append({'pagina': candidato['pagina'], 'tabela': len(tabelas)+1, 'linha': numero_linha})
+                    tab['origens_linhas'][-1].update(tabela_fisica=candidato.get('tabela_fisica'),
+                                                   parte_quadro=candidato.get('parte_quadro'))
+                    tab['origens_linhas'][-1]['cabecalho_pagina'] = candidato.get('cabecalho_origem_pagina', candidato['pagina'])
+                    geometria = candidato.get('origens_geometria') or []
+                    indice = numero_linha-2
+                    if 0 <= indice < len(geometria):
+                        tab['origens_linhas'][-1]['geometria'] = geometria[indice]
                 if registros(tab)[0]:
                     tabelas.append(tab)
                     encontrado = True
@@ -227,7 +251,7 @@ def classificar_tabela(cabecalho, contexto=''):
     if any(k in t for k in ('unidade fabril', 'unidades fabris', 'factory unit', 'manufacturer units')):
         return 'unidades_fabris'
     campos = [coluna(c) for c in cabecalho]
-    if any(c.startswith('frequencia') for c in campos) and any(c in campos for c in ('potencia_saida','potencia_eirp','intensidade_campo')):
+    if any(c.startswith('frequencia') for c in campos) and any(c in campos for c in ('potencia_saida','potencia_conduzida','potencia_eirp','intensidade_campo')):
         if re.search(r'\b(?:mhz|ghz|khz)\b', t) and 'poe' not in t:
             return 'radiofrequencia'
     if ('entrada' in t and 'saida' in t) or ('poe' in t) or ('caracteristicas tecnicas basicas' in ctx and re.search(r'\b(?:vca|vcc|vac|vdc)\b', t)):
@@ -340,7 +364,7 @@ def extrair_caracteristicas_eletricas(secoes):
     return saida
 
 
-def comparar_registros(sch, cct):
+def comparar_registros(sch, cct, grandezas_separadas=False):
     """Só prova divergência quando a faixa e a grandeza têm par único."""
     from collections import defaultdict
     campos = [[coluna(c) for c in t.get('cabecalho') or []] for t in (sch, cct)]
@@ -372,7 +396,10 @@ def comparar_registros(sch, cct):
             continue
         pares.append((faixa, a, b))
     for faixa, a, b in pares:
-        for campo in ('potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m', 'distancia_m'):
+        campos_valores = ['potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m', 'distancia_m']
+        if grandezas_separadas:
+            campos_valores += ['potencia_conduzida_w', 'sar_corpo_w_kg', 'sar_cabeca_w_kg']
+        for campo in campos_valores:
             if campo in {'intensidade_campo_uv_m', 'distancia_m'} and any(r['intensidade_campo_uv_m'] is not None for r in (a[0], b[0])):
                 d1, d2 = a[0]['distancia_m'], b[0]['distancia_m']
                 if d1 is None or d2 is None or abs(d1-d2) > 1e-9:
@@ -393,7 +420,10 @@ def comparar_registros(sch, cct):
             if abs(x-y) > max(1e-9, max(abs(x), abs(y))*1e-6):
                 divergencias.append({'tipo': 'valor_divergente', 'faixa': faixa, 'coluna': campo,
                                      'valor_sch': x, 'valor_cct': y, 'pagina': b[0].get('pagina')})
-        if not any(a[0][k] is not None and b[0][k] is not None for k in ('potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m')):
+        tecnicas = ['potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m']
+        if grandezas_separadas:
+            tecnicas.append('potencia_conduzida_w')
+        if not any(a[0][k] is not None and b[0][k] is not None for k in tecnicas):
             problemas.append({'faixa': faixa, 'motivo': 'grandeza_tecnica_ausente_ou_nao_identificada'})
     return {'status': 'divergente' if divergencias else 'comparacao_parcial' if problemas or not comparados else 'ok',
             'motivo': 'Correspondência por faixa, grandeza e unidade; demais campos não validados.',
