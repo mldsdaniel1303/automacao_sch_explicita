@@ -276,7 +276,8 @@ def _normalizar_status_conferencia(valor):
         return "REVISAR"
 
     # Fallback: textos conhecidos parcialmente
-    if "diverg" in texto or "nao conforme" in texto:
+    texto_fallback = re.sub(r"[\s_\-\u2010-\u2015\u2212]+", " ", texto)
+    if "diverg" in texto or re.search(r"\bnao conforme\b", texto_fallback):
         return "NC"
 
     if "nao aplic" in texto or "nao se aplica" in texto or texto.startswith("nao_aplicavel_"):

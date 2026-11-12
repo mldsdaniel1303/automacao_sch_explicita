@@ -140,6 +140,23 @@ class IdentidadeContextoTests(unittest.TestCase):
 
 
 class EstadosRelatorioTests(unittest.TestCase):
+    def test_nao_conforme_com_hifens_sublinhados_e_caixa(self):
+        for valor in ('Não Conforme', 'não-conforme', 'nao_conforme', 'NÃO-CONFORME',
+                      'NÃO_CONFORME', 'não - conforme', 'não–conforme', 'não—conforme',
+                      'produto_nao_conforme', 'Resultado: NÃO-CONFORME.'):
+            for entrada in (valor, {'status': valor}, {'resultado': valor}):
+                with self.subTest(entrada=entrada):
+                    self.assertEqual(g._normalizar_status_conferencia(entrada), 'NC')
+                    self.assertIn('>NC</td>', g._td_status_conferencia(entrada))
+
+    def test_correcao_de_negacao_preserva_demais_estados(self):
+        for valor, esperado in [('Conforme', 'C'), ('CONFORME', 'C'), ('ok', 'C'),
+                                ('REVISAR', 'REVISAR'), ('comparacao_parcial', 'REVISAR'),
+                                ('ERRO', 'ERRO'), ('erro_extracao', 'ERRO'),
+                                ('N/A', 'N/A'), ('nao_aplicavel', 'N/A')]:
+            with self.subTest(valor=valor):
+                self.assertEqual(g._normalizar_status_conferencia(valor), esperado)
+
     def test_parcial_erro_e_nao_aplicavel_sao_distintos(self):
         for valor, esperado in [('comparacao_parcial', 'REVISAR'), ('inconclusivo', 'REVISAR'),
                                 ('erro_extracao', 'ERRO'), ('falha_extracao', 'ERRO'),
