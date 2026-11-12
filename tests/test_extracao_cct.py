@@ -172,7 +172,11 @@ class ExtracaoTests(unittest.TestCase):
     def test_mesma_frequencia_com_valores_distintos(self):
         a = tabela([['2400 a 2483,5', '0,1'], ['2400 a 2483,5', '0,2']])
         b = dict(a, linhas=list(reversed(a['linhas'])))
-        self.assertEqual(s.comparar_tabelas_tecnicas_sch_cct(a,b)['status'], 'ok')
+        # Valores distintos não identificam os modos sem contexto técnico.
+        r = s.comparar_tabelas_tecnicas_sch_cct(a,b)
+        self.assertEqual(r['status'], 'comparacao_parcial')
+        self.assertFalse(r['divergencias'])
+        self.assertFalse(any(d['correspondencia_identificada'] for d in r['correspondencias_registros']))
 
     def test_falha_arquivo(self):
         with contextlib.redirect_stdout(io.StringIO()):

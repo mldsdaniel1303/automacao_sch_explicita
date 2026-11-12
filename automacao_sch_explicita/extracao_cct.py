@@ -365,7 +365,7 @@ def extrair_caracteristicas_eletricas(secoes):
 
 
 def comparar_registros(sch, cct, grandezas_separadas=False):
-    """Só prova divergência quando a faixa e a grandeza têm par único."""
+    """Só compara grandezas depois de provar um par único por faixa/contexto."""
     from collections import defaultdict
     campos = [[coluna(c) for c in t.get('cabecalho') or []] for t in (sch, cct)]
     if not any(any(c.startswith('frequencia') for c in cs) for cs in campos):
@@ -382,19 +382,30 @@ def comparar_registros(sch, cct, grandezas_separadas=False):
     for nome, tab in [('sch', sch), ('cct', cct)]:
         if tab.get('status_extracao') in {'parcial', 'ambigua', 'falha_extracao', 'sem_texto_interpretavel'}:
             problemas.append({'lado': nome, 'motivo': 'extracao_' + tab['status_extracao']})
-    pares = []
+    pares, correspondencias = [], []
     for faixa in sorted(set(lados[0]) | set(lados[1])):
         a, b = lados[0].get(faixa, []), lados[1].get(faixa, [])
-        if len(a) != 1 or len(b) != 1:
-            assinatura = lambda r: tuple(r[k] for k in ('potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m', 'distancia_m'))
-            aa = {assinatura(r): r for r in a}
-            bb = {assinatura(r): r for r in b}
-            if a and b and len(aa) == len(a) and len(bb) == len(b) and aa.keys() == bb.keys():
-                pares.extend((faixa, [r], [bb[chave]]) for chave, r in aa.items())
+        ctx_a = [_contexto_registro(r, sch.get('cabecalho') or []) for r in a]
+        ctx_b = [_contexto_registro(r, cct.get('cabecalho') or []) for r in b]
+        candidatos = [[j for j in range(len(b)) if _contextos_compativeis(x, ctx_b[j])]
+                      for x in ctx_a]
+        usados = set()
+        for i, registro in enumerate(a):
+            js = candidatos[i]
+            unico = len(js) == 1 and sum(js[0] in cs for cs in candidatos) == 1
+            evidencia = {'faixa': faixa, 'origem_sch': registro, 'contexto_sch': ctx_a[i],
+                         'correspondencia_identificada': unico,
+                         'candidatos': [{'origem_cct': b[j], 'contexto_cct': ctx_b[j]} for j in js]}
+            correspondencias.append(evidencia)
+            if unico:
+                usados.add(js[0])
+                pares.append((faixa, [registro], [b[js[0]]]))
             else:
-                problemas.append({'faixa': faixa, 'motivo': 'correspondencia_ausente_ou_duplicada'})
-            continue
-        pares.append((faixa, a, b))
+                problemas.append(dict(evidencia, motivo='correspondencia_ausente_ou_duplicada'))
+        for j, registro in enumerate(b):
+            if j not in usados:
+                problemas.append({'faixa': faixa, 'lado': 'cct', 'origem_cct': registro,
+                                  'contexto_cct': ctx_b[j], 'motivo': 'registro_sem_par_inequivoco'})
     for faixa, a, b in pares:
         campos_valores = ['potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m', 'distancia_m']
         if grandezas_separadas:
@@ -419,7 +430,8 @@ def comparar_registros(sch, cct, grandezas_separadas=False):
                 comparados.append(campo)
             if abs(x-y) > max(1e-9, max(abs(x), abs(y))*1e-6):
                 divergencias.append({'tipo': 'valor_divergente', 'faixa': faixa, 'coluna': campo,
-                                     'valor_sch': x, 'valor_cct': y, 'pagina': b[0].get('pagina')})
+                                     'valor_sch': x, 'valor_cct': y, 'pagina': b[0].get('pagina'),
+                                     'origem_sch': a[0], 'origem_cct': b[0]})
         tecnicas = ['potencia_saida_w', 'potencia_eirp_w', 'intensidade_campo_uv_m']
         if grandezas_separadas:
             tecnicas.append('potencia_conduzida_w')
@@ -428,6 +440,7 @@ def comparar_registros(sch, cct, grandezas_separadas=False):
     return {'status': 'divergente' if divergencias else 'comparacao_parcial' if problemas or not comparados else 'ok',
             'motivo': 'Correspondência por faixa, grandeza e unidade; demais campos não validados.',
             'divergencias': divergencias, 'inconclusivos': problemas,
+            'correspondencias_registros': correspondencias,
             'linhas_sch': sum(map(len, lados[0].values())), 'linhas_cct': sum(map(len, lados[1].values())),
             'linhas_extraidas_sch': len(sch.get('linhas') or []), 'linhas_extraidas_cct': len(cct.get('linhas') or []),
             'usar_potencia': any(c.startswith('potencia') for c in comparados),
@@ -451,8 +464,17 @@ def _contexto_registro(registro, cabecalho):
     for cab, valor in zip(cabecalho, registro['original']):
         t = normalizar(cab)
         limpo = re.sub(r'[^a-z0-9]+', '', normalizar(valor))
-        if 'tecnolog' in t or 'technology' in t:
+        if 'tecnolog' in t or 'technolog' in t:
             contexto['tecnica'] = tecnica_transmissao(valor)
+            tecnologia = normalizar(valor)
+            tecnologia = re.sub(r'\bw[\s-]*cdma\b', 'wcdma', tecnologia)
+            contexto['coluna_tecnologia'] = True
+            contexto['modos_celulares'] = sorted(set(re.findall(
+                r'\b(?:gsm|gprs|edge|wcdma|hsdpa|hsupa|lte)(?=\b|\d)', tecnologia)))
+            if not contexto['tecnica'] and not contexto['modos_celulares'] and limpo:
+                if tecnologia not in {'na', 'n/a'} and not re.search(
+                        r'\b(?:desconhecid[oa]|unknown|nao (?:identificad[oa]|informad[oa])|not identified)\b', tecnologia):
+                    contexto['tecnologia_textual'] = tecnologia
         elif 'emiss' in t and limpo:
             contexto['emissao'] = limpo
         elif 'modula' in t and limpo:
@@ -461,6 +483,29 @@ def _contexto_registro(registro, cabecalho):
             m = re.fullmatch(r'\s*(' + NUM + r')\s*(?:W\s*/\s*kg)?\s*', str(valor or ''), re.I)
             contexto['sar_corpo_w_kg'] = numero(m.group(1)) if m else None
     return contexto
+
+
+def _contextos_compativeis(a, b):
+    """Valores medidos nunca identificam o modo; tecnologia explícita não se perde."""
+    for contexto in (a, b):
+        if contexto.get('coluna_tecnologia') and not any(contexto.get(k) for k in
+                ('modos_celulares', 'tecnica', 'tecnologia_textual')):
+            return False
+    modos_a, modos_b = a.get('modos_celulares'), b.get('modos_celulares')
+    if (modos_a or modos_b) and modos_a != modos_b:
+        return False
+    tecnologia_a, tecnologia_b = a.get('tecnologia_textual'), b.get('tecnologia_textual')
+    if (tecnologia_a or tecnologia_b) and tecnologia_a != tecnologia_b:
+        return False
+    chaves = ('emissao', 'tecnica', 'modulacao', 'tecnologia_textual')
+    comuns = [k for k in chaves if a.get(k) and b.get(k)]
+    if not all(a[k] == b[k] for k in comuns):
+        return False
+    # Sem coluna de tecnologia, conserva-se a comparação legada de uma faixa
+    # única. Coluna presente mas modo sem contexto não comprova identidade.
+    if (a.get('coluna_tecnologia') or b.get('coluna_tecnologia')) and not comuns and not (modos_a and modos_b):
+        return False
+    return True
 
 
 def comparar_correspondencias(sch, cct):
@@ -476,8 +521,7 @@ def comparar_correspondencias(sch, cct):
                        and iguais(r['frequencia_final_mhz'],s['frequencia_final_mhz'])]
         filtrados = []
         for j in mesma_faixa:
-            comuns = [k for k in ('emissao','tecnica','modulacao') if ctx_a[i].get(k) and ctx_b[j].get(k)]
-            if all(ctx_a[i][k] == ctx_b[j][k] for k in comuns):
+            if _contextos_compativeis(ctx_a[i], ctx_b[j]):
                 filtrados.append(j)
         candidatos.append(filtrados)
         propostas.append(filtrados[0] if len(filtrados)==1 else None)
@@ -486,11 +530,12 @@ def comparar_correspondencias(sch, cct):
     for i,r in enumerate(a):
         cand = candidatos[i]
         escolhido = propostas[i]
-        identificado = escolhido is not None and propostas.count(escolhido)==1
+        identificado = escolhido is not None and sum(escolhido in cs for cs in candidatos)==1
         comparacoes = []
         for j in cand:
             s = b[j]
             comparacoes.append({'linha_cct':s['linha_origem'], 'pagina':s.get('pagina_origem'),
+                               'origem_cct':s,
                                'potencia_saida_cct':s['potencia_saida_w'], 'eirp_cct':s['potencia_eirp_w'],
                                'coincide_saida':iguais(r['potencia_saida_w'],s['potencia_saida_w']),
                                'coincide_eirp':iguais(r['potencia_saida_w'],s['potencia_eirp_w']),
@@ -499,13 +544,25 @@ def comparar_correspondencias(sch, cct):
                                    if ctx_a[i].get('sar_corpo_w_kg') is not None and ctx_b[j].get('sar_corpo_w_kg') is not None else None,
                                'original_cct':s['original'], 'contexto_cct':ctx_b[j]})
         item = {'linha_sch':r['linha_origem'], 'faixa':[r['frequencia_inicial_mhz'],r['frequencia_final_mhz']],
-                'potencia_sch':r['potencia_saida_w'], 'original_sch':r['original'],
+                'potencia_sch':r['potencia_saida_w'], 'original_sch':r['original'], 'origem_sch':r,
                 'sar_corpo_sch_w_kg':ctx_a[i].get('sar_corpo_w_kg'),
                 'contexto_sch':ctx_a[i], 'candidatos':comparacoes,
+                'candidatos_rejeitados_por_contexto':[
+                    {'origem_cct':s, 'contexto_cct':ctx_b[j], 'motivo':'contexto_tecnico_incompativel',
+                     'coincide_saida':iguais(r['potencia_saida_w'],s['potencia_saida_w']),
+                     'coincide_eirp':iguais(r['potencia_saida_w'],s['potencia_eirp_w'])}
+                    for j,s in enumerate(b)
+                    if iguais(r['frequencia_inicial_mhz'],s['frequencia_inicial_mhz'])
+                    and iguais(r['frequencia_final_mhz'],s['frequencia_final_mhz']) and j not in cand],
                 'correspondencia_identificada':identificado,
                 'coincide_saida':any(c['coincide_saida'] for c in comparacoes),
                 'coincide_eirp':any(c['coincide_eirp'] for c in comparacoes)}
         if not identificado:
+            # Mantém a observação numérica, inclusive nos rejeitados, sem
+            # promover esses registros a candidatos de identidade técnica.
+            evidencias = comparacoes + item['candidatos_rejeitados_por_contexto']
+            item['coincide_saida'] = any(c['coincide_saida'] for c in evidencias)
+            item['coincide_eirp'] = any(c['coincide_eirp'] for c in evidencias)
             item.update(resultado='correspondencia_ambigua' if cand else 'sem_correspondencia',
                         motivo='Coincidência de potência ou SAR isolada não identifica uma linha em frequência repetida.')
             if item['coincide_eirp'] and not item['coincide_saida']:

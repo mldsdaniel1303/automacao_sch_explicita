@@ -155,6 +155,7 @@ def _normalizar_status_conferencia(valor):
     NC       = Não Conforme
     N/A      = Não Aplicável
     REVISAR  = Revisar manualmente
+    ERRO     = Falha na verificação/extração
 
     Aceita booleanos, textos, dicionários e valores vazios.
     """
@@ -176,7 +177,7 @@ def _normalizar_status_conferencia(valor):
     texto_original = str(valor if valor is not None else "").strip()
 
     if not texto_original:
-        return "N/A"
+        return "REVISAR"
 
     texto = texto_original.lower()
     texto = texto.replace("não", "nao")
@@ -193,6 +194,14 @@ def _normalizar_status_conferencia(valor):
     texto = texto.replace("ú", "u")
     texto = texto.replace("ç", "c")
     texto = re.sub(r"\s+", " ", texto).strip()
+
+    # Erro de extração não é divergência técnica nem não aplicabilidade.
+    if texto.startswith(("erro", "falha")):
+        return "ERRO"
+    if ("parcial" in texto or "inconclus" in texto or texto in {
+            "nao_identificado", "nao identificado", "nao_verificado", "nao verificado",
+            "sem_tabela", "sem tabela", "nao_comparado", "nao comparado"}):
+        return "REVISAR"
 
     conformes = {
         "c",
@@ -223,6 +232,7 @@ def _normalizar_status_conferencia(valor):
     }
 
     nao_aplicaveis = {
+        "nao_aplicavel",
         "n/a",
         "na",
         "n.a",
@@ -269,7 +279,7 @@ def _normalizar_status_conferencia(valor):
     if "diverg" in texto or "nao conforme" in texto:
         return "NC"
 
-    if "nao aplic" in texto or "nao se aplica" in texto:
+    if "nao aplic" in texto or "nao se aplica" in texto or texto.startswith("nao_aplicavel_"):
         return "N/A"
 
     if "revis" in texto or "inconclus" in texto or "alerta" in texto:
@@ -278,7 +288,7 @@ def _normalizar_status_conferencia(valor):
     if texto == "ok" or "conforme" in texto:
         return "C"
 
-    return "N/A"
+    return "REVISAR"
 
 
 def _classe_status_conferencia(status):
@@ -293,6 +303,9 @@ def _classe_status_conferencia(status):
     if status == "REVISAR":
         return "status-revisar"
 
+    if status == "ERRO":
+        return "status-erro"
+
     return "status-na"
 
 def _td_status_conferencia(valor):
@@ -304,6 +317,7 @@ def _td_status_conferencia(valor):
         "NC": "Não Conforme",
         "N/A": "Não Aplicável",
         "REVISAR": "Revisar manualmente",
+        "ERRO": "Erro de extração/verificação; comparação não concluída",
     }
 
     detalhe = ""
@@ -337,7 +351,8 @@ def _legenda_status_conferencia():
         '<span class="status-cell status-c">C</span> Conforme '
         '<span class="status-cell status-nc">NC</span> Não Conforme '
         '<span class="status-cell status-na">N/A</span> Não Aplicável '
-        '<span class="status-cell status-revisar">REVISAR</span> Revisar manualmente'
+        '<span class="status-cell status-revisar">REVISAR</span> Inconclusivo / revisar manualmente '
+        '<span class="status-cell status-erro">ERRO</span> Falha na verificação'
         '</div>'
     )
 
@@ -432,7 +447,7 @@ def _css():
         color: #155724;
     }
 
-    .status-nc {
+    .status-nc, .status-erro {
         background: #f8d7da;
         color: #721c24;
     }
@@ -752,7 +767,9 @@ def _criar_tabela_comparacao(resultado):
                 valor_cct = "Encontrada como homologação vinculada/informativa"
 
         elif campo_chave == "tabela_tecnica":
-            status_para_celula = "NC"
+            detalhes = item.get("detalhes_tabela") or {}
+            status_tabela = detalhes.get("status") or status
+            status_para_celula = _normalizar_status_conferencia(status_tabela)
 
             if valor_sch == "Não identificado":
                 valor_sch = "Tabela técnica do SCH"
@@ -775,7 +792,7 @@ def _criar_tabela_comparacao(resultado):
                         "as tabelas não foram identificadas."
                     )
                 else:
-                    observacao = "Divergência de tabela técnica identificada."
+                    observacao = "Verificação da tabela técnica não concluída; revisar o estado e as evidências."
 
         linhas.append(
             "<tr>"

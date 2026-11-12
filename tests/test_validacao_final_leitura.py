@@ -64,9 +64,9 @@ class RevisaoFinalTests(unittest.TestCase):
 
     def test_resumo_e_sar_refletem_reclassificacao_no_conjunto(self):
         cab=['Frequência (MHz)','Potência de Saída (W)','Designação de Emissões','Tecnologia','Tipo de Modulação','SAR (W/kg) Corpo']
-        a={'cabecalho':cab,'linhas':[['900 a 901','0,1','5M00G7W','WCDMA/HSDPA/HSUPA','QPSK','0,2']]}
+        a={'cabecalho':cab,'linhas':[['900 a 901','0,1','5M00G7W','WCDMA','QPSK','0,2']]}
         b={'cabecalho':cab,'linhas':[['900 a 901','0,1','5M00G7W','WCDMA','QPSK','0,2']]}
-        r=sch.comparar_conjunto_tabelas_simplificado({'tabelas':[a]},{'tabelas_identificadas':[b]})
+        r=sch.comparar_conjunto_tabelas_simplificado({'tabelas':[a]},{'tabelas_identificadas':[b,b]})
         comp=r['tabelas'][0]['partes_cct'][0]['comparacao']
         resumo=comp['resumo_correspondencias']
         self.assertEqual(resumo['pares_identificados'],0)
