@@ -4626,6 +4626,15 @@ def comparar_dados_sch_x_cct(req, dados_pdf, modo_simplificado=False):
     ]
 
     if modo_simplificado:
+        # Igualdade literal da classe documental; somente a sigla redundante
+        # explicitamente impressa no rótulo é removida. ETA nunca equivale a RR.
+        tipo = next(c for c in comparacoes if c.get('campo') == 'tipo_produto')
+        classe_sch = _normalizar_texto_comparacao(req.get('tipo_produto', ''))
+        classe_cct = _normalizar_texto_comparacao(dados_pdf.get('tipo_produto', ''))
+        if (dados_pdf.get('tipo_produto_origem') == 'rotulo_explicito_cct'
+                and classe_sch == 'estacao terminal de acesso'
+                and re.fullmatch(r'estacao terminal de acesso\s*[-–—]\s*eta', classe_cct)):
+            tipo.update(status='ok', diverge=False, criterio='mesmo_rotulo_documental_com_sigla_explicita')
         # Só ignora espaçamento/pontuação; não usa similaridade nem remove palavras.
         fabricante = next(c for c in comparacoes if c.get('campo') == 'fabricante')
         valores = [str(x or '') for x in (req.get('fabricante'), dados_pdf.get('fabricante'))]
@@ -5981,6 +5990,7 @@ def salvar_caracteristicas_tecnicas(
     wait,
     texto_esperado="",
     titulo_secundario_esperado="",
+    confirmacao_conservadora=False,
 ):
     entrar_iframe_detalhe_analise(driver, wait)
     esperar_tela_carregar(driver, 0.08)
@@ -6025,7 +6035,11 @@ def salvar_caracteristicas_tecnicas(
     print("[SCH] Salvando Características Técnicas...")
 
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", botao_salvar)
-    _clicar_com_fallback(driver, botao_salvar)
+    if confirmacao_conservadora:
+        # Um erro remoto pode ocorrer depois do envio: jamais repetir o clique.
+        botao_salvar.click()
+    else:
+        _clicar_com_fallback(driver, botao_salvar)
 
     esperar_tela_carregar(driver, 0.8)
 
@@ -6037,13 +6051,24 @@ def salvar_caracteristicas_tecnicas(
     except Exception:
         pass
 
+    if confirmacao_conservadora:
+        clicar_aba_caracteristicas_tecnicas(driver, wait)
+        entrar_iframe_detalhe_analise(driver, wait)
+
     # Quando esta rotina for usada somente para Características Secundárias,
     # não existe observação principal a confirmar. Nesse caso, a parte de
     # observação já nasce como satisfeita e a confirmação geral depende apenas
     # do título secundário.
     confirmado = not bool(str(texto_esperado or "").strip())
 
-    if texto_esperado:
+    if texto_esperado and confirmacao_conservadora:
+        from mvp_simplificada_re import ler_observacao_atual_re
+        observacao = ler_observacao_atual_re(driver, wait)
+        confirmado = bool(observacao.get('localizado') and
+            _normalizar_texto_comparacao(observacao.get('texto', '')) ==
+            _normalizar_texto_comparacao(texto_esperado))
+
+    if texto_esperado and not confirmacao_conservadora:
         try:
             entrar_iframe_detalhe_analise(driver, wait)
 
@@ -6138,10 +6163,15 @@ def salvar_caracteristicas_tecnicas(
             "confirmação após salvar ficou incompleta. "
             f"Observação={confirmado} | "
             f"Título secundário={titulo_secundario_confirmado}"
+        ) if not confirmacao_conservadora else print(
+            "[SCH][WARN] Tentativa enviada; resultado do salvamento indeterminado. Não repetir automaticamente."
         )
 
     return {
-        "salvo": True,
+        "salvo": (True if confirmado_geral else None) if confirmacao_conservadora else True,
+        "tentativa_iniciada": True,
+        "estado_servidor_indeterminado": bool(confirmacao_conservadora and not confirmado_geral),
+        "status_confirmacao": "confirmado_por_releitura" if confirmado_geral else "resultado_indeterminado",
         "confirmado_apos_salvar": confirmado_geral,
         "observacao_confirmada": confirmado,
         "titulo_secundario_confirmado": (
