@@ -616,7 +616,8 @@ def _linhas_tabela_cct(resultado):
     return [
         ("Número do certificado", dados_pdf.get("numero_certificado", "")),
         ("Homologação principal", dados_pdf.get("homologacao", "")),
-        ("Data de emissão", dados_pdf.get("data_emissao", "")),
+        ("Data da certificação inicial", dados_pdf.get("data_certificacao", "")),
+        ("Data de emissão", dados_pdf.get("data_emissao_cct", dados_pdf.get("data_emissao", ""))),
         ("Data de validade", dados_pdf.get("data_validade", "")),
         ("Tipo do produto", dados_pdf.get("tipo_produto", "")),
         ("Modelo", dados_pdf.get("modelo", "")),
@@ -2048,6 +2049,33 @@ def _html_retorno_por_escopo(resultado):
 
 
 
+def _rotulo_salvamento_simplificado(etapa):
+    """Não confunde falta de confirmação com dispensa de uma operação."""
+    etapa = etapa or {}
+    confirmado = etapa.get('confirmado_apos_salvar') is True
+    if (etapa.get('estado_servidor_indeterminado') is True or
+            ((etapa.get('salvo') is True or etapa.get('tentativa_iniciada') is True) and not confirmado)):
+        return 'INDETERMINADO — NÃO REPETIR AUTOMATICAMENTE'
+    if etapa.get('salvo') is True and confirmado:
+        return 'SIM — CONFIRMADO'
+    comparacao = etapa.get('comparacao') or {}
+    if comparacao.get('status') == 'revisar':
+        return 'SEM NOVO SALVAMENTO — REVISAR DIVERGÊNCIA TEXTUAL'
+    if comparacao.get('status') == 'inconclusivo':
+        return 'SEM NOVO SALVAMENTO — ALVO NÃO COMPROVADO'
+    status = str(etapa.get('status') or '')
+    if etapa.get('preexistente') or status in {'preservada', 'preservado'}:
+        if comparacao.get('status') == 'correto':
+            return 'DISPENSÁVEL — NENHUM SALVAMENTO NECESSÁRIO'
+        return 'CONTEÚDO PREEXISTENTE PRESERVADO — SEM NOVO SALVAMENTO'
+    if status.startswith('revisar') or status in {'erro', 'preenchida', 'preenchido', 'corrigido'}:
+        return 'NÃO CONFIRMADO — REVISAR'
+    if (etapa.get('operacao_necessaria') is False or etapa.get('sem_alteracao') is True
+            or status == 'nao_aplicavel'):
+        return 'DISPENSÁVEL — NENHUM SALVAMENTO NECESSÁRIO'
+    return 'NÃO EXECUTADO'
+
+
 def _html_preenchimento_simplificado_re(resultado):
     """Mostra a execução de escrita distinta da conferência e do RE tradicional."""
     preenchimento = resultado.get("preenchimento_analise_simplificada_re") or {}
@@ -2071,10 +2099,10 @@ def _html_preenchimento_simplificado_re(resultado):
         )
     ct = preenchimento.get("caracteristicas_tecnicas") or {}
     preenchimento = dict(preenchimento)
-    preenchimento["observacao"] = dict(ct, status=(ct.get("observacao") or {}).get("status", ct.get("status", "nao_executado")))
+    preenchimento["observacao"] = dict(ct, **(ct.get("observacao") or {}))
     preenchimento["cts"] = dict(ct.get("titulo_caracteristicas_secundarias") or {})
     for campo in ("salvo", "confirmado_apos_salvar"):
-        preenchimento["cts"][campo] = ct.get(campo, False)
+        preenchimento["cts"].setdefault(campo, ct.get(campo, False))
     nomes = [
         ("observacao", "Características Técnicas — Observação"),
         ("cts", "Título das Características Técnicas Secundárias"),
@@ -2092,8 +2120,23 @@ def _html_preenchimento_simplificado_re(resultado):
         situacao = str(etapa.get("status") or (
             "executada" if etapa.get("preenchido_automaticamente") else "nao_executada"
         ))
-        salvo = "SIM — CONFIRMADO" if etapa.get("salvo") and etapa.get("confirmado_apos_salvar") else "NÃO / NÃO NECESSÁRIO"
+        salvo = _rotulo_salvamento_simplificado(etapa)
         msg = str(etapa.get("mensagem") or etapa.get("erro") or etapa.get("origem") or "")
+        comparacao = etapa.get('comparacao') or {}
+        if chave == 'observacao' and comparacao:
+            rotulos = {'correto':'PREEXISTENTE — CORRETO E PRESERVADO',
+                       'revisar':'REVISAR — CONTEÚDO PREEXISTENTE PRESERVADO',
+                       'inconclusivo':'INCONCLUSIVO — CONTEÚDO PREEXISTENTE PRESERVADO'}
+            situacao = rotulos.get(comparacao.get('status'), situacao)
+            ref = comparacao.get('referencia') or {}
+            msg += ' | ' + str(comparacao.get('motivo') or '')
+            msg += ' | Atual: ' + str(comparacao.get('valor_atual', ''))
+            if comparacao.get('referencia_comprovada'):
+                msg += (' | Alvo comprovado: ' + str(comparacao.get('valor_alvo')) +
+                        ' | Origem: ' + str(ref.get('origem')) + ' | Regra: ' + str(ref.get('regra')) +
+                        ' | Evidência: ' + str(ref.get('evidencia')))
+            else:
+                msg += ' | Alvo processual não comprovado; preservação não significa validação.'
         partes.append(
             "<tr>"
             f"<td>{escape(nome)}</td><td>{escape(situacao)}</td>"

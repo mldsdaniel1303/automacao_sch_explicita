@@ -952,9 +952,16 @@ def _empresa_em_rotulo_bilingue(linhas, papel):
         m = re.match(r'^\s*Nome\s+e\s+endere[çc]o\s+do\s+' + papel + r'\s*:?\s+(.+)$', linha, re.I)
         if m:
             valor = m.group(1).strip()
-            if not re.search(r'(?i)name and address|\b(?:rua|avenida|cnpj|cep)\b', valor):
+            if not _parece_endereco_empresa(valor) and not re.search(r'(?i)name and address', valor):
                 return valor
     return ''
+
+
+def _parece_endereco_empresa(valor):
+    texto = _normalizar_texto(valor)
+    return bool(re.search(r'\b(?:cep|cnpj)\s*:', texto) or
+                re.match(r'^(?:\d+\s+|rod\.?\s|rodovia\s|rua\s|avenida\s|av\.\s|no\.\s*\d)', texto) or
+                re.search(r'\b(?:km\s*\d|street|building|armz\s*\d)\b', texto))
 
 
 
@@ -2121,6 +2128,10 @@ def parsear_certificado_pdf(caminho_pdf):
         nome_rotulado = _empresa_em_rotulo_bilingue(linhas, papel)
         if nome_rotulado:
             resultado[campo] = nome_rotulado
+    if _parece_endereco_empresa(resultado['solicitante']):
+        resultado['solicitante_extracao'] = {'status':'inconclusivo',
+            'motivo':'endereco_nao_comprova_nome_empresarial', 'valor_rejeitado':resultado['solicitante']}
+        resultado['solicitante'] = ''
 
     tipo_tabela = campos_tabela.get("tipo_produto", "")
 
@@ -2138,6 +2149,15 @@ def parsear_certificado_pdf(caminho_pdf):
             ],
         )
 
+    # Um rótulo bilíngue não pode ceder prioridade a menções incidentais em notas.
+    for i, linha in enumerate(linhas):
+        rotulo = re.match(r'(?i)^tipo\s+(?:de|do)\s+produto\s*(?:/\s*type\s+of\s+product)?\s*:\s*(.*)$', linha)
+        if rotulo:
+            candidato = rotulo.group(1).strip() or (linhas[i+1] if i+1 < len(linhas) else '')
+            if _valor_parece_tipo_produto(candidato):
+                resultado['tipo_produto'] = candidato
+                resultado['tipo_produto_origem'] = 'rotulo_explicito_cct'
+                break
     resultado["tipo_produto"] = _inferir_tipo_produto(
         texto,
         resultado["tipo_produto"],

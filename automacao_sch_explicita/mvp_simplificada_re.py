@@ -78,6 +78,41 @@ def compor_acompanhamento_preservado(existente, frase):
     return ('\n'.join(p for p in (existente, frase) if p)), True
 
 
+def comparar_observacao_preexistente(observacao, referencia=None):
+    """Diagnóstico puro; preservar conteúdo não prova correção ou salvamento.
+
+    A referência vem de req['referencia_observacao_processual'], com texto,
+    origem, regra, evidencia e comprovada=True. Nunca é inferida do parser.
+    Esse contrato documenta uma regra já verificada pelo chamador; não concede
+    autorização de edição nem comprova a autoria/data de uma gravação antiga.
+    """
+    observacao = observacao or {}
+    referencia = referencia if isinstance(referencia, dict) else {}
+    prova = {k: referencia.get(k) for k in ('texto', 'origem', 'regra', 'evidencia', 'comprovada')}
+    comprovada = (prova['comprovada'] is True and isinstance(prova['texto'], str)
+                  and all(isinstance(prova[k], str) and prova[k].strip()
+                          for k in ('origem', 'regra', 'evidencia')))
+    texto = str(observacao.get('texto') or '')
+    resultado = {'valor_atual': texto, 'valor_alvo': prova['texto'] if comprovada else None,
+                 'referencia': prova, 'referencia_comprovada': bool(comprovada),
+                 'preservado': bool(observacao.get('localizado') and texto.strip()),
+                 'validado_como_correto': False, 'alteracao_automatica_autorizada': False,
+                 'salvamento_anterior_comprovado': False}
+    if not observacao.get('localizado'):
+        resultado.update(status='inconclusivo', motivo='Campo Observação não confirmado.')
+    elif not comprovada:
+        resultado.update(status='inconclusivo',
+            motivo='Conteúdo preservado sem alvo processual comprovado; sugestão do parser não comprova obrigatoriedade ou gravação anterior.')
+    elif texto == prova['texto']:
+        resultado.update(status='correto', validado_como_correto=True,
+            motivo='Conteúdo igual ao alvo processual comprovado; preservado, sem novo salvamento da Observação.')
+    else:
+        resultado.update(status='revisar',
+            motivo='Divergência textual em relação ao alvo processual comprovado; preservar e revisar, sem sobrescrever automaticamente.')
+    resultado['necessita_revisao'] = resultado['status'] != 'correto'
+    return resultado
+
+
 def planejar_acoes_simplificadas(req, resumo, estado):
     """Plano puro da opção 4; usa os mesmos decisores de Observação, CTS e SAR."""
     from fluxo_sch import _tipo_produto_permitido_simplificada
@@ -94,10 +129,16 @@ def planejar_acoes_simplificadas(req, resumo, estado):
     titulo=diagnosticar_titulo_caracteristicas_secundarias(req=req,dados_pdf=dados,contexto_sch=cts.get('contexto') or {})
     sar=analisar_sar_cct(dados)
     acoes=[];preservados=[];bloqueadas=[]
+    comparacao_obs = None
     if not obs.get('localizado'):
         decisao_obs='revisar_campo_nao_confirmado';bloqueadas.append('Observação: campo não confirmado.')
     elif str(obs.get('texto') or '').strip():
         decisao_obs='preservar_existente';preservados.append('Observação')
+        comparacao_obs = comparar_observacao_preexistente(obs, req.get('referencia_observacao_processual'))
+        if comparacao_obs['status'] == 'revisar':
+            bloqueadas.append('Observação: divergência do alvo processual comprovado; revisão necessária, sem sobrescrever o existente.')
+        elif comparacao_obs['status'] == 'inconclusivo':
+            bloqueadas.append('Observação: comparação inconclusiva, sem alvo processual comprovado; conteúdo preservado.')
     elif dados.get('observacao_texto') or all(normalizar(x.get('tipo_produto'))=='transceptor de radiacao restrita' for x in (req,dados)):
         decisao_obs='preencher_e_confirmar_salvamento'
         acoes.append({'campo':'Observação','atual':obs.get('texto'),'sugerido':sugestao_obs['texto'],'salvar_e_confirmar':True})
@@ -141,7 +182,8 @@ def planejar_acoes_simplificadas(req, resumo, estado):
                 'correspondencias_ambiguas':(comp.get('resumo_correspondencias') or {}).get('linhas_ambiguas'),
                 'coincidencias_apenas_eirp':(comp.get('resumo_correspondencias') or {}).get('coincidencias_numericas_apenas_eirp'),
                 'equivalencia_saida_eirp_confirmada':False,'status_comparacao':comp.get('status')},
-            'observacao':{'atual':obs,'sugestao':sugestao_obs,'decisao':decisao_obs},
+            'observacao':{'atual':obs,'sugestao':sugestao_obs,'decisao':decisao_obs,
+                          'sugestao_obrigatoria':False,'comparacao':comparacao_obs},
             'cts':{'atual':cts,'sugerido':sugerido,'origem_e_criterios':titulo,'decisao':decisao_cts},
             'sar':sar,'corrigir_minuta':{'decisao':decisao_minuta,'frase_generica_autorizada':bool(sar.get('preencher_frase'))},
             'acompanhar_processo':{'atual':acomp,'sugerido':frase,'decisao':decisao_acomp,
@@ -171,6 +213,12 @@ def ler_observacao_atual_re(driver, wait):
     return {'localizado': False, 'texto': ''}
 
 
+class SalvamentoCTIndeterminado(RuntimeError):
+    def __init__(self, resultado):
+        super().__init__('Resultado do salvamento de Características Técnicas não confirmado; não repetir automaticamente.')
+        self.resultado_salvamento = resultado
+
+
 def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixados, dados_pdf):
     """Usa a função de Em Análise sem substituir observações pré-existentes."""
     from funcoes_sch import (
@@ -178,10 +226,14 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
         preencher_titulo_caracteristicas_secundarias_se_existir,
         salvar_caracteristicas_tecnicas,
     )
+    if req.get('_salvamento_ct_pendente'):
+        raise SalvamentoCTIndeterminado(req['_salvamento_ct_pendente'])
     atual = ler_observacao_atual_re(driver, wait)
     if not atual['localizado']:
         raise RuntimeError('Campo Observação não confirmado; nenhuma alteração realizada.')
     texto = atual['texto']
+    comparacao_obs = (comparar_observacao_preexistente(atual, req.get('referencia_observacao_processual'))
+                      if texto.strip() else None)
     mudou = False
     analise = {}
     status_obs = 'preservada' if texto.strip() else 'revisao_manual'
@@ -216,17 +268,40 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
     mudou_titulo = bool(titulo.get('preenchido') or titulo.get('corrigido'))
     salvamento = {}
     if mudou or mudou_titulo:
-        salvamento = salvar_caracteristicas_tecnicas(
-            driver, wait, texto_esperado=texto,
-            titulo_secundario_esperado=titulo.get('titulo_esperado') or '',
-        ) or {}
+        req['_salvamento_ct_pendente'] = {'estado_servidor_indeterminado':True,'tentativa_iniciada':True}
+        try:
+            salvamento = salvar_caracteristicas_tecnicas(
+                driver, wait, texto_esperado=texto,
+                titulo_secundario_esperado=titulo.get('titulo_esperado') or '',
+                confirmacao_conservadora=True,
+            ) or {}
+        except Exception as exc:
+            detalhe = dict(req['_salvamento_ct_pendente'], erro=f'{type(exc).__name__}: {exc}',
+                           causa='timeout' if type(exc).__name__=='TimeoutException' else 'erro_apos_reserva_da_tentativa')
+            req['_salvamento_ct_pendente'] = detalhe
+            raise SalvamentoCTIndeterminado(detalhe) from exc
         if not salvamento.get('salvo') or not salvamento.get('confirmado_apos_salvar'):
-            raise RuntimeError('Salvamento de Características Técnicas não confirmado.')
+            if salvamento.get('motivo') == 'botao_salvar_nao_encontrado':
+                req.pop('_salvamento_ct_pendente', None)
+                raise RuntimeError('Botão Salvar não encontrado; nenhuma tentativa iniciada.')
+            req['_salvamento_ct_pendente'] = dict(salvamento, estado_servidor_indeterminado=True)
+            raise SalvamentoCTIndeterminado(req['_salvamento_ct_pendente'])
         verificada = ler_observacao_atual_re(driver, wait)
         if not verificada['localizado'] or verificada['texto'] != texto:
-            raise RuntimeError('Observação não foi preservada/gravada integralmente após salvar.')
+            raise SalvamentoCTIndeterminado(req['_salvamento_ct_pendente'])
+        req.pop('_salvamento_ct_pendente', None)
+    titulo = dict(titulo, salvo=bool(mudou_titulo and salvamento.get('salvo')),
+                  confirmado_apos_salvar=bool(mudou_titulo and salvamento.get('confirmado_apos_salvar')),
+                  operacao_necessaria=mudou_titulo)
+    mensagem_obs = (comparacao_obs['motivo'] if comparacao_obs else
+        'Frase aplicável de Em Análise preenchida e confirmada.' if mudou else
+        'CCT sem regra segura para Observação deste produto; revisão manual, sem aplicar frase genérica de Radiação Restrita à ETA.')
     return {'status': status_obs, 'texto': texto,
-        'observacao': {'status': status_obs},
+        'observacao': {'status': status_obs, 'comparacao': comparacao_obs,
+            'preexistente': bool(atual['texto'].strip()), 'sem_alteracao': not mudou,
+            'operacao_necessaria': mudou, 'salvo': bool(mudou and salvamento.get('salvo')),
+            'confirmado_apos_salvar': bool(mudou and salvamento.get('confirmado_apos_salvar')),
+            'mensagem': mensagem_obs},
         'classificacao': analise.get('classificacao') or dados_pdf.get('observacao_classificacao') or '',
         'origem': analise.get('origem') or ('existente_sch' if atual['texto'].strip() else 'revisao_manual'),
         'motivos': analise.get('motivos') or [],
@@ -235,9 +310,7 @@ def preencher_caracteristicas_conservadoras_re(driver, wait, req, anexos_baixado
         'salvo': bool(salvamento.get('salvo')),
         'confirmado_apos_salvar': bool(salvamento.get('confirmado_apos_salvar')),
         'sem_alteracao': not (mudou or mudou_titulo),
-        'mensagem': ('Observação existente preservada.' if atual['texto'].strip() else
-                     'Frase aplicável de Em Análise preenchida e confirmada.' if mudou else
-                     'CCT sem regra segura para Observação deste produto; revisão manual, sem aplicar frase genérica de Radiação Restrita à ETA.')}
+        'mensagem': mensagem_obs}
 
 
 def preencher_acompanhamento_seguro_re(driver, wait, frase):

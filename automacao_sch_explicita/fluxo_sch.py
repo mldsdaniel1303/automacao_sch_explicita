@@ -1052,6 +1052,8 @@ def _conferir_cct_sch_independente_re(
     # avaliação da validade. Sem isso, emissão ausente no parser pode acabar
     # comparada com a própria emissão do SCH, produzindo falso status 'ok'.
     dados_cct_datas_brutos = {
+        "data_certificacao": dados_pdf.get("data_certificacao", ""),
+        "data_manutencao": dados_pdf.get("data_manutencao", ""),
         "data_emissao": dados_pdf.get("data_emissao", ""),
         "data_validade": dados_pdf.get("data_validade", ""),
         "data_emissao_cct": dados_pdf.get("data_emissao", ""),
@@ -1076,6 +1078,12 @@ def _conferir_cct_sch_independente_re(
 
     resumo["dados_pdf"] = dados_pdf
     resumo["validade_cct"] = avaliar_validade_cct(dados_pdf)
+    if resumo.get("modo_analise_re") == "analise_simplificada":
+        # A validade continua avaliada com o preparo legado acima, mas a
+        # evidência documental não pode ser substituída por valores do SCH.
+        dados_pdf["data_emissao"] = dados_cct_datas_brutos["data_emissao"]
+        dados_pdf["data_validade"] = dados_cct_datas_brutos["data_validade"]
+        dados_pdf["datas_origem"] = "CCT; datas do SCH preservadas em campos separados"
 
     try:
         datas = comparar_datas_certificado_sch_x_cct(
@@ -1247,6 +1255,11 @@ def _preencher_abas_com_regras_em_analise_no_re(driver, wait, req, resumo,
 
     def interromper(etapa, exc):
         resultado[etapa] = {"status": "erro", "erro": f"{type(exc).__name__}: {exc}"}
+        if hasattr(exc, 'resultado_salvamento') or (etapa == 'caracteristicas_tecnicas' and req.get('_salvamento_ct_pendente')):
+            resultado[etapa].update(status='resultado_indeterminado',
+                salvamento=getattr(exc, 'resultado_salvamento', req.get('_salvamento_ct_pendente')),
+                estado_servidor_indeterminado=True,
+                repetir_automaticamente=False)
         resultado["status"] = "erro_parcial"
         resultado["motivo"] = f"Falha na etapa {etapa}; etapas seguintes não executadas."
         print(f"[SCH][RETORNO][PREENCHIMENTO][WARN] {numero}: {resultado['motivo']} {exc}")
